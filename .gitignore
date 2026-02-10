@@ -5,7 +5,7 @@ brainstorming/
 old_results/
 venv/
 results_docker/
-results_local/ 
+results_local/
 results_websocket/
 results/
 graphs/
@@ -18,3 +18,9 @@ TODO
 .vscode/
 .ruff_cache/
 graphs_compressed/
+
+# Build artifacts (Gleam, Erlang/Elixir, etc.) — do not track; avoid permission issues
+_build/
+**/build/
+# Legacy path (replaced by benchmarks/websocket/)
+web-socket/
