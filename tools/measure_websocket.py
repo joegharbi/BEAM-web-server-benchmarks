@@ -292,10 +292,6 @@ def main():
     cleanup_existing_scaphandre()
     logger.info(f"Starting container '{container_name}'...")
     start_server_container(args.server_image, args.port_mapping, container_name, docker_path, args.network)
-    # Elixir/Phoenix/Cowboy WebSocket apps often need extra time to boot (match check_health.sh)
-    if any(x in args.server_image for x in ("elixir", "phoenix", "cowboy", "erlang")):
-        logger.info("Waiting 10s for Elixir/OTP to boot...")
-        time.sleep(10)
     url = args.url
     if not url:
         url = f"ws://localhost:{args.port_mapping.split(':')[0]}/ws"

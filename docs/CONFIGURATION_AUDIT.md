@@ -1,6 +1,6 @@
 # Benchmark Configuration Audit
 
-This document explains every major configuration used in the BEAM web server benchmarks, what each one is for, where it is set, and how it fits together. It is written so that a new (green) benchmark engineer can understand and change settings safely.
+This document explains every major configuration used by the framework and by the current benchmark set. The framework is language-agnostic; the examples here refer to the BEAM benchmarks included in this repo.
 
 ---
 

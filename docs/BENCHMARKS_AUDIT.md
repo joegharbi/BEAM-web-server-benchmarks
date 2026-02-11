@@ -1,6 +1,6 @@
 # Benchmarks Audit
 
-This document summarizes the benchmark container layout and readiness for measurement.
+This document summarizes the **BEAM benchmark set** in this repository. This repo focuses on comparing Erlang, Elixir, and Gleam on the BEAM VM. The framework is general; see [EXTENDING.md](EXTENDING.md) for adding other languages or benchmark types.
 
 ## Naming convention
 
@@ -58,7 +58,7 @@ This document summarizes the benchmark container layout and readiness for measur
 
 Results use **clean names** only (no benchmark paths in filenames or graphs).
 
-- **Folder**: `results/<timestamp>/` with subdirs `static/`, `dynamic/`, `websocket/` (and optionally `local/`).
+- **Folder**: `results/<timestamp>/` with subdirs `static/`, `dynamic/`, `websocket/`.
 - **File names**: One CSV per container, named by **image name** (e.g. `st-cowboy-27.csv`, `dy-erlang27.csv`, `ws-phoenix-1-8.csv`).
 - **CSV column**: First column is **"Container Name"** with that same value (e.g. `st-cowboy-27`).
 - **Graphs**: The GUI graph generator uses **"Container Name"** from the CSV (or the filename without `.csv`) as the series label in the legend, so graphs show clean names like `st-cowboy-27`, not paths.

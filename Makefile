@@ -1,25 +1,25 @@
 # Web Server Benchmarks Makefile
+# Framework-agnostic: discovers benchmarks/static, dynamic, websocket (any language/framework).
 
 .SHELL := /bin/bash
 
-# Configuration
+# --- Configuration ---
 VENV_NAME ?= srv
 VENV_PATH = $(VENV_NAME)/bin/activate
 
-.PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-nuclear build run run-static run-dynamic run-websocket run-local run-quick run-super-quick setup graph validate check-health build-test-run run-single setup-local clean-local clean-all
+.PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-nuclear build run setup graph validate check-health build-test-run run-single clean-all
 
-# Color codes
+# --- Colors ---
 GREEN=\033[0;32m
 RED=\033[0;31m
 YELLOW=\033[1;33m
 NC=\033[0m
 
-check-tools: ## Check for required tools (Python, pip, Docker, scaphandre)
-	@command -v python3 >/dev/null 2>&1 || { printf "${RED}ERROR:${NC} python3 not found\n"; exit 1; }
-	@(command -v pip >/dev/null 2>&1 || command -v pip3 >/dev/null 2>&1) || { printf "${RED}ERROR:${NC} pip or pip3 not found\n"; exit 1; }
-	@command -v docker >/dev/null 2>&1 || { printf "${RED}ERROR:${NC} docker not found\n"; exit 1; }
+check-tools: ## Check for required tools (Python, Docker). Pip/venv used via make setup.
+	@command -v python3 >/dev/null 2>&1 || { printf "${RED}ERROR:${NC} python3 not found. Install: sudo apt install python3 python3-venv\n"; exit 1; }
+	@command -v docker >/dev/null 2>&1 || { printf "${RED}ERROR:${NC} docker not found. Install: sudo apt install docker.io\n"; exit 1; }
 	@command -v scaphandre >/dev/null 2>&1 || { printf "${YELLOW}WARNING:${NC} scaphandre not found (energy measurements will be skipped)\n"; }
-	@printf "${GREEN}All required tools found.${NC}\n"
+	@printf "${GREEN}Required tools found.${NC}\n"
 
 check-env:  ## Check if Python virtual environment exists
 	@if [ ! -d srv ]; then \
@@ -39,15 +39,13 @@ build: ## Build all Docker images for all discovered containers (requires Docker
 	@bash scripts/install_benchmarks.sh
 	@printf "${GREEN}Docker images built!${NC}\n"
 
-clean-build: ## Clean up Docker containers and images (use 'make clean-all' to also clean local servers)
+clean-build: ## Remove Docker containers and images only
 	@bash scripts/install_benchmarks.sh clean
 
-clean-local: ## BEAM-only framework: no local servers (no-op)
-	@printf "${YELLOW}[INFO] BEAM-only framework: no local servers to uninstall.${NC}\n"
-
-clean-all: ## Clean up Docker containers/images and uninstall local servers
+# Full clean for fresh run: remove results + Docker (keeps benchmarks/ and venv)
+clean-all: ## Remove results and Docker (clean-results + clean-build)
+	@$(MAKE) clean-results
 	@$(MAKE) clean-build
-	@$(MAKE) clean-local
 
 clean-repo: ## Clean repository to bare minimum (git clean -xfd + reset --hard; use with care)
 	@bash scripts/run_benchmarks.sh clean
@@ -55,7 +53,7 @@ clean-repo: ## Clean repository to bare minimum (git clean -xfd + reset --hard; 
 # Remove only generated outputs (results, logs, graphs). Keeps benchmarks/, srv/, and repo state.
 clean-results: ## Remove only generated outputs (results/, logs/, graphs/) for a fresh measurement
 	@printf "${YELLOW}Removing generated outputs (results, logs, graphs)...${NC}\n"
-	@rm -rf results logs graphs graphs_compressed output results_docker results_local results_websocket
+	@rm -rf results logs graphs graphs_compressed output results_docker results_websocket
 	@printf "${GREEN}Generated outputs removed. Benchmarks and venv (srv) are unchanged.${NC}\n"
 
 # Remove the entire benchmarks/ folder. Use when you want an empty framework ready to add new benchmarks.
@@ -105,53 +103,25 @@ clean-port: ## Stop containers using a port (usage: make clean-port PORT=8001)
 		printf "${YELLOW}If a non-Docker process is using it, stop it manually or use a different port.${NC}\n"; \
 	fi
 
-run:  ## Run all benchmarks (static, dynamic, websocket, local)
+run: check-env ## Run all benchmarks (static, dynamic, websocket)
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
 	bash scripts/run_benchmarks.sh
 
-run-quick:  ## Quick test (3 request counts: 1000, 5000, 10000 per container)
-	@for v in ./*/bin/activate; do \
-		if [ -f "$$v" ]; then . "$$v"; break; fi; \
-	done; \
-	bash scripts/run_benchmarks.sh --quick
-
-run-super-quick:  ## Super-quick test (1 request count: 1000 per container)
-	@for v in ./*/bin/activate; do \
-		if [ -f "$$v" ]; then . "$$v"; break; fi; \
-	done; \
-	bash scripts/run_benchmarks.sh --super-quick
-
-run-single:  ## Run a single server benchmark (usage: make run-single SERVER=dy-erlang27)
+run-single: check-env ## Run a single server (make run-single SERVER=dy-erlang27)
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
 	bash scripts/run_benchmarks.sh --single $(SERVER)
 
-run-static:  ## Run static server benchmarks only
+# Pattern rule: make run-static, run-dynamic, run-websocket, run-quick, run-grpc, etc.
+# Adding benchmarks/<type>/ + measure script gives you make run-<type> automatically.
+run-%: check-env
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	bash scripts/run_benchmarks.sh --static
-
-run-dynamic:  ## Run dynamic server benchmarks only
-	@for v in ./*/bin/activate; do \
-		if [ -f "$$v" ]; then . "$$v"; break; fi; \
-	done; \
-	bash scripts/run_benchmarks.sh --dynamic
-
-run-websocket:  ## Run WebSocket server benchmarks only
-	@for v in ./*/bin/activate; do \
-		if [ -f "$$v" ]; then . "$$v"; break; fi; \
-	done; \
-	bash scripts/run_benchmarks.sh --websocket
-
-run-local:  ## Run local server benchmarks only
-	@for v in ./*/bin/activate; do \
-		if [ -f "$$v" ]; then . "$$v"; break; fi; \
-	done; \
-	bash scripts/run_benchmarks.sh --local
+	bash scripts/run_benchmarks.sh --$*
 
 check-health:  ## Check health of all built containers (startup, HTTP response, stability)
 	@for v in ./*/bin/activate; do \
@@ -169,8 +139,11 @@ build-test-run: check-env ## Build all containers, check health, and run all ben
 	@printf "${YELLOW}=== Running all benchmarks ===${NC}\n"
 	@$(MAKE) run
 
-graph:  ## Launch the GUI graph generator (uses srv venv if present)
-	@if [ -f srv/bin/python3 ]; then srv/bin/python3 tools/gui_graph_generator.py; else python3 tools/gui_graph_generator.py; fi
+graph:  ## Launch the GUI graph generator (uses PyQt5 from requirements.txt)
+	@$(MAKE) check-env
+	@# Suppress benign Qt/Wayland warnings
+	@if [ "$${XDG_SESSION_TYPE}" = "wayland" ]; then export QT_QPA_PLATFORM=wayland; fi; \
+	QT_LOGGING_RULES="default.warning=false" srv/bin/python3 tools/gui_graph_generator.py
 
 validate: check-tools
 	@if [ ! -d srv ]; then \
@@ -205,9 +178,6 @@ setup:  ## Set up Python virtual environment and install dependencies
 	@srv/bin/python3 -m pip install --upgrade pip -q && srv/bin/python3 -m pip install -r requirements.txt -q
 	@echo "[INFO] Python environment is ready."
 
-setup-local: ## BEAM-only framework: local servers not used (no-op)
-	@printf "${YELLOW}[INFO] BEAM-only framework: local server setup skipped.${NC}\n"
-
 # Aliases for backward compatibility (not shown in help)
 # Removed: setup-docker
 
@@ -226,9 +196,8 @@ help:  ## Show this help message
 	@printf "${YELLOW}Web Server Benchmarks - Available Commands:${NC}\n\n"
 	@printf "${CYAN}Environment:${NC} srv (change with VENV_NAME=name)\n\n"
 	@printf "${YELLOW}Setup:${NC}\n"
-	@printf "  %-22s %s\n" "init" "One-step setup: venv, install, build, local servers, validate (recommended for new users)"
+	@printf "  %-22s %s\n" "init" "One-step setup: venv, deps, build, validate (recommended for new users)"
 	@printf "  %-22s %s\n" "setup" "Set up Python virtual environment and install dependencies"
-	@printf "  %-22s %s\n" "setup-local" "(BEAM-only: no-op) Install/setup local servers"
 	@printf "  %-22s %s\n" "build" "Build all Docker images for all discovered containers"
 	@printf "\n"
 	@printf "${YELLOW}Run Benchmarks:${NC}\n"
@@ -236,11 +205,9 @@ help:  ## Show this help message
 	@printf "  %-22s %s\n" "run-all" "Alias for run (full benchmark suite)"
 	@printf "  %-22s %s\n" "run-quick" "Quick test (3 request counts per container)"
 	@printf "  %-22s %s\n" "run-super-quick" "Super-quick test (1 request count per container)"
-	@printf "  %-22s %s\n" "run-single" "Run a single server benchmark (SERVER=dy-erlang27)"
-	@printf "  %-22s %s\n" "run-static" "Run static server benchmarks only"
-	@printf "  %-22s %s\n" "run-dynamic" "Run dynamic server benchmarks only"
-	@printf "  %-22s %s\n" "run-websocket" "Run WebSocket server benchmarks only"
-	@printf "  %-22s %s\n" "run-local" "(BEAM-only: no-op) Run local server benchmarks"
+	@printf "  %-22s %s\n" "run-single" "Run a single server (SERVER=dy-erlang27)"
+	@printf "  %-22s %s\n" "run-static/dynamic/websocket" "Run a specific type only"
+	@printf "  %-22s %s\n" "run-<type>" "New types (e.g. gRPC): add benchmarks/<type>/ and measure script → make run-<type> works"
 	@printf "\n"
 	@printf "${YELLOW}Validation & Health:${NC}\n"
 	@printf "  %-22s %s\n" "check-tools" "Check for required tools (Python, pip, Docker, scaphandre)"
@@ -254,8 +221,7 @@ help:  ## Show this help message
 	@printf "  %-22s %s\n" "clean-results" "Remove only generated outputs (results/, logs/, graphs/) for fresh measurement"
 	@printf "  %-22s %s\n" "clean-benchmarks" "Remove benchmarks/ folder (empty framework). Requires: CONFIRM=1"
 	@printf "  %-22s %s\n" "clean-nuclear" "Full reset: results + Docker + benchmarks/. Requires: CONFIRM=1"
-	@printf "  %-22s %s\n" "clean-local" "(BEAM-only: no-op) Uninstall local servers"
-	@printf "  %-22s %s\n" "clean-all" "Clean up Docker containers/images and uninstall local servers"
+	@printf "  %-22s %s\n" "clean-all" "Remove results and Docker (fresh run)"
 	@printf "  %-22s %s\n" "clean-port" "Stop containers using a port (usage: make clean-port PORT=8001)"
 	@printf "  %-22s %s\n" "clean-repo" "Git clean + reset (bare minimum; use with care)"
 	@printf "\n"
@@ -278,7 +244,7 @@ help:  ## Show this help message
 	@printf "${CYAN}Advanced:${NC}\n"
 	@printf "  %-22s %s\n" "install" "(Advanced) Install Python dependencies in the active virtual environment only" 
 
-init:  ## One-step setup: venv, install, build, validate (BEAM-only, no local servers)
+init:  ## One-step setup: venv, install, build, validate
 	@$(MAKE) setup
 	@$(MAKE) build
 	@$(MAKE) validate

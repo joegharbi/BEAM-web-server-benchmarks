@@ -1,7 +1,28 @@
-# BEAM Web Server Energy and Performance Benchmarking Framework
+# BEAM Web Server Benchmarks
+
+## About This Repository
+
+**This repository** compares **BEAM languages** (Erlang, Elixir, Gleam) and their HTTP/WebSocket frameworks (Cowboy, Phoenix, Yaws, Mist). The benchmarks under `benchmarks/` are implementations on the BEAM VM.
+
+**The framework** is general-purpose and extensible: language-agnostic, type-agnostic (static, dynamic, websocket today; gRPC or others can be added). You can fork this repo and replace the benchmarks with Java, Node.js, or any stack — the same tooling discovers, builds, and measures them. See [Extending the Framework](#extending-the-framework) for adding new benchmark types.
 
 ## Overview
-A **BEAM-only** benchmarking framework for evaluating the performance and energy efficiency of web servers on the BEAM VM (Erlang, Elixir, Gleam). It compares **languages** (pure Erlang, pure Elixir, pure Gleam) and **frameworks** (Cowboy, Yaws, Phoenix, Mist/Wisp) using Docker containers. Features automatic container discovery, intelligent health checks, simplified port management, and extensive automation.
+- **Framework**: Discovers benchmark types from `benchmarks/*` (no hardcoded list). Path-based health checks (e.g. `benchmarks/websocket/` → WebSocket test). No naming prefix required.
+- **This repo**: BEAM-only benchmarks for energy and performance comparison across Erlang, Elixir, and Gleam.
+
+## Framework Flow
+
+```
+make init / setup → make build → make check-health → make run → make graph
+     │                    │              │               │           │
+     │                    │              │               │           └─ GUI: load CSVs, plot, save to graphs/
+     │                    │              │               └─ run_benchmarks.sh → measure_docker.py, measure_websocket.py
+     │                    │              └─ check_health.sh
+     │                    └─ install_benchmarks.sh
+     └─ Creates srv/ venv, installs requirements.txt
+```
+
+**Clean hierarchy**: `clean-results` (outputs only) → `clean-build` (Docker) → `clean-all` (both) → `clean-nuclear` (includes benchmarks/, CONFIRM=1)
 
 ## Key Features
 - **🔄 Auto-Discovery**: Automatically finds and benchmarks all containers from directory structure
@@ -26,14 +47,15 @@ A **BEAM-only** benchmarking framework for evaluating the performance and energy
 11. [Results and Visualization](#results-and-visualization)
 12. [Repository Management](#repository-management)
 13. [Makefile Commands](#makefile-commands)
-14. [Troubleshooting](#troubleshooting)
+14. [Extending the Framework](#extending-the-framework)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Prerequisites
 
 - **OS**: Linux (Debian-based recommended)
-- **Python 3**: 3.8+ with pip (required for benchmark scripts). To create the project venv (`make setup`), you need the **python3-venv** package (e.g. `sudo apt install python3-venv` on Debian/Ubuntu).
+- **Python 3**: 3.8+ (required for benchmark scripts). For venv creation: `sudo apt install python3 python3-venv` on Debian/Ubuntu. All Python dependencies (including GUI) are in `requirements.txt` and installed by `make setup`.
 - **Docker**: installed and running (e.g. `sudo apt install docker.io`)
 - **Scaphandre**: `cargo install scaphandre` (for energy measurement)
 - **Make**: Usually pre-installed
@@ -56,26 +78,26 @@ make --version
 
 ## Quick Start
 
-### 1. Environment Setup
+### Option A: One-step setup (recommended for new users)
 
 ```bash
-# Create Python virtual environment and install dependencies
-make setup
-
-# Build all BEAM Docker images (Erlang, Elixir, Phoenix, Gleam, Cowboy, Yaws, etc.)
-make build
+make init    # Creates venv, installs deps, builds all containers, runs health check
 ```
 
-### 2. Build and Validate
+### Option B: Step-by-step
+
 ```bash
-# Build all Docker images (if not already done)
+# 1. Create Python virtual environment and install dependencies
+make setup
+
+# 2. Build all Docker images (discovers benchmarks/static, dynamic, websocket)
 make build
 
-# Run comprehensive health checks (includes ulimit check)
+# 3. Validate (health check)
 make check-health
 ```
 
-### 3. Run Benchmarks
+### Run Benchmarks
 ```bash
 # Quick test (3 request counts: 1000, 5000, 10000 per container)
 make run-quick
@@ -92,7 +114,7 @@ make run-dynamic
 make run-websocket
 ```
 
-### 4. Analyze Results
+### Analyze Results
 ```bash
 # Generate interactive graphs (recommended)
 make graph
@@ -105,19 +127,14 @@ python3 tools/gui_graph_generator.py
 
 ## Directory Structure
 ```
-BEAM-web-server-benchmarks/
-├── benchmarks/         # Docker containers only (Type → Language → Framework → container)
-│   ├── static/        # Static HTTP
-│   │   ├── erlang/    # cowboy/, yaws/, index/, pure/
-│   │   ├── elixir/    # cowboy/, phoenix/, pure/
-│   │   └── gleam/     # mist/
-│   ├── dynamic/       # Dynamic HTTP (same layout)
-│   │   ├── erlang/
-│   │   ├── elixir/
-│   │   └── gleam/
-│   └── websocket/     # WebSocket echo servers
-│       ├── erlang/    # cowboy/, yaws/
-│       └── elixir/    # cowboy/, phoenix/
+web-server-benchmarks/
+├── benchmarks/         # Any Docker containers (Type → Language → Framework → container)
+│   ├── static/        # Static HTTP servers
+│   │   └── <lang>/<framework>/<container>/   # e.g. erlang/cowboy/, java/spring/, nginx/
+│   ├── dynamic/       # Dynamic HTTP servers
+│   │   └── <lang>/<framework>/<container>/
+│   └── websocket/     # WebSocket echo servers (must expose /ws)
+│       └── <lang>/<framework>/<container>/
 ├── scripts/           # All shell scripts
 │   ├── check_health.sh
 │   ├── run_benchmarks.sh
@@ -147,32 +164,20 @@ BEAM-web-server-benchmarks/
 Each benchmark container lives under a path that encodes:
 
 1. **Type** — `static`, `dynamic`, or `websocket`
-2. **Language** — `erlang`, `elixir`, or `gleam`
-3. **Framework or variant** — `cowboy`, `yaws`, `phoenix`, `mist`, `index`, or `pure`
+2. **Language** — any (e.g. `erlang`, `java`, `node`, `go`)
+3. **Framework** — any (e.g. `cowboy`, `spring`, `express`)
 4. **Container folder** — the directory that contains the `Dockerfile` (and is the image name)
 
-**Erlang static/dynamic variants (not frameworks):**
-
-- **`erlang/pure`** — Pure Erlang serving the same HTML **from within the application** (content in code). Image names: `st-erlang23`, `st-erlang26`, `st-erlang27`, etc.
-- **`erlang/index`** — Erlang serving an **index HTML file** (same content, but served from an index file rather than inline). Image names: `st-erlindex23`, `st-erlindex26`, `st-erlindex27`, etc. This is not a framework; it distinguishes “serve from index file” from “serve from code” (pure).
-
-Examples:
-
-- `benchmarks/static/erlang/cowboy/st-cowboy-27/` → static, Erlang, Cowboy
-- `benchmarks/static/erlang/pure/st-erlang27/` → static, pure Erlang (HTML in code)
-- `benchmarks/static/erlang/index/st-erlindex27/` → static, Erlang serving index HTML file
-- `benchmarks/dynamic/elixir/phoenix/dy-phoenix-1-8/` → dynamic, Elixir, Phoenix
-- `benchmarks/websocket/elixir/cowboy/ws-elixir-cowboy-1-16/` → WebSocket, Elixir, Cowboy
+**Path examples:**
+- `benchmarks/static/erlang/cowboy/st-cowboy-27/` — static HTTP
+- `benchmarks/dynamic/java/spring/dy-spring-3/` — dynamic HTTP
+- `benchmarks/websocket/node/ws/ws-node-ws/` — WebSocket
 
 ### Container (image) naming
 
-The **directory name** of the leaf folder (the one with the `Dockerfile`) is the **Docker image name**. Convention:
+The **directory name** (leaf folder with `Dockerfile`) is the **Docker image name**. The framework infers type from the **path** (e.g. `benchmarks/websocket/...` → WebSocket health check), not from the name.
 
-- **Static**: `st-<name>` (e.g. `st-erlang27`, `st-phoenix-1-8`)
-- **Dynamic**: `dy-<name>` (e.g. `dy-erlang27`, `dy-gleam-1-0`)
-- **WebSocket**: `ws-<name>` (e.g. `ws-cowboy-27`, `ws-phoenix-1-8`)
-
-All containers use **base images** (e.g. `erlang:27`, `elixir:1.16`, `ghcr.io/gleam-lang/gleam`); we do not build the runtime from source inside the container. The prefix (`st-`, `dy-`, `ws-`) is used by the scripts to know the benchmark type when resolving paths (e.g. for port mapping).
+**Optional prefix convention** (improves graph categorization): `st-`, `dy-`, `ws-` for static/dynamic/websocket. WebSocket containers must expose `/ws` for the echo test.
 
 ### How auto-discovery works
 
@@ -195,30 +200,20 @@ So: you can add a new benchmark by creating a new folder (with a `Dockerfile`) a
 
 ## Benchmarks Audit
 
-A full list of current containers, naming checks, and a **small-test procedure** (build → health → run-super-quick) is in [docs/BENCHMARKS_AUDIT.md](docs/BENCHMARKS_AUDIT.md). Summary:
+**This repository** includes BEAM (Erlang, Elixir, Gleam) benchmarks. A full list is in [docs/BENCHMARKS_AUDIT.md](docs/BENCHMARKS_AUDIT.md). The **framework** is independent of the benchmark set; see [docs/EXTENDING.md](docs/EXTENDING.md) for adding new types (e.g. gRPC).
 
-- **Static (13)**: Erlang (cowboy, index, pure, yaws), Elixir (cowboy, phoenix, pure), Gleam (mist). All use `st-*` and EXPOSE 80.
-- **Dynamic (13)**: Same layout with `dy-*`. All consistent.
-- **WebSocket (4)**: Erlang (cowboy, yaws), Elixir (cowboy, phoenix). Gleam WebSocket is not present (can be added later). All use `ws-*` and path `/ws`.
-
-Run a small test before a full run: `make build` → `make check-health` → `make run-super-quick`.
+To add your own: create `benchmarks/<type>/<lang>/<framework>/<container>/` with a `Dockerfile`. Run `make build` → `make check-health` → `make run-super-quick` to validate.
 
 ---
 
 ## Payload Size Support
 
-All BEAM web servers in this framework are configured and tested to support large payloads:
+Containers are tested with specific payload sizes:
 
-| Server Type / Container    | Payload / Limit        | Health Check Test            |
-|----------------------------|------------------------|-------------------------------|
-| **Erlang / Cowboy / Yaws** | Unlimited (default)    | 10MB HTTP POST / 1MB WebSocket |
-| **Elixir / Phoenix**       | Unlimited (default)    | 10MB HTTP POST / 1MB WebSocket |
-| **Gleam (Mist)**           | Unlimited (default)    | 10MB HTTP POST                 |
-| **WebSocket (Cowboy, Phoenix, Yaws)** | 64MB frame size | 1MB WebSocket message echo     |
+- **HTTP**: Health check sends requests; measurement uses configurable request counts.
+- **WebSocket**: Health check sends 1MB echo; measurement uses configurable message sizes.
 
-- All HTTP servers accept at least 100MB payloads where applicable.
-- All WebSocket servers are tested with at least 1MB messages (echo).
-- The health check will fail if a server cannot handle these payloads.
+The health check fails if a server cannot handle the test payloads. Adjust your container configuration or the scripts if needed. See [docs/CONFIGURATION_AUDIT.md](docs/CONFIGURATION_AUDIT.md) for details.
 
 ---
 
@@ -353,8 +348,26 @@ EXPOSE 8080
    make run-all      # Automatically benchmarks your new container
    ```
 
-### Local Servers
-This repository is **BEAM-only** and uses only Docker containers. Local server benchmarks (e.g. `local/`, `run-local`) are not used; the corresponding Makefile targets are no-ops.
+---
+
+## Extending the Framework
+
+The framework is **extensible**: you can add new benchmark types (e.g. gRPC, RPC, custom protocols) beyond HTTP and WebSocket.
+
+### How it works today
+- **Build** (`install_benchmarks.sh`): Discovers all `benchmarks/*` subdirs and builds every container. Add `benchmarks/grpc/` → it gets built.
+- **Health check** (`check_health.sh`): Infers type from path (`benchmarks/websocket/...` → WebSocket test; else HTTP). New types get HTTP test by default until you add custom logic.
+- **Run** (`run_benchmarks.sh`): Has measurement tools for `static`, `dynamic`, `websocket`. New types need a new measurement script and a case in the run script.
+
+### Adding a new benchmark type (e.g. gRPC)
+1. Create `benchmarks/grpc/<lang>/<framework>/<container>/` with a `Dockerfile`.
+2. Run `make build` — containers are built automatically.
+3. Extend `check_health.sh`: add a path check for `grpc` and implement the gRPC health test.
+4. Create `tools/measure_grpc.py` (or similar) for your protocol.
+5. Extend `run_benchmarks.sh`: add a `grpc` case that calls your measurement tool and writes to `results/grpc/`.
+6. Optionally extend the graph GUI to recognize the new CSV format.
+
+See [docs/BENCHMARKS_AUDIT.md](docs/BENCHMARKS_AUDIT.md) for the current BEAM benchmark set and [docs/CONFIGURATION_AUDIT.md](docs/CONFIGURATION_AUDIT.md) for configuration details.
 
 ---
 
@@ -374,7 +387,6 @@ make run-all
 make run-static      # Static containers only
 make run-dynamic     # Dynamic containers only
 make run-websocket   # WebSocket containers only
-make run-local       # Local servers only
 
 # Quick testing
 make run-quick       # Quick test (3 request counts: 1000, 5000, 10000 per container)
@@ -397,7 +409,7 @@ make run-super-quick # Super-quick test (1 request count: 1000 per container)
 
 ### Benchmark Parameters
 
-#### HTTP Benchmarks (Static/Dynamic/Local)
+#### HTTP Benchmarks (Static/Dynamic)
 - **Full test**: 13 request counts (100, 1000, 5000, 8000, 10000, 15000, 20000, 30000, 40000, 50000, 60000, 70000, 80000)
 - **Quick test**: 3 request counts (1000, 5000, 10000)
 - **Super quick test**: 1 request count (1000) - fastest validation
@@ -472,7 +484,7 @@ results/
 
 ### CSV Output Format
 
-#### HTTP Containers (Static/Dynamic/Local)
+#### HTTP Containers (Static/Dynamic)
 Results are grouped by container name with multiple rows per file:
 ```csv
 Container Name,Type,Num CPUs,Total Requests,Successful Requests,Failed Requests,Execution Time (s),Requests/s,Total Energy (J),Avg Power (W),Samples,Avg CPU (%),Peak CPU (%),Total CPU (%),Avg Mem (MB),Peak Mem (MB),Total Mem (MB)
@@ -516,9 +528,9 @@ Features:
 |--------|--------|--------|----------|
 | **`clean-results`** | `results/`, `logs/`, `graphs/`, `graphs_compressed/`, `output/`, `results_docker/`, etc. | `benchmarks/`, `srv/`, all source | You want a **fresh measurement** (no old results or logs). |
 | **`clean-build`** | Docker containers and images for discovered benchmarks | Source, results, logs, venv | Rebuild images from scratch. |
-| **`clean-all`** | Same as `clean-build` (+ local servers, no-op here) | Source, results, logs, venv | Same as clean-build for BEAM-only. |
+| **`clean-all`** | Same as `clean-results` + `clean-build` | benchmarks/, srv/, source | Full clean for fresh run. |
 | **`clean-benchmarks`** | Entire **`benchmarks/`** folder (then recreates empty `benchmarks/`) | Scripts, tools, Makefile, docs, `srv/` | You want an **empty framework** ready to add new benchmark definitions. **Requires:** `make clean-benchmarks CONFIRM=1` |
-| **`clean-nuclear`** | Results + Docker images + **`benchmarks/`** folder | Scripts, tools, Makefile, docs, `srv/` | **Full reset**: empty BEAM framework, no benchmarks, no results, no images. **Requires:** `make clean-nuclear CONFIRM=1` |
+| **`clean-nuclear`** | Results + Docker images + **`benchmarks/`** folder | Scripts, tools, Makefile, docs, `srv/` | **Full reset**: empty framework, no benchmarks, no results, no images. **Requires:** `make clean-nuclear CONFIRM=1` |
 | **`clean-repo`** | Everything untracked/ignored + git reset to HEAD | Only committed files | Back to **fresh clone state** (use with care). |
 
 ### Cleaning commands
@@ -526,8 +538,10 @@ Features:
 # Remove only generated outputs (results, logs, graphs) — safe, no confirmation
 make clean-results
 
-# Remove Docker containers and images
+# Remove Docker images only
 make clean-build
+
+# Remove results and Docker (full clean for fresh run)
 make clean-all
 
 # Empty the benchmarks folder (framework ready for new benchmarks). Requires confirmation:
@@ -542,7 +556,7 @@ make clean-repo
 
 ### Post-clean setup
 - After **`clean-results`**: Just run benchmarks again; no need to rebuild.
-- After **`clean-build`** or **`clean-all`**: Run `make build` (and optionally `make check-health`) before running benchmarks.
+- After **`clean-build`** or **`clean-all`**: Run `make build` before running benchmarks.
 - After **`clean-benchmarks`** or **`clean-nuclear`**: Add new benchmark definitions under `benchmarks/` (see [Adding New Servers](#adding-new-servers)), then `make build` and run.
 - After **`clean-repo`**: Run `make setup`, then `make build`.
 
@@ -552,10 +566,9 @@ make clean-repo
 
 ### Environment Management
 ```bash
-make setup          # Create virtual environment
-make ensure-env     # Ensure environment is active
-make install        # Install dependencies
-make validate       # Validate all prerequisites
+make setup          # Create venv and install dependencies
+make install        # Install dependencies (requires existing venv)
+make validate       # Validate prerequisites and container health
 ```
 
 ### Docker Operations
@@ -566,12 +579,11 @@ make clean-build    # Remove Docker containers/images
 
 ### Benchmarking
 ```bash
-make quick-test     # Quick benchmark test
+make run-quick      # Quick benchmark (3 request counts)
 make run-all        # Complete benchmark suite
 make run-static     # Static container benchmarks
 make run-dynamic    # Dynamic container benchmarks
 make run-websocket  # WebSocket benchmarks
-make run-local      # Local server benchmarks
 ```
 
 ### Visualization
@@ -650,7 +662,7 @@ df -h
 ```bash
 # Enable verbose output
 export DEBUG=1
-make quick-test
+make run-quick
 
 # Check logs
 tail -f logs/run_*.log
@@ -687,7 +699,6 @@ make help
 - **CSV Result Grouping**: Results grouped by container name for easier analysis
 - **WebSocket-Specific Metrics**: Enhanced WebSocket CSV format with latency and throughput data
 - **Super Quick Testing**: New `run-super-quick` option for fastest validation
-- **Improved Local Scripts**: Fixed path resolution for local server setup scripts
 - **Enhanced Port Management**: All containers now use port 80 internally for consistency
 
 ### v2.0 Enhancements

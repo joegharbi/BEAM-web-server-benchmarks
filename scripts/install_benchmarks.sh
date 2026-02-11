@@ -1,20 +1,32 @@
 #!/bin/bash
+# Build Docker images for benchmark containers. Discovers types from benchmarks/* (static, dynamic, websocket, grpc, etc.).
+# Called by: make build (default) or make clean-build (with 'clean' arg)
 
-# Install Docker images and run setup scripts for specified benchmark types
-
-# Find all container dirs (benchmarks/type/language/framework/container-name with Dockerfile)
+# Find all container dirs (benchmarks/type/.../container-name with Dockerfile)
 function find_container_dirs() {
     local base="$1"
+    [ -d "$base" ] || return
     find "$base" -mindepth 1 -type d -exec test -f {}/Dockerfile \; -print 2>/dev/null
+}
+
+# Discover benchmark types from benchmarks/ subdirs
+function discover_benchmark_types() {
+    [ -d ./benchmarks ] || return
+    for d in ./benchmarks/*/; do
+        [ -d "$d" ] || continue
+        basename "$d"
+    done
 }
 
 # Remove all containers and images related to the benchmark (safe)
 function clean_benchmark_docker_images() {
     echo "Cleaning up benchmark Docker containers and images..."
-
     image_names=()
-    for d in $(find_container_dirs ./benchmarks/static) $(find_container_dirs ./benchmarks/dynamic) $(find_container_dirs ./benchmarks/websocket); do
-        [ -n "$d" ] && image_names+=("$(basename "$d")")
+    for type_dir in ./benchmarks/*/; do
+        [ -d "$type_dir" ] || continue
+        for d in $(find_container_dirs "$type_dir"); do
+            [ -n "$d" ] && image_names+=("$(basename "$d")")
+        done
     done
 
     # Remove containers using discovered image names
@@ -31,19 +43,7 @@ function clean_benchmark_docker_images() {
     docker image prune -f
 }
 
-# Build WebSocket Docker images (recursive: benchmarks/websocket/language/framework/container/)
-function process_websocket() {
-    for d in $(find_container_dirs ./benchmarks/websocket); do
-        [ -n "$d" ] || continue
-        local name=$(basename "$d")
-        echo "Building Docker image for $d/Dockerfile as $name"
-        if ! docker build -t "$name" "$d"; then
-            build_failures+=("$name")
-        fi
-    done
-}
-
-# Build Docker images for a type (static or dynamic); recursive discovery
+# Build Docker images for a benchmark type (static, dynamic, websocket, or any benchmarks/* subdir)
 function process_container_folder() {
     local folder="$1"
     for d in $(find_container_dirs "$folder"); do
@@ -65,25 +65,21 @@ if [[ $# -gt 0 ]]; then
             clean)
                 clean_benchmark_docker_images
                 ;;
-            websocket)
-                process_websocket
-                ;;
-            static)
-                process_container_folder "./benchmarks/static"
-                ;;
-            dynamic)
-                process_container_folder "./benchmarks/dynamic"
-                ;;
             *)
-                echo "Unknown argument: $arg. Skipping."
+                if [ -d "./benchmarks/$arg" ]; then
+                    process_container_folder "./benchmarks/$arg"
+                else
+                    echo "Unknown type: $arg (no benchmarks/$arg/). Skipping."
+                fi
                 ;;
         esac
     done
 else
-    # Default: process websocket, static, and dynamic
-    process_websocket
-    process_container_folder "./benchmarks/static"
-    process_container_folder "./benchmarks/dynamic"
+    # Default: discover and build all types under benchmarks/
+    for type_dir in ./benchmarks/*/; do
+        [ -d "$type_dir" ] || continue
+        process_container_folder "$type_dir"
+    done
 fi
 
 # Print build summary

@@ -1,10 +1,10 @@
 #!/bin/bash
+# Run benchmarks for discovered Docker containers (static, dynamic, websocket).
+# Usage: ./scripts/run_benchmarks.sh [static|dynamic|websocket] [--quick|--super-quick]
+# Called by: make run, make run-static, make run-quick, etc.
 set -e
 
-# Set high open file descriptor limit for benchmarking session
 ulimit -n 100000
-
-# Run measurement scripts for all Docker images and local servers based on args
 # Prefer venv; fall back to system python3 if venv missing or not executable
 if [ -x "$(pwd)/srv/bin/python3" ]; then
     PYTHON_PATH="$(pwd)/srv/bin/python3"
@@ -21,7 +21,6 @@ case "${1:-}" in
         echo "  static      Run static container benchmarks"
         echo "  dynamic     Run dynamic container benchmarks"
         echo "  websocket   Run WebSocket benchmarks"
-        echo "  local       Run local server benchmarks"
         echo ""
         echo "Options:"
         echo "  --quick     Run quick benchmarks with reduced parameters"
@@ -31,7 +30,7 @@ case "${1:-}" in
         echo "Examples:"
         echo "  $0                    # Run all benchmarks"
         echo "  $0 static             # Run all static containers"
-        echo "  $0 dynamic st-nginx   # Run specific container"
+        echo "  $0 dynamic dy-erlang27   # Run specific container"
         echo "  $0 --quick static     # Quick static benchmarks"
         echo ""
         echo "Port Assignment:"
@@ -53,7 +52,7 @@ esac
 # Fixed port for all containers (configurable via HOST_PORT env var)
 HOST_PORT=${HOST_PORT:-8001}
 
-# Full test parameters for HTTP benchmarks (measure_docker.py and measure_local.py)
+# Full test parameters for HTTP benchmarks
 full_http_requests=(100 1000 5000 8000 10000 15000 20000 30000 40000 50000 60000 70000 80000)
 
 # Quick test parameters for HTTP benchmarks (3 request counts)
@@ -159,7 +158,7 @@ clean_repo() {
 RESULTS_PARENT_DIR="results"
 TIMESTAMP=$(date +"%Y-%m-%d_%H%M%S")
 RESULTS_DIR="$RESULTS_PARENT_DIR/$TIMESTAMP"
-mkdir -p "$RESULTS_DIR/static" "$RESULTS_DIR/dynamic" "$RESULTS_DIR/local" "$RESULTS_DIR/websocket" logs
+mkdir -p "$RESULTS_DIR/static" "$RESULTS_DIR/dynamic" "$RESULTS_DIR/websocket" logs
 
 LOG_FILE="logs/run_${TIMESTAMP}.log"
 echo "Logging to $LOG_FILE"
@@ -433,7 +432,7 @@ run_payload_sweep() {
     fi
 }
 
-# For static, dynamic, and local runs, add test numbering and summary
+# For static and dynamic runs, add test numbering and summary
 run_docker_tests() {
     local image=$1
     local host_port=$2
@@ -465,42 +464,11 @@ run_docker_tests() {
     done
 }
 
-run_local_tests() {
-    # BEAM-only: local server benchmarks not used; skip unless local/ and measure_local.py exist
-    local server=$1
-    if [[ ! -f ./local/measure_local.py ]]; then
-        echo -e "${YELLOW}[INFO]${NC} BEAM-only framework: local/measure_local.py not found; skipping local tests."
-        return 0
-    fi
-    echo -e "${BLUE}Running local tests for $server${NC}"
-    local ntests=0
-    local -a test_counts
-    if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
-        test_counts=("${super_quick_http_requests[@]}")
-    elif [[ $QUICK_BENCH -eq 1 ]]; then
-        test_counts=("${quick_http_requests[@]}")
-    else
-        test_counts=("${full_http_requests[@]}")
-    fi
-    ntests=${#test_counts[@]}
-    local idx=1
-    for num_requests in "${test_counts[@]}"; do
-        local csv_file="$RESULTS_DIR/local/${server}.csv"
-        echo "[$idx/$ntests] local: $num_requests requests"
-        "$PYTHON_PATH" ./local/measure_local.py \
-            --server "$server" \
-            --num_requests "$num_requests" \
-            --output_csv "$csv_file"
-        print_csv_summary "$csv_file"
-        idx=$((idx+1))
-    done
-}
-
 # After all benchmarks are run, print a summary of containers with 100% failed requests
 print_run_summary() {
     local failed_containers=()
     local results_dir="$RESULTS_DIR"
-    for csv in "$results_dir"/static/*.csv "$results_dir"/dynamic/*.csv "$results_dir"/websocket/*.csv "$results_dir"/local/*.csv; do
+    for csv in "$results_dir"/static/*.csv "$results_dir"/dynamic/*.csv "$results_dir"/websocket/*.csv; do
         [ -f "$csv" ] || continue
         # Get the header and the last row (most recent run)
         header=$(head -1 "$csv")
@@ -614,10 +582,9 @@ main() {
             run_payload_sweep "$container" "$HOST_PORT"
             sleep 1
         done
-        # BEAM-only framework: no local server benchmarks
     else
         case $TARGET_TYPE in
-            "static")
+            "static"|"--static")
                 if [ ${#TARGET_IMAGES[@]} -eq 0 ]; then
                     TARGET_IMAGES=($(discover_containers "static"))
                 fi
@@ -637,7 +604,7 @@ main() {
                     sleep 1
                 done
                 ;;
-            "dynamic")
+            "dynamic"|"--dynamic")
                 if [ ${#TARGET_IMAGES[@]} -eq 0 ]; then
                     TARGET_IMAGES=($(discover_containers "dynamic"))
                 fi
@@ -657,7 +624,7 @@ main() {
                     sleep 1
                 done
                 ;;
-            "websocket")
+            "websocket"|"--websocket")
                 if [ ${#TARGET_IMAGES[@]} -eq 0 ]; then
                     TARGET_IMAGES=($(discover_containers "websocket"))
                 fi
@@ -676,9 +643,6 @@ main() {
                     run_websocket_tests "$container" "$HOST_PORT"
                     sleep 1
                 done
-                ;;
-            "local")
-                echo -e "${YELLOW}[INFO]${NC} BEAM-only framework: local server benchmarks are not used."
                 ;;
             "concurrency-sweep")
                 TARGET_TYPE="websocket"
@@ -732,7 +696,7 @@ main() {
                 ;;
             *)
                 echo "Unknown target type: $TARGET_TYPE"
-                echo "Valid types: static, dynamic, websocket, local"
+                echo "Valid types: static, dynamic, websocket"
                 exit 1
                 ;;
         esac

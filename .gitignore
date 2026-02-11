@@ -5,18 +5,17 @@ brainstorming/
 old_results/
 venv/
 results_docker/
-results_local/
 results_websocket/
 results/
 graphs/
 *.json
 localhost:8001.auth
 report.log
-local/report.log
-local/localhost:8001.auth
 TODO
 .vscode/
 .ruff_cache/
+__pycache__/
+*.pyc
 graphs_compressed/
 
 # Build artifacts (Gleam, Erlang/Elixir, etc.) — do not track; avoid permission issues

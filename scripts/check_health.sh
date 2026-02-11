@@ -1,9 +1,8 @@
 #!/bin/bash
-
-# Set high open file descriptor limit for health check session
+# Health check for all built benchmark containers.
+# Tests: startup, HTTP/WebSocket response, ulimit.
+# Called by: make check-health, make validate
 ulimit -n 100000
-
-# Health Check Script for Web Server Benchmarks
 # Tests all built containers for proper startup, HTTP response, and health constraints
 
 # Colors for output
@@ -13,9 +12,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
+# Configuration (framework-agnostic; adjust via --startup if your servers need more time)
 TIMEOUT=30
-STARTUP_WAIT=10
+STARTUP_WAIT=15
 HTTP_TIMEOUT=10
 HOST_PORT=${HOST_PORT:-8001}
 
@@ -80,7 +79,7 @@ check_http_response() {
 check_port_free() {
     local port=$1
     for i in {1..10}; do
-        if ! lsof -i :$port >/dev/null 2>&1; then
+        if ! ss -ltn 2>/dev/null | grep -q ":$port "; then
             return 0
         fi
         print_status "INFO" "Port $port is busy, waiting... ($i/10)"
@@ -129,21 +128,20 @@ check_container_health() {
         FAILED_LIST+=("$image_name (ulimit)")
         return
     fi
-    local wait_time=$STARTUP_WAIT
-    if [[ $image_name == *cowboy* ]] || [[ $image_name == *erlang* ]] || [[ $image_name == *erlindex* ]] || [[ $image_name == *elixir* ]] || [[ $image_name == *phoenix* ]]; then
-        wait_time=$((STARTUP_WAIT + 5))
-    elif [[ $image_name == *gleam* ]]; then
-        # Gleam containers compile on first run via gleam run
-        wait_time=$((STARTUP_WAIT + 20))
-    fi
-    sleep $wait_time
+    # Single startup wait for all containers (framework-agnostic)
+    sleep $STARTUP_WAIT
     if ! docker ps --format "table {{.Names}}" | grep -q "$container_name"; then
         print_status "ERROR" "$image_name: Container stopped unexpectedly"
         FAILED_CONTAINERS=$((FAILED_CONTAINERS + 1))
         FAILED_LIST+=("$image_name (container stopped)")
         return 1
     fi
-    if [[ $image_name == ws-* ]]; then
+    # Infer benchmark type from path: benchmarks/websocket/ → WebSocket check; else HTTP
+    local container_dir
+    container_dir=$(find_container_dir "$image_name")
+    local is_websocket=0
+    [[ "$container_dir" == *"/websocket/"* ]] && is_websocket=1
+    if [[ $is_websocket -eq 1 ]]; then
         local ws_test_result=$(curl -s -i --max-time 5 \
             -H "Connection: Upgrade" \
             -H "Upgrade: websocket" \
@@ -206,11 +204,14 @@ EOF
     return 0
 }
 
-# Auto-discover all containers (benchmarks/type/language/framework/container-name)
+# Auto-discover all containers from benchmarks/* (any type: static, dynamic, websocket, grpc, etc.)
 function discover_containers() {
     local discovered=()
-    for d in $(find ./benchmarks/static ./benchmarks/dynamic ./benchmarks/websocket -type d -exec test -f {}/Dockerfile \; -print 2>/dev/null); do
-        [ -n "$d" ] && discovered+=("$(basename "$d")")
+    for type_dir in ./benchmarks/*/; do
+        [ -d "$type_dir" ] || continue
+        for d in $(find "$type_dir" -type d -exec test -f {}/Dockerfile \; -print 2>/dev/null); do
+            [ -n "$d" ] && discovered+=("$(basename "$d")")
+        done
     done
     echo "${discovered[@]}"
 }
@@ -234,7 +235,7 @@ main() {
     # Discover all containers from directory structure
     local discovered_containers=($(discover_containers))
     if [ ${#discovered_containers[@]} -eq 0 ]; then
-        print_status "ERROR" "No containers found. Check benchmarks/static/, benchmarks/dynamic/, benchmarks/websocket/ (type/language/framework/container-name)."
+        print_status "ERROR" "No containers found. Add benchmarks under benchmarks/<type>/ (e.g. static, dynamic, websocket)."
         exit 1
     fi
     
