@@ -472,7 +472,7 @@ class BenchmarkGrapher(tk.Tk):
         file_basename = os.path.splitext(os.path.basename(label))[0] if isinstance(label, str) else ""
         if "Container Name" in header and rows and rows[0].get("Container Name"):
             container_name = str(rows[0]["Container Name"]).strip()
-            # Distinct label when this file is a sweep/variant (e.g. ws-phoenix-1-8-self_concurrency_sweep)
+            # Distinct label when this file is a sweep/variant (e.g. ws-phoenix-1-8_concurrency_sweep)
             if file_basename and file_basename != container_name and container_name in file_basename:
                 label = file_basename
             else:

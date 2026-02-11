@@ -6,7 +6,7 @@ This document summarizes the benchmark container layout and readiness for measur
 
 - **Path**: `benchmarks/<type>/<language>/<framework-or-variant>/<container-dir>/`
 - **Container dir** = directory containing `Dockerfile` = **Docker image name**
-- **Prefix**: `st-` (static), `dy-` (dynamic), `ws-` (websocket); suffix `-self` (runtime in image)
+- **Prefix**: `st-` (static), `dy-` (dynamic), `ws-` (websocket); no `-self` suffix (use base images, not runtime-built-in-container)
 - **EXPOSE**: All containers use port 80 (script reads from Dockerfile)
 
 ## Current layout (30 containers)
@@ -15,36 +15,36 @@ This document summarizes the benchmark container layout and readiness for measur
 
 | Language | Framework/Variant | Container(s) | Notes |
 |----------|-------------------|--------------|--------|
-| Erlang  | cowboy  | `st-cowboy-27-self` | ✓ |
-| Erlang  | index   | `st-erlindex23-self`, `st-erlindex26-self`, `st-erlindex27-self` | Serves index HTML file |
-| Erlang  | pure    | `st-erlang23-self`, `st-erlang26-self`, `st-erlang27-self` | HTML in code |
-| Erlang  | yaws    | `st-yaws-26-self`, `st-yaws-27-self` | ✓ |
-| Elixir  | cowboy  | `st-elixir-cowboy-1-16-self` | ✓ |
-| Elixir  | phoenix | `st-phoenix-1-8-self` | ✓ |
-| Elixir  | pure    | `st-elixir-1-16-self` | ✓ |
-| Gleam   | mist    | `st-gleam-1-0-self` | ✓ |
+| Erlang  | cowboy  | `st-cowboy-27` | ✓ |
+| Erlang  | index   | `st-erlindex23`, `st-erlindex26`, `st-erlindex27` | Serves index HTML file |
+| Erlang  | pure    | `st-erlang23`, `st-erlang26`, `st-erlang27` | HTML in code |
+| Erlang  | yaws    | `st-yaws-26`, `st-yaws-27` | ✓ |
+| Elixir  | cowboy  | `st-elixir-cowboy-1-16` | ✓ |
+| Elixir  | phoenix | `st-phoenix-1-8` | ✓ |
+| Elixir  | pure    | `st-elixir-1-16` | ✓ |
+| Gleam   | mist    | `st-gleam-1-0` | ✓ |
 
 ### Dynamic (13)
 
 | Language | Framework/Variant | Container(s) | Notes |
 |----------|-------------------|--------------|--------|
-| Erlang  | cowboy  | `dy-cowboy-27-self` | ✓ |
-| Erlang  | index   | `dy-erlindex23-self`, `dy-erlindex26-self`, `dy-erlindex27-self` | ✓ |
-| Erlang  | pure    | `dy-erlang23-self`, `dy-erlang26-self`, `dy-erlang27-self` | ✓ |
-| Erlang  | yaws    | `dy-yaws-26-self`, `dy-yaws-27-self` | ✓ |
-| Elixir  | cowboy  | `dy-elixir-cowboy-1-16-self` | ✓ |
-| Elixir  | phoenix | `dy-phoenix-1-8-self` | ✓ |
-| Elixir  | pure    | `dy-elixir-1-16-self` | ✓ |
-| Gleam   | mist    | `dy-gleam-1-0-self` | ✓ |
+| Erlang  | cowboy  | `dy-cowboy-27` | ✓ |
+| Erlang  | index   | `dy-erlindex23`, `dy-erlindex26`, `dy-erlindex27` | ✓ |
+| Erlang  | pure    | `dy-erlang23`, `dy-erlang26`, `dy-erlang27` | ✓ |
+| Erlang  | yaws    | `dy-yaws-26`, `dy-yaws-27` | ✓ |
+| Elixir  | cowboy  | `dy-elixir-cowboy-1-16` | ✓ |
+| Elixir  | phoenix | `dy-phoenix-1-8` | ✓ |
+| Elixir  | pure    | `dy-elixir-1-16` | ✓ |
+| Gleam   | mist    | `dy-gleam-1-0` | ✓ |
 
 ### WebSocket (4)
 
 | Language | Framework/Variant | Container(s) | Notes |
 |----------|-------------------|--------------|--------|
-| Erlang  | cowboy | `ws-cowboy-27-self` | ✓ |
-| Erlang  | yaws   | `ws-yaws-27-self` | ✓ |
-| Elixir  | cowboy | `ws-elixir-cowboy-1-16-self` | ✓ |
-| Elixir  | phoenix | `ws-phoenix-1-8-self` | ✓ |
+| Erlang  | cowboy | `ws-cowboy-27` | ✓ |
+| Erlang  | yaws   | `ws-yaws-27` | ✓ |
+| Elixir  | cowboy | `ws-elixir-cowboy-1-16` | ✓ |
+| Elixir  | phoenix | `ws-phoenix-1-8` | ✓ |
 | **Gleam** | — | **None** | **Missing** (could be added later if Mist/gramps WebSocket support is used) |
 
 ## Consistency check
@@ -59,9 +59,9 @@ This document summarizes the benchmark container layout and readiness for measur
 Results use **clean names** only (no benchmark paths in filenames or graphs).
 
 - **Folder**: `results/<timestamp>/` with subdirs `static/`, `dynamic/`, `websocket/` (and optionally `local/`).
-- **File names**: One CSV per container, named by **image name** (e.g. `st-cowboy-27-self.csv`, `dy-erlang27-self.csv`, `ws-phoenix-1-8-self.csv`).
-- **CSV column**: First column is **"Container Name"** with that same value (e.g. `st-cowboy-27-self`).
-- **Graphs**: The GUI graph generator uses **"Container Name"** from the CSV (or the filename without `.csv`) as the series label in the legend, so graphs show clean names like `st-cowboy-27-self`, not paths.
+- **File names**: One CSV per container, named by **image name** (e.g. `st-cowboy-27.csv`, `dy-erlang27.csv`, `ws-phoenix-1-8.csv`).
+- **CSV column**: First column is **"Container Name"** with that same value (e.g. `st-cowboy-27`).
+- **Graphs**: The GUI graph generator uses **"Container Name"** from the CSV (or the filename without `.csv`) as the series label in the legend, so graphs show clean names like `st-cowboy-27`, not paths.
 
 ## Ready for measurement
 

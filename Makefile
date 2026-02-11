@@ -123,7 +123,7 @@ run-super-quick:  ## Super-quick test (1 request count: 1000 per container)
 	done; \
 	bash scripts/run_benchmarks.sh --super-quick
 
-run-single:  ## Run a single server benchmark (usage: make run-single SERVER=dy-erlang27-self)
+run-single:  ## Run a single server benchmark (usage: make run-single SERVER=dy-erlang27)
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
@@ -236,7 +236,7 @@ help:  ## Show this help message
 	@printf "  %-22s %s\n" "run-all" "Alias for run (full benchmark suite)"
 	@printf "  %-22s %s\n" "run-quick" "Quick test (3 request counts per container)"
 	@printf "  %-22s %s\n" "run-super-quick" "Super-quick test (1 request count per container)"
-	@printf "  %-22s %s\n" "run-single" "Run a single server benchmark (SERVER=dy-erlang27-self)"
+	@printf "  %-22s %s\n" "run-single" "Run a single server benchmark (SERVER=dy-erlang27)"
 	@printf "  %-22s %s\n" "run-static" "Run static server benchmarks only"
 	@printf "  %-22s %s\n" "run-dynamic" "Run dynamic server benchmarks only"
 	@printf "  %-22s %s\n" "run-websocket" "Run WebSocket server benchmarks only"

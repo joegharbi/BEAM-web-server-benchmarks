@@ -153,32 +153,32 @@ Each benchmark container lives under a path that encodes:
 
 **Erlang static/dynamic variants (not frameworks):**
 
-- **`erlang/pure`** — Pure Erlang serving the same HTML **from within the application** (content in code). Image names: `st-erlang23-self`, `st-erlang26-self`, `st-erlang27-self`, etc.
-- **`erlang/index`** — Erlang serving an **index HTML file** (same content, but served from an index file rather than inline). Image names: `st-erlindex23-self`, `st-erlindex26-self`, `st-erlindex27-self`, etc. This is not a framework; it distinguishes “serve from index file” from “serve from code” (pure).
+- **`erlang/pure`** — Pure Erlang serving the same HTML **from within the application** (content in code). Image names: `st-erlang23`, `st-erlang26`, `st-erlang27`, etc.
+- **`erlang/index`** — Erlang serving an **index HTML file** (same content, but served from an index file rather than inline). Image names: `st-erlindex23`, `st-erlindex26`, `st-erlindex27`, etc. This is not a framework; it distinguishes “serve from index file” from “serve from code” (pure).
 
 Examples:
 
-- `benchmarks/static/erlang/cowboy/st-cowboy-27-self/` → static, Erlang, Cowboy
-- `benchmarks/static/erlang/pure/st-erlang27-self/` → static, pure Erlang (HTML in code)
-- `benchmarks/static/erlang/index/st-erlindex27-self/` → static, Erlang serving index HTML file
-- `benchmarks/dynamic/elixir/phoenix/dy-phoenix-1-8-self/` → dynamic, Elixir, Phoenix
-- `benchmarks/websocket/elixir/cowboy/ws-elixir-cowboy-1-16-self/` → WebSocket, Elixir, Cowboy
+- `benchmarks/static/erlang/cowboy/st-cowboy-27/` → static, Erlang, Cowboy
+- `benchmarks/static/erlang/pure/st-erlang27/` → static, pure Erlang (HTML in code)
+- `benchmarks/static/erlang/index/st-erlindex27/` → static, Erlang serving index HTML file
+- `benchmarks/dynamic/elixir/phoenix/dy-phoenix-1-8/` → dynamic, Elixir, Phoenix
+- `benchmarks/websocket/elixir/cowboy/ws-elixir-cowboy-1-16/` → WebSocket, Elixir, Cowboy
 
 ### Container (image) naming
 
 The **directory name** of the leaf folder (the one with the `Dockerfile`) is the **Docker image name**. Convention:
 
-- **Static**: `st-<name>-self` (e.g. `st-erlang27-self`, `st-phoenix-1-8-self`)
-- **Dynamic**: `dy-<name>-self` (e.g. `dy-erlang27-self`, `dy-gleam-1-0-self`)
-- **WebSocket**: `ws-<name>-self` (e.g. `ws-cowboy-27-self`, `ws-phoenix-1-8-self`)
+- **Static**: `st-<name>` (e.g. `st-erlang27`, `st-phoenix-1-8`)
+- **Dynamic**: `dy-<name>` (e.g. `dy-erlang27`, `dy-gleam-1-0`)
+- **WebSocket**: `ws-<name>` (e.g. `ws-cowboy-27`, `ws-phoenix-1-8`)
 
-The `-self` suffix means the runtime is built inside the container image. The prefix (`st-`, `dy-`, `ws-`) is used by the scripts to know the benchmark type when resolving paths (e.g. for port mapping).
+All containers use **base images** (e.g. `erlang:27`, `elixir:1.16`, `ghcr.io/gleam-lang/gleam`); we do not build the runtime from source inside the container. The prefix (`st-`, `dy-`, `ws-`) is used by the scripts to know the benchmark type when resolving paths (e.g. for port mapping).
 
 ### How auto-discovery works
 
 1. **Scan** — Scripts recursively scan `benchmarks/static/`, `benchmarks/dynamic/`, and `benchmarks/websocket/`.
 2. **Detect** — Any directory that contains a `Dockerfile` is treated as one benchmark container.
-3. **Image name** — The **name of that directory** (e.g. `st-erlang27-self`) is the Docker image name. The rest of the path (type/language/framework) is only for organization.
+3. **Image name** — The **name of that directory** (e.g. `st-erlang27`) is the Docker image name. The rest of the path (type/language/framework) is only for organization.
 4. **Port** — The container port is read from the `EXPOSE` line in that directory’s `Dockerfile` (default 80).
 5. **Lookup** — When a script needs the path for an image (e.g. to read `EXPOSE`), it searches under `benchmarks/` for a directory whose name is the image name and that contains a `Dockerfile`, and uses that path.
 
@@ -260,11 +260,11 @@ HOST_PORT=9001 ./scripts/check_health.sh
 [INFO] Using fixed host port: 8001
 [INFO] Found 28 containers to test
 
-[INFO] Testing st-cowboy-27-self...
-[SUCCESS] st-cowboy-27-self: Healthy (ready for benchmarking)
+[INFO] Testing st-cowboy-27...
+[SUCCESS] st-cowboy-27: Healthy (ready for benchmarking)
 
-[INFO] Testing dy-erlang27-self...
-[SUCCESS] dy-erlang27-self: Healthy (ready for benchmarking)
+[INFO] Testing dy-erlang27...
+[SUCCESS] dy-erlang27: Healthy (ready for benchmarking)
 
 [INFO] === HEALTH CHECK SUMMARY ===
 [INFO] Total containers tested: 28
@@ -462,13 +462,13 @@ results/
 ```
 
 **File names:** One CSV per container, named by the **Docker image (container) name**:
-- `static/st-cowboy-27-self.csv`, `static/st-erlang27-self.csv`, …
-- `dynamic/dy-phoenix-1-8-self.csv`, …
-- `websocket/ws-cowboy-27-self.csv`, …
+- `static/st-cowboy-27.csv`, `static/st-erlang27.csv`, …
+- `dynamic/dy-phoenix-1-8.csv`, …
+- `websocket/ws-cowboy-27.csv`, …
 
-**Inside each CSV:** The first column is **"Container Name"** and holds that same clean name (e.g. `st-cowboy-27-self`). Multiple rows = different request counts or test parameters.
+**Inside each CSV:** The first column is **"Container Name"** and holds that same clean name (e.g. `st-cowboy-27`). Multiple rows = different request counts or test parameters.
 
-**In the graph generator:** When you load these CSVs, series labels in the legend use the **container name** (e.g. `st-cowboy-27-self`), not file paths—so graphs stay readable and comparable.
+**In the graph generator:** When you load these CSVs, series labels in the legend use the **container name** (e.g. `st-cowboy-27`), not file paths—so graphs stay readable and comparable.
 
 ### CSV Output Format
 
@@ -478,7 +478,7 @@ Results are grouped by container name with multiple rows per file:
 Container Name,Type,Num CPUs,Total Requests,Successful Requests,Failed Requests,Execution Time (s),Requests/s,Total Energy (J),Avg Power (W),Samples,Avg CPU (%),Peak CPU (%),Total CPU (%),Avg Mem (MB),Peak Mem (MB),Total Mem (MB)
 ```
 
-**Example:** `st-cowboy-27-self.csv` contains multiple rows (e.g. 1000, 5000, 10000 requests).
+**Example:** `st-cowboy-27.csv` contains multiple rows (e.g. 1000, 5000, 10000 requests).
 
 #### WebSocket Containers
 WebSocket-specific metrics with latency and throughput data:
