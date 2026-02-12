@@ -154,8 +154,9 @@ This supports high concurrency; Cowboy/Ranch listeners use their default connect
 ## 7. Scaphandre and measurement
 
 - **Scaphandre**: Started with `sudo scaphandre json --containers -f <file>`; runs for the duration of the measurement.
+- **Container detection**: Scripts prefer Scaphandre's `container.name` field. When Scaphandre reports `container: null` for all consumers (e.g. cgroups v2, Debian 13), a **cgroup fallback** attributes energy by matching `/proc/<pid>/cgroup` against the Docker container ID. We rely on this fallback until Scaphandre updates container detection. Track progress: [Scaphandre issue #420](https://github.com/hubblo-org/scaphandre/issues/420).
 - **No TTY**: Script runs without a terminal; sudo must be pre-authenticated or passwordless for scaphandre.
-- **Energy 0.00 J**: With very short or light load (e.g. super-quick, 1000 requests), container power can be below resolution or not attributed; 0.00 J is expected in those cases.
+- **Energy 0.00 J**: If energy is always 0, ensure Scaphandre runs on the host. The cgroup fallback requires the container to still be running when parsing (handled automatically).
 
 ---
 
@@ -188,3 +189,16 @@ This supports high concurrency; Cowboy/Ranch listeners use their default connect
 - **Benchmark app code**: Port 80 in Cowboy/Ranch listeners; max_connections not set (Ranch default). Other stacks use their own listener config (but still EXPOSE 80).
 
 This file is the single place that ties all of these together for a green computer benchmark engineer.
+
+---
+
+## 10. Repository cleaning
+
+| Target | Removes | Use when |
+|--------|---------|----------|
+| **clean-results** | results/, logs/, graphs/, output/, __pycache__ | Fresh measurement run |
+| **clean-env** | Python venv (srv/) and __pycache__ | Recreate venv: run `make setup` after |
+| **clean-build** | Docker containers/images for benchmarks | Rebuild from scratch |
+| **clean-all** | clean-results + clean-env + clean-build | Full clean for fresh run; run `make setup` after |
+| **clean-benchmarks** | benchmarks/ (recreates empty) | Empty framework. `CONFIRM=1` required |
+| **clean-nuclear** | results + Docker + benchmarks/ | Full reset. `CONFIRM=1` required |

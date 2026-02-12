@@ -7,7 +7,7 @@
 VENV_NAME ?= srv
 VENV_PATH = $(VENV_NAME)/bin/activate
 
-.PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-nuclear build run setup graph validate check-health build-test-run run-single clean-all
+.PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-env clean-nuclear build run setup graph validate check-health build-test-run run-single clean-all
 
 # --- Colors ---
 GREEN=\033[0;32m
@@ -15,9 +15,18 @@ RED=\033[0;31m
 YELLOW=\033[1;33m
 NC=\033[0m
 
-check-tools: ## Check for required tools (Python, Docker). Pip/venv used via make setup.
+# Detect Python venv package name for this system (e.g. python3.13-venv)
+PYVENV_PKG := $(shell python3 -c "import sys; print('python3.{}-venv'.format(sys.version_info.minor))" 2>/dev/null || echo "python3-venv")
+
+check-tools: ## Check for required tools (Python, venv, Docker, make)
 	@command -v python3 >/dev/null 2>&1 || { printf "${RED}ERROR:${NC} python3 not found. Install: sudo apt install python3 python3-venv\n"; exit 1; }
+	@python3 -c "import ensurepip" 2>/dev/null || { \
+		printf "${RED}ERROR:${NC} python3-venv not installed. Venv creation requires pip (ensurepip).\n"; \
+		printf "  On Debian/Ubuntu run: sudo apt install $(PYVENV_PKG)\n"; \
+		printf "  Or try the generic: sudo apt install python3-venv\n"; \
+		exit 1; }
 	@command -v docker >/dev/null 2>&1 || { printf "${RED}ERROR:${NC} docker not found. Install: sudo apt install docker.io\n"; exit 1; }
+	@command -v make >/dev/null 2>&1 || { printf "${RED}ERROR:${NC} make not found. Install: sudo apt install make\n"; exit 1; }
 	@command -v scaphandre >/dev/null 2>&1 || { printf "${YELLOW}WARNING:${NC} scaphandre not found (energy measurements will be skipped)\n"; }
 	@printf "${GREEN}Required tools found.${NC}\n"
 
@@ -42,18 +51,20 @@ build: ## Build all Docker images for all discovered containers (requires Docker
 clean-build: ## Remove Docker containers and images only
 	@bash scripts/install_benchmarks.sh clean
 
-# Full clean for fresh run: remove results + Docker (keeps benchmarks/ and venv)
-clean-all: ## Remove results and Docker (clean-results + clean-build)
+# Full clean for fresh run: remove results, Docker, and Python env (keeps benchmarks/)
+clean-all: ## Remove results, Docker, and Python env (clean-results + clean-env + clean-build)
 	@$(MAKE) clean-results
+	@$(MAKE) clean-env
 	@$(MAKE) clean-build
 
 clean-repo: ## Clean repository to bare minimum (git clean -xfd + reset --hard; use with care)
 	@bash scripts/run_benchmarks.sh clean
 
-# Remove only generated outputs (results, logs, graphs). Keeps benchmarks/, srv/, and repo state.
-clean-results: ## Remove only generated outputs (results/, logs/, graphs/) for a fresh measurement
-	@printf "${YELLOW}Removing generated outputs (results, logs, graphs)...${NC}\n"
+# Remove only generated outputs (results, logs, graphs, __pycache__). Keeps benchmarks/, srv/, and repo state.
+clean-results: ## Remove only generated outputs (results/, logs/, graphs/, __pycache__) for a fresh measurement
+	@printf "${YELLOW}Removing generated outputs (results, logs, graphs, __pycache__)...${NC}\n"
 	@rm -rf results logs graphs graphs_compressed output results_docker results_websocket
+	@find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	@printf "${GREEN}Generated outputs removed. Benchmarks and venv (srv) are unchanged.${NC}\n"
 
 # Remove the entire benchmarks/ folder. Use when you want an empty framework ready to add new benchmarks.
@@ -81,6 +92,13 @@ clean-nuclear: ## Full reset: remove results, Docker images, and benchmarks/ (em
 	@rm -rf benchmarks
 	@mkdir -p benchmarks
 	@printf "${GREEN}Framework is now empty and ready for any benchmarks.${NC}\n"
+
+# Remove Python venv (srv) and all __pycache__ directories. Run 'make setup' to recreate.
+clean-env: ## Remove Python venv (srv) and __pycache__ directories
+	@printf "${YELLOW}Removing Python environment (srv) and __pycache__...${NC}\n"
+	@rm -rf srv
+	@find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	@printf "${GREEN}Python environment cleaned. Run 'make setup' to recreate.${NC}\n"
 
 clean-port: ## Stop containers using a port (usage: make clean-port PORT=8001)
 	@if [ -z "$(PORT)" ]; then \
@@ -161,22 +179,31 @@ validate: check-tools
 
 run-all: run  ## Run the full benchmark suite (alias)
 
-setup:  ## Set up Python virtual environment and install dependencies
+setup: check-tools ## Set up Python virtual environment and install dependencies
+	@if [ -d srv ]; then \
+		if ! srv/bin/python3 -c "import pip" 2>/dev/null; then \
+			printf "${YELLOW}[INFO] Removing broken venv (./srv had no pip).${NC}\n"; \
+			rm -rf srv; \
+		fi; \
+	fi
 	@if [ ! -d srv ]; then \
-		if ! python3 -m venv srv 2>/dev/null; then \
-			echo "[ERROR] Failed to create venv. On Debian/Ubuntu run: sudo apt install python3-venv"; \
+		printf "${YELLOW}Creating Python virtual environment in ./srv...${NC}\n"; \
+		if ! python3 -m venv srv; then \
+			printf "${RED}ERROR:${NC} Failed to create venv.\n"; \
+			printf "  On Debian/Ubuntu run: sudo apt install $(PYVENV_PKG)\n"; \
+			printf "  Then run: make setup\n"; \
 			exit 1; \
 		fi; \
-		echo "[INFO] Created Python virtual environment in ./srv"; \
+		printf "${GREEN}Created virtual environment in ./srv${NC}\n"; \
 	else \
-		echo "[INFO] Python virtual environment already exists in ./srv"; \
+		printf "${GREEN}Virtual environment already exists in ./srv${NC}\n"; \
 	fi
 	@if [ ! -f srv/bin/python3 ]; then \
-		echo "[ERROR] srv/bin/python3 not found. Remove ./srv and run 'make setup' again (after installing python3-venv if needed)."; \
+		printf "${RED}ERROR:${NC} srv/bin/python3 not found. Run: make clean-env && make setup\n"; \
 		exit 1; \
 	fi
 	@srv/bin/python3 -m pip install --upgrade pip -q && srv/bin/python3 -m pip install -r requirements.txt -q
-	@echo "[INFO] Python environment is ready."
+	@printf "${GREEN}[INFO] Python environment is ready.${NC}\n"
 
 # Aliases for backward compatibility (not shown in help)
 # Removed: setup-docker
@@ -218,10 +245,11 @@ help:  ## Show this help message
 	@printf "${YELLOW}Build & Clean:${NC}\n"
 	@printf "  %-22s %s\n" "build-test-run" "Build all containers, check health, and run all benchmarks"
 	@printf "  %-22s %s\n" "clean-build" "Clean up Docker containers and images"
-	@printf "  %-22s %s\n" "clean-results" "Remove only generated outputs (results/, logs/, graphs/) for fresh measurement"
+	@printf "  %-22s %s\n" "clean-results" "Remove only generated outputs (results/, logs/, graphs/, __pycache__) for fresh measurement"
+	@printf "  %-22s %s\n" "clean-env" "Remove Python venv (srv) and __pycache__. Run 'make setup' to recreate"
 	@printf "  %-22s %s\n" "clean-benchmarks" "Remove benchmarks/ folder (empty framework). Requires: CONFIRM=1"
 	@printf "  %-22s %s\n" "clean-nuclear" "Full reset: results + Docker + benchmarks/. Requires: CONFIRM=1"
-	@printf "  %-22s %s\n" "clean-all" "Remove results and Docker (fresh run)"
+	@printf "  %-22s %s\n" "clean-all" "Remove results, env, and Docker (fresh run; run 'make setup' after)"
 	@printf "  %-22s %s\n" "clean-port" "Stop containers using a port (usage: make clean-port PORT=8001)"
 	@printf "  %-22s %s\n" "clean-repo" "Git clean + reset (bare minimum; use with care)"
 	@printf "\n"

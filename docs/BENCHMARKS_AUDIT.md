@@ -79,7 +79,7 @@ From repo root:
    ```bash
    make setup    # create srv/ venv and install dependencies (uses srv/bin/python3 -m pip)
    ```
-   If `make setup` fails with "Failed to create venv", install python3-venv and run again. If you have an existing broken `srv/` (e.g. no pip), remove it (`rm -rf srv`) and run `make setup` again.
+   If `make setup` fails with "Failed to create venv", install python3-venv and run again. If you have an existing broken `srv/` (e.g. no pip), run `make clean-env && make setup`.
 2. **Build**: Build all 30 images (already done if you see `[BUILD SUMMARY] All images built successfully`):
    ```bash
    make build

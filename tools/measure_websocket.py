@@ -73,8 +73,9 @@ def cleanup_existing_scaphandre():
 
 def start_scaphandre(output_json, scaphandre_path):
     os.makedirs("output", exist_ok=True)
+    cmd = ["sudo", scaphandre_path, "json", "--containers", "-f", output_json]
     scaphandre_process = subprocess.Popen(
-        ["sudo", scaphandre_path, "json", "--containers", "-f", output_json],
+        cmd,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
     time.sleep(2)
@@ -144,7 +145,20 @@ def collect_resources_docker_stats(container_name, stop_event, docker_path, inte
     return {'avg': cpu_avg, 'peak': cpu_peak, 'total': cpu_total}, \
            {'avg': mem_avg, 'peak': mem_peak, 'total': mem_total}
 
-def parse_json_and_compute_energy(file_name, container_name, runtime):
+def _pid_in_container(pid, container_id):
+    """Check if pid belongs to container via /proc/pid/cgroup (fallback when Scaphandre reports container=null)."""
+    if not container_id or pid <= 0:
+        return False
+    try:
+        with open(f"/proc/{pid}/cgroup", "r") as f:
+            cgroup = f.read()
+        return container_id in cgroup
+    except (OSError, IOError):
+        return False
+
+
+def parse_json_and_compute_energy(file_name, container_name, runtime, container_id=None):
+    """Extract energy from Scaphandre JSON. Prefers Scaphandre's container field; falls back to cgroup when all container=null."""
     with open(file_name, "r") as file:
         data = json.load(file)
     total_power_microwatts = 0.0
@@ -160,11 +174,24 @@ def parse_json_and_compute_energy(file_name, container_name, runtime):
                 if power > 0:
                     total_power_microwatts += power
                     number_samples += 1
-    if not found_containers:
+    # Fallback: when Scaphandre reports container=null for all (e.g. cgroups v2), attribute by cgroup path
+    if number_samples == 0 and container_id and not found_containers:
+        for entry in data:
+            for consumer in entry.get("consumers", []):
+                if consumer.get("container"):
+                    continue
+                pid = consumer.get("pid", 0)
+                power = consumer.get("consumption", 0.0)
+                if power > 0 and _pid_in_container(pid, container_id):
+                    total_power_microwatts += power
+                    number_samples += 1
+        if number_samples > 0:
+            logger.info(f"Using cgroup fallback for '{container_name}' (Scaphandre container=null on this system)")
+    if not found_containers and number_samples == 0:
         logger.warning(f"No containers found in Scaphandre output {file_name}")
-    else:
+    elif found_containers:
         logger.info(f"Containers found in Scaphandre output: {found_containers}")
-    if container_name not in found_containers:
+    if container_name not in found_containers and number_samples == 0:
         logger.warning(f"Container '{container_name}' not found in Scaphandre output!")
     if number_samples == 0:
         logger.warning(f"No energy samples found for container '{container_name}' in {file_name}")
@@ -191,13 +218,18 @@ def cleanup_existing_container(container_name, docker_path):
 
 def start_server_container(server_image, port_mapping, container_name, docker_path, network="bridge"):
     cleanup_existing_container(container_name, docker_path)
-    cmd = [docker_path, "run", "-d", "--ulimit", "nofile=100000:100000", "--name", container_name]
+    # --cgroupns=host: needed for Scaphandre to detect container names on cgroups v2
+    cmd = [docker_path, "run", "-d", "--cgroupns=host", "--ulimit", "nofile=100000:100000", "--name", container_name]
     if network == "host":
         cmd.extend(["--network", "host"])
     else:
         cmd.extend(["-p", port_mapping])
     cmd.append(server_image)
-    subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error("Failed to start container. Docker stderr: %s", result.stderr or "(none)")
+        logger.error("If --cgroupns=host is unsupported, try: docker run --rm --cgroupns=host hello-world")
+        raise RuntimeError("Container failed to start")
     time.sleep(5)
 
 def stop_server_container(container_name, docker_path):
@@ -382,8 +414,13 @@ def main():
     logger.info("Waiting for Scaphandre...")
     time.sleep(5)
     stop_scaphandre(scaphandre_process)
-    stop_server_container(container_name, docker_path)
-
+    container_id = None
+    result = subprocess.run(
+        [docker_path, "ps", "-q", "-f", f"name={container_name}"],
+        capture_output=True, text=True
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        container_id = result.stdout.strip()
     total_msgs = sum(int(r['total']) for r in client_results)
     total_success = sum(int(r['success']) for r in client_results)
     total_fail = sum(int(r['fail']) for r in client_results)
@@ -391,7 +428,10 @@ def main():
     avg_latency = sum(all_latencies) / len(all_latencies) if all_latencies else 0.0
     requests_per_second = total_msgs / runtime if runtime > 0 else 0.0
     throughput_mb_s = (total_msgs * args.size_kb / 1024) / runtime if runtime > 0 else 0.0
-    total_energy, avg_power, total_samples = parse_json_and_compute_energy(output_json, container_name, runtime)
+    total_energy, avg_power, total_samples = parse_json_and_compute_energy(
+        output_json, container_name, runtime, container_id=container_id
+    )
+    stop_server_container(container_name, docker_path)
 
     headers = ["Container Name", "Test Type", "Num CPUs", "Total Messages", "Successful Messages", "Failed Messages", "Execution Time (s)", "Messages/s", "Throughput (MB/s)",
                "Avg Latency (ms)", "Min Latency (ms)", "Max Latency (ms)",
