@@ -145,9 +145,38 @@ def _app_stylesheet():
             color: {TEXT};
             border: {BORDER};
             border-radius: {BORDER_RADIUS};
+            outline: none;
         }}
-        QListWidget::item {{ padding: 3px 8px; }}
-        QListWidget::item:selected {{ background-color: {SELECTION_BG}; color: {SELECTION_TEXT}; }}
+        QListWidget::item {{
+            padding: 4px 8px;
+            border: none;
+            outline: none;
+        }}
+        QListWidget::item:selected {{
+            background-color: {SELECTION_BG};
+            color: {SELECTION_TEXT};
+            padding: 4px 8px;
+            border: none;
+            outline: none;
+        }}
+
+        QSplitter::handle {{
+            width: 10px;
+            background: #dee2e6;
+            border-left: 1px solid #ced4da;
+            border-right: 1px solid #ced4da;
+        }}
+        QSplitter::handle:hover {{
+            background: #ced4da;
+        }}
+
+        QPushButton#sidebarToggleBtn {{
+            min-width: 38px;
+            max-width: 38px;
+            padding: 4px;
+            font-size: 18px;
+            line-height: 1;
+        }}
 
         QScrollArea {{ border: none; background: transparent; }}
     """
@@ -159,6 +188,24 @@ class _ComboDelegate(QStyledItemDelegate):
         option.palette.setColor(QPalette.HighlightedText, QColor(SELECTION_TEXT))
         option.palette.setColor(QPalette.Highlight, QColor(SELECTION_BG))
         super().paint(painter, option, index)
+
+
+# Left margin (px) reserved for checkbox; clicks here let the default handler toggle. Clicks on the row text toggle programmatically.
+_CHECKBOX_MARGIN = 28
+
+
+class CheckableFileListWidget(QListWidget):
+    """List where clicking the row (text) toggles the checkbox; Ctrl+click toggles that row only. Checkbox area uses default behavior."""
+    def mousePressEvent(self, event):
+        pos = event.pos()
+        item = self.itemAt(pos)
+        if item and (item.flags() & Qt.ItemIsUserCheckable):
+            rect = self.visualItemRect(item)
+            # Click on text part (right of checkbox area) -> toggle check ourselves so it works like clicking the box
+            if pos.x() - rect.x() >= _CHECKBOX_MARGIN:
+                state = Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
+                item.setCheckState(state)
+        super().mousePressEvent(event)
 
 
 class MenuSelectorWidget(QWidget):
@@ -236,6 +283,14 @@ WS_TYPE_BURST_STREAM = "Burst / Stream"
 WS_TYPE_OPTIONS = [WS_TYPE_ALL, WS_TYPE_CONCURRENCY, WS_TYPE_PAYLOAD, WS_TYPE_BURST_STREAM]
 BENCHMARK_TYPE_PLACEHOLDER = "Benchmark type"
 WS_TYPE_PLACEHOLDER = "WebSocket type"
+# Short acronyms for WebSocket subtype in save filenames (avoids overwriting when saving different subtypes in the same second)
+WS_TYPE_SAVE_ACRONYM = {
+    WS_TYPE_CONCURRENCY: "conc",
+    WS_TYPE_PAYLOAD: "pay",
+    WS_TYPE_BURST_STREAM: "burst",
+    WS_TYPE_ALL: "all",
+    WS_TYPE_PLACEHOLDER: "all",
+}
 
 # Human-readable x-axis labels for plot
 XAXIS_DISPLAY_NAMES = {
@@ -374,6 +429,8 @@ class BenchmarkGrapher(QMainWindow):
 
         GAP = 6
         splitter = QSplitter(Qt.Horizontal)
+        splitter.setHandleWidth(10)
+        splitter.setChildrenCollapsible(False)
 
         left_panel = QWidget()
         left_panel.setMinimumWidth(380)
@@ -420,11 +477,12 @@ class BenchmarkGrapher(QMainWindow):
         row_ws.addStretch()
         self.ws_type_row.setVisible(False)
         data_layout.addWidget(self.ws_type_row)
-        self.file_listbox = QListWidget()
+        self.file_listbox = CheckableFileListWidget(self)
         self.file_listbox.setSelectionMode(QListWidget.ExtendedSelection)
         self.file_listbox.setMinimumHeight(140)
         self.file_listbox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.file_listbox.itemSelectionChanged.connect(self._on_selection_changed)
+        self.file_listbox.itemChanged.connect(self._on_item_changed)
         self.file_listbox.itemDoubleClicked.connect(self.plot_selected)
         data_layout.addWidget(self.file_listbox, 1)
         left_layout.addWidget(data_group, 1)
@@ -490,10 +548,10 @@ class BenchmarkGrapher(QMainWindow):
         graph_layout = QVBoxLayout(graph_group)
         graph_layout.setContentsMargins(2, 2, 2, 2)
         top_row = QHBoxLayout()
-        self.sidebar_toggle_btn = QPushButton("◀")
+        self.sidebar_toggle_btn = QPushButton("\u25c0")  # ◀ (black left-pointing triangle)
+        self.sidebar_toggle_btn.setObjectName("sidebarToggleBtn")
         self.sidebar_toggle_btn.setToolTip("Hide sidebar (full screen graph)")
-        self.sidebar_toggle_btn.setFixedSize(28, CONTROL_HEIGHT)
-        self.sidebar_toggle_btn.setStyleSheet("QPushButton { font-size: 14px; }")
+        self.sidebar_toggle_btn.setFixedSize(38, CONTROL_HEIGHT)
         self.sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
         top_row.addWidget(self.sidebar_toggle_btn)
         self.fig, self.ax = plt.subplots(figsize=(8, 5))
@@ -524,10 +582,10 @@ class BenchmarkGrapher(QMainWindow):
         visible = self.left_panel.isVisible()
         self.left_panel.setVisible(not visible)
         if visible:
-            self.sidebar_toggle_btn.setText("☰")
+            self.sidebar_toggle_btn.setText("\u25b6")   # ▶ (black right-pointing triangle) = show panel
             self.sidebar_toggle_btn.setToolTip("Show sidebar")
         else:
-            self.sidebar_toggle_btn.setText("◀")
+            self.sidebar_toggle_btn.setText("\u25c0")  # ◀ (black left-pointing triangle) = hide panel
             self.sidebar_toggle_btn.setToolTip("Hide sidebar (full screen graph)")
 
     def browse_files(self):
@@ -560,6 +618,10 @@ class BenchmarkGrapher(QMainWindow):
     def _on_selection_changed(self):
         self._update_file_count_label()
 
+    def _on_item_changed(self, item):
+        """Update file count when a checkbox is toggled."""
+        self._update_file_count_label()
+
     def _update_selection_buttons_state(self):
         has_items = self.file_listbox.count() > 0
         self.select_all_btn.setEnabled(has_items)
@@ -578,7 +640,8 @@ class BenchmarkGrapher(QMainWindow):
 
     def _update_file_count_label(self):
         total = len(self.get_visible_files())
-        selected = len(self.file_listbox.selectedItems())
+        selected = sum(1 for i in range(self.file_listbox.count())
+                       if self.file_listbox.item(i).checkState() == Qt.Checked)
         self.file_count_label.setText(f"{total} loaded, {selected} selected")
 
     def add_files(self, files):
@@ -608,6 +671,7 @@ class BenchmarkGrapher(QMainWindow):
     def update_file_listbox_display(self):
         self.file_listbox.clear()
         visible = self.get_visible_files()
+        self.file_listbox.blockSignals(True)
         for f in visible:
             typ = self.file_types.get(f, "unknown")
             suffix = f"  [{typ}]"
@@ -619,7 +683,10 @@ class BenchmarkGrapher(QMainWindow):
                         suffix = f"  [{typ} / {sub_display}]"
             item = QListWidgetItem(os.path.basename(f) + suffix)
             item.setData(Qt.UserRole, f)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
             self.file_listbox.addItem(item)
+        self.file_listbox.blockSignals(False)
         self.file_listbox.selectAll()
         self._update_file_count_label()
         self._update_selection_buttons_state()
@@ -664,17 +731,27 @@ class BenchmarkGrapher(QMainWindow):
 
     def get_selected_files(self):
         visible = self.get_visible_files()
-        selected = self.file_listbox.selectedItems()
-        if not selected:
+        checked = [self.file_listbox.item(i).data(Qt.UserRole)
+                   for i in range(self.file_listbox.count())
+                   if self.file_listbox.item(i).checkState() == Qt.Checked
+                   and self.file_listbox.item(i).data(Qt.UserRole) in visible]
+        if not checked:
             return visible
-        paths = [item.data(Qt.UserRole) for item in selected if item.data(Qt.UserRole) in visible]
-        return paths if paths else visible
+        return checked
 
     def select_all_files(self):
+        self.file_listbox.blockSignals(True)
+        for i in range(self.file_listbox.count()):
+            self.file_listbox.item(i).setCheckState(Qt.Checked)
+        self.file_listbox.blockSignals(False)
         self.file_listbox.selectAll()
         self._update_file_count_label()
 
     def deselect_all_files(self):
+        self.file_listbox.blockSignals(True)
+        for i in range(self.file_listbox.count()):
+            self.file_listbox.item(i).setCheckState(Qt.Unchecked)
+        self.file_listbox.blockSignals(False)
         self.file_listbox.clearSelection()
         self._update_file_count_label()
 
@@ -875,7 +952,8 @@ class BenchmarkGrapher(QMainWindow):
         return "Test Parameter"
 
     def _default_save_path(self):
-        """Default path: graphs/<category>/<metric>-<N>bench-<YYYYMMDD-HHMM>.ext"""
+        """Default path: graphs/<category>/<metric>[-<ws-subtype>]-<N>bench-<YYYYMMDD-HHMM>.ext.
+        WebSocket subtype (conc/pay/burst/all) in filename avoids overwriting when saving different subtypes in the same second."""
         metric = self.metric_selector.currentText() or "graph"
         if metric == "(select metric)":
             metric = "graph"
@@ -885,11 +963,17 @@ class BenchmarkGrapher(QMainWindow):
         ts = datetime.now().strftime("%Y%m%d-%H%M")
         fmt = self.format_combo.currentText().strip().lower()
         ext = ".png" if fmt == "png" else ".pdf" if fmt == "pdf" else ".svg"
-        name = f"{slug}-{n}bench-{ts}{ext}"
+        cat = (self.category_selector.currentText() or "").strip()
+        cat_lower = cat.lower().replace(" ", "")
+        subtype_part = ""
+        if cat_lower == "websocket" and getattr(self, "ws_type_selector", None):
+            ws_type = self.ws_type_selector.currentText() or WS_TYPE_PLACEHOLDER
+            acronym = WS_TYPE_SAVE_ACRONYM.get(ws_type, "all")
+            subtype_part = f"-{acronym}"
+        name = f"{slug}{subtype_part}-{n}bench-{ts}{ext}"
         base = os.path.abspath("graphs")
-        cat = (self.category_selector.currentText() or "").lower().replace(" ", "")
-        if cat and cat not in ("all", "", BENCHMARK_TYPE_PLACEHOLDER.lower().replace(" ", "")):
-            base = os.path.join(base, cat)
+        if cat and cat_lower not in ("all", "", BENCHMARK_TYPE_PLACEHOLDER.lower().replace(" ", "")):
+            base = os.path.join(base, cat_lower)
         os.makedirs(base, exist_ok=True)
         return os.path.join(base, name)
 
