@@ -19,9 +19,10 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QListWidget, QListWidgetItem,
     QFileDialog, QMessageBox, QGroupBox, QShortcut, QStyledItemDelegate,
-    QStyleFactory, QFrame, QSplitter, QSizePolicy, QMenu, QAction,
+    QStyleFactory, QFrame, QSplitter, QSizePolicy, QMenu, QToolButton,
+    QScrollArea,
 )
-from PyQt5.QtCore import Qt, QTimer, QEvent, QPoint
+from PyQt5.QtCore import Qt, QPoint, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QKeySequence, QColor, QPalette
 
 # --- Extensible category detection ---
@@ -30,155 +31,191 @@ CATEGORY_PATH_PARTS = {"websocket": "WebSocket", "static": "Static", "dynamic": 
 # Filename prefix -> display name
 CATEGORY_PREFIXES = {"ws-": "WebSocket", "st-": "Static", "dy-": "Dynamic", "grpc-": "gRPC"}
 FONT_FAMILY = "Sans Serif"
-FONT_SIZE = 12
+FONT_SIZE = 11
+CONTROL_HEIGHT = 26
+
+# Single design system: one border, one hover, one pressed for all controls
+BORDER = "1px solid #ced4da"
+BORDER_RADIUS = "4px"
+BG_CONTROL = "#ffffff"
+BG_HOVER = "#f1f3f5"
+BG_PRESSED = "#e9ecef"
+BG_DISABLED = "#e9ecef"
+TEXT = "#212529"
+TEXT_DISABLED = "#adb5bd"
+BORDER_HOVER = "#adb5bd"
+SELECTION_BG = "#e9ecef"
+SELECTION_TEXT = "#212529"
 
 
 def _make_light_palette():
-    """Professional light palette for consistent appearance."""
     p = QPalette()
-    p.setColor(QPalette.Window, QColor("#f5f5f5"))
-    p.setColor(QPalette.WindowText, QColor("#2c3e50"))
-    p.setColor(QPalette.Base, QColor("#ffffff"))
-    p.setColor(QPalette.AlternateBase, QColor("#f0f0f0"))
-    p.setColor(QPalette.Text, QColor("#2c3e50"))
-    p.setColor(QPalette.Button, QColor("#e8e8e8"))
-    p.setColor(QPalette.ButtonText, QColor("#2c3e50"))
-    p.setColor(QPalette.Highlight, QColor("#3498db"))
-    p.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+    p.setColor(QPalette.Window, QColor("#f8f9fa"))
+    p.setColor(QPalette.WindowText, QColor(TEXT))
+    p.setColor(QPalette.Base, QColor(BG_CONTROL))
+    p.setColor(QPalette.AlternateBase, QColor(BG_HOVER))
+    p.setColor(QPalette.Text, QColor(TEXT))
+    p.setColor(QPalette.Button, QColor(BG_CONTROL))
+    p.setColor(QPalette.ButtonText, QColor(TEXT))
+    p.setColor(QPalette.Highlight, QColor(SELECTION_BG))
+    p.setColor(QPalette.HighlightedText, QColor(SELECTION_TEXT))
     return p
 
 
 def _app_stylesheet():
-    """Unified stylesheet: consistent font, colors, readable dropdowns."""
-    font_pt = FONT_SIZE
+    """One design system: all buttons and controls share the same colors, size, hover, pressed."""
+    f = FONT_SIZE
+    h = CONTROL_HEIGHT
     return f"""
-        QWidget {{
-            background-color: #f5f5f5;
-            font-family: "{FONT_FAMILY}";
-            font-size: {font_pt}pt;
+        QWidget {{ font-family: "{FONT_FAMILY}"; font-size: {f}pt; background-color: #f8f9fa; }}
+        QLabel {{ font-size: {f}pt; color: {TEXT}; }}
+
+        QPushButton, QToolButton {{
+            font-size: {f}pt;
+            background-color: {BG_CONTROL};
+            color: {TEXT};
+            border: {BORDER};
+            border-radius: {BORDER_RADIUS};
+            padding: 4px 12px;
+            min-height: {h}px;
+            max-height: {h}px;
         }}
-        QLabel {{
-            font-size: {font_pt}pt;
-            color: #2c3e50;
+        QPushButton:hover, QToolButton:hover {{
+            background-color: {BG_HOVER};
+            border: 1px solid {BORDER_HOVER};
         }}
-        QPushButton {{
-            font-size: {font_pt}pt;
-            background-color: #e8e8e8;
-            color: #2c3e50;
-            border: 1px solid #d0d0d0;
-            border-radius: 4px;
-            padding: 6px 12px;
+        QPushButton:pressed, QToolButton:pressed {{
+            background-color: {BG_PRESSED};
+            border: 1px solid {BORDER_HOVER};
         }}
-        QPushButton:hover {{
-            background-color: #d8d8d8;
-            border-color: #b0b0b0;
+        QPushButton:disabled, QToolButton:disabled {{
+            background-color: {BG_DISABLED};
+            color: {TEXT_DISABLED};
+            border: 1px solid #dee2e6;
         }}
-        QPushButton:pressed {{
-            background-color: #c8c8c8;
+        QToolButton {{ text-align: left; }}
+        QToolButton::menu-indicator {{ width: 14px; border: none; }}
+
+        QMenu {{
+            font-size: {f}pt;
+            background-color: {BG_CONTROL};
+            border: {BORDER};
+            border-radius: {BORDER_RADIUS};
+            padding: 2px 0;
         }}
-        QPushButton:disabled {{
-            background-color: #eeeeee;
-            color: #999999;
-        }}
+        QMenu::item {{ padding: 4px 16px; color: {TEXT}; }}
+        QMenu::item:selected {{ background-color: {SELECTION_BG}; color: {SELECTION_TEXT}; }}
+
         QGroupBox {{
-            font-size: {font_pt}pt;
+            font-size: {f}pt;
             font-weight: normal;
-            border: 1px solid #d0d0d0;
-            border-radius: 4px;
-            margin-top: 8px;
-            padding: 8px 8px 8px 8px;
-            padding-top: 14px;
-            background-color: #fafafa;
+            border: {BORDER};
+            border-radius: {BORDER_RADIUS};
+            margin-top: 6px;
+            padding: 8px;
+            padding-top: 12px;
+            background-color: {BG_CONTROL};
         }}
-        QGroupBox::title {{
-            subcontrol-origin: margin;
-            left: 8px;
-            padding: 0 4px;
-            color: #2c3e50;
-        }}
+        QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; color: {TEXT}; }}
+
         QComboBox {{
-            font-size: {font_pt}pt;
-            min-height: 26px;
-            padding: 4px 10px;
-            background-color: #ffffff;
-            border: 1px solid #d0d0d0;
-            border-radius: 4px;
+            font-size: {f}pt;
+            min-height: {h}px;
+            max-height: {h}px;
+            padding: 4px 12px;
+            background-color: {BG_CONTROL};
+            color: {TEXT};
+            border: {BORDER};
+            border-radius: {BORDER_RADIUS};
         }}
-        QComboBox::drop-down {{
-            width: 20px;
-            border: none;
-        }}
+        QComboBox::drop-down {{ width: 18px; border: none; }}
         QComboBox QAbstractItemView {{
-            font-size: {font_pt}pt;
+            font-size: {f}pt;
             padding: 4px 8px;
-            outline: none;
-            selection-background-color: #3498db;
-            selection-color: #ffffff;
-            background-color: #ffffff;
-            color: #2c3e50;
+            background-color: {BG_CONTROL};
+            color: {TEXT};
+            selection-background-color: {SELECTION_BG};
+            selection-color: {SELECTION_TEXT};
+            border: {BORDER};
         }}
+
         QListWidget {{
-            font-size: {font_pt}pt;
-            background-color: #ffffff;
-            border: 1px solid #d0d0d0;
-            border-radius: 4px;
+            font-size: {f}pt;
+            background-color: {BG_CONTROL};
+            color: {TEXT};
+            border: {BORDER};
+            border-radius: {BORDER_RADIUS};
         }}
-        QListWidget::item {{
-            padding: 4px;
-        }}
+        QListWidget::item {{ padding: 3px 8px; }}
+        QListWidget::item:selected {{ background-color: {SELECTION_BG}; color: {SELECTION_TEXT}; }}
+
+        QScrollArea {{ border: none; background: transparent; }}
     """
 
 
-class _DropUpComboBox(QComboBox):
-    """QComboBox that uses QMenu as popup - floats and stays on screen (up/down/left/right)."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setMaxVisibleItems(15)
-        self._menu = None
-
-    def showPopup(self):
-        if self.count() == 0:
-            return
-        self._menu = QMenu(self)
-        self._menu.setStyleSheet("""
-            QMenu { font-size: 12pt; padding: 4px 8px; min-width: 180px; }
-            QMenu::item { padding: 6px 24px; min-width: 160px; }
-            QMenu::item:selected { background-color: #3498db; color: white; }
-        """)
-        self._menu.setMinimumWidth(max(200, self.width()))
-        self._menu.setMaximumHeight(400)
-        for i in range(self.count()):
-            text = self.itemText(i)
-            act = self._menu.addAction(text)
-            act.setData(i)
-        pos = self.mapToGlobal(QPoint(0, self.height()))
-        screen = QApplication.desktop().availableGeometry(self)
-        # Ensure menu fits: prefer opening above if near bottom
-        menu_h = min(400, 36 * min(self.count(), 15))
-        if pos.y() + menu_h > screen.bottom():
-            pos.setY(self.mapToGlobal(QPoint(0, 0)).y() - menu_h)
-        if pos.y() < screen.top():
-            pos.setY(screen.top())
-        menu_w = max(200, self.width(), 250)
-        if pos.x() + menu_w > screen.right():
-            pos.setX(screen.right() - menu_w - 10)
-        if pos.x() < screen.left():
-            pos.setX(screen.left())
-        action = self._menu.exec_(pos)
-        if action is not None:
-            self.setCurrentIndex(action.data())
-        self._menu = None
-
-
 class _ComboDelegate(QStyledItemDelegate):
-    """Draw combo items with readable colors on hover."""
+    """Use the same selection colors as the rest of the UI."""
     def paint(self, painter, option, index):
-        option.palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
-        option.palette.setColor(QPalette.Highlight, QColor("#3498db"))
+        option.palette.setColor(QPalette.HighlightedText, QColor(SELECTION_TEXT))
+        option.palette.setColor(QPalette.Highlight, QColor(SELECTION_BG))
         super().paint(painter, option, index)
 
 
+class MenuSelectorWidget(QWidget):
+    """
+    Compact selector: button + QMenu. No arrow chrome; selection only on click.
+    Slim height, flat style for a modern look.
+    """
+    option_chosen = pyqtSignal(str)
+
+    def __init__(self, placeholder="—", parent=None):
+        super().__init__(parent)
+        self._placeholder = placeholder
+        self._options = []
+        self._menu = QMenu(self)
+        self._button = QToolButton(self)
+        self._button.setPopupMode(QToolButton.InstantPopup)
+        self._button.setMenu(self._menu)
+        self._button.setText(placeholder)
+        self._button.setMinimumHeight(CONTROL_HEIGHT)
+        self._button.setMaximumHeight(CONTROL_HEIGHT)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._button)
+
+    def set_options(self, options):
+        """Set the list of options; rebuilds the menu. Keeps placeholder if current text is the placeholder."""
+        self._options = list(options) if options else []
+        self._menu.clear()
+        for opt in self._options:
+            action = self._menu.addAction(opt)
+            action.triggered.connect(lambda checked, o=opt: self._on_picked(o))
+        current = self._button.text()
+        if self._options and current not in self._options and current != self._placeholder:
+            self._button.setText(self._options[0])
+
+    def _on_picked(self, text):
+        self._button.setText(text)
+        self.option_chosen.emit(text)
+
+    def set_current(self, text):
+        if text == self._placeholder or text in self._options:
+            self._button.setText(text)
+
+    def currentText(self):
+        return self._button.text()
+
+
 # --- Helper Functions ---
+def safe_float(val, default=0.0):
+    """Convert value to float; return default on failure (avoids GUI crash on bad CSV data)."""
+    if val is None or val == '' or (isinstance(val, str) and val.strip().upper() in ('', 'NAN', 'N/A', '-', '--')):
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
 def detect_csv_type(header):
     if "Test Type" in header or "Total Messages" in header:
         return "websocket"
@@ -186,15 +223,95 @@ def detect_csv_type(header):
         return "http"
     return "unknown"
 
+# WebSocket CSV: test subtypes and x-axis column names (from measure_websocket.py + run_benchmarks.sh)
+WS_SUBTYPE_CONCURRENCY = "concurrency_sweep"
+WS_SUBTYPE_PAYLOAD = "payload_sweep"
+WS_SUBTYPE_BURST = "burst"
+WS_SUBTYPE_STREAM = "stream"
+WS_XAXIS_COLUMNS = ["Num Clients", "Message Size (KB)", "Rate (msg/s)", "Bursts", "Duration (s)", "Interval (s)"]
+WS_TYPE_ALL = "All"
+WS_TYPE_CONCURRENCY = "Concurrency sweep"
+WS_TYPE_PAYLOAD = "Payload sweep"
+WS_TYPE_BURST_STREAM = "Burst / Stream"
+WS_TYPE_OPTIONS = [WS_TYPE_ALL, WS_TYPE_CONCURRENCY, WS_TYPE_PAYLOAD, WS_TYPE_BURST_STREAM]
+BENCHMARK_TYPE_PLACEHOLDER = "Benchmark type"
+WS_TYPE_PLACEHOLDER = "WebSocket type"
+
+# Human-readable x-axis labels for plot
+XAXIS_DISPLAY_NAMES = {
+    "Num Clients": "Number of clients",
+    "Message Size (KB)": "Message size (KB)",
+    "Rate (msg/s)": "Rate (msg/s)",
+    "Bursts": "Bursts",
+    "Duration (s)": "Duration (s)",
+    "Interval (s)": "Interval (s)",
+    "Total Requests": "Total requests",
+}
+
+def detect_websocket_subtype(filepath, header, rows):
+    """Return WebSocket subtype from filename or CSV content for correct x-axis and display."""
+    base = os.path.basename(filepath).lower()
+    if "_concurrency_sweep" in base:
+        return WS_SUBTYPE_CONCURRENCY
+    if "_payload_sweep" in base:
+        return WS_SUBTYPE_PAYLOAD
+    if not rows or "Pattern" not in header:
+        return None
+    patterns = {str(r.get("Pattern", "")).strip().lower() for r in rows}
+    if "burst" in patterns and "stream" not in patterns:
+        return WS_SUBTYPE_BURST
+    if "stream" in patterns:
+        return WS_SUBTYPE_STREAM
+    return None
+
+def websocket_xaxis_column(header, rows, subtype):
+    """Choose the best x-axis column for WebSocket plot from subtype and data."""
+    if subtype == WS_SUBTYPE_CONCURRENCY and "Num Clients" in header:
+        return "Num Clients"
+    if subtype == WS_SUBTYPE_PAYLOAD and "Message Size (KB)" in header:
+        return "Message Size (KB)"
+    for col in WS_XAXIS_COLUMNS:
+        if col not in header:
+            continue
+        vals = [safe_float(r.get(col)) for r in rows if r.get(col) not in (None, "")]
+        if len(set(vals)) > 1:
+            return col
+    for col in WS_XAXIS_COLUMNS:
+        if col in header:
+            return col
+    return None
+
+def websocket_subtype_display_name(subtype):
+    if subtype == WS_SUBTYPE_CONCURRENCY:
+        return "Concurrency"
+    if subtype == WS_SUBTYPE_PAYLOAD:
+        return "Payload"
+    if subtype == WS_SUBTYPE_BURST:
+        return "Burst"
+    if subtype == WS_SUBTYPE_STREAM:
+        return "Stream"
+    return None
+
+def _row_value(r, key, header=None):
+    """Get value from row by key; fallback to header match if key has spacing differences."""
+    val = r.get(key)
+    if val is not None and str(val).strip() != "":
+        return val
+    if header and key:
+        for h in header:
+            if h.strip().lower() == key.strip().lower():
+                return r.get(h)
+    return None
+
 def read_csv(filepath):
-    with open(filepath, newline='') as f:
+    with open(filepath, newline='', encoding='utf-8', errors='replace') as f:
         reader = csv.DictReader(f)
-        header = reader.fieldnames
+        header = reader.fieldnames or []
         rows = list(reader)
     return header, rows
 
 def summarize_column(rows, col):
-    vals = [float(r[col]) for r in rows if r.get(col) not in (None, '', 'NaN')]
+    vals = [safe_float(r.get(col)) for r in rows if r.get(col) not in (None, '', 'NaN')]
     if not vals:
         return {'min': '-', 'max': '-', 'avg': '-'}
     return {'min': min(vals), 'max': max(vals), 'avg': sum(vals) / len(vals)}
@@ -205,7 +322,7 @@ def get_numeric_columns(header):
         if any(x in h.lower() for x in [
             "cpu", "mem", "latency", "throughput", "energy", "power",
             "requests", "messages", "samples", "rate", "size", "duration",
-            "interval", "bursts", "time", "execution", "runtime"
+            "interval", "bursts", "time", "execution", "runtime", "clients"
         ]):
             numeric.append(h)
     return numeric
@@ -221,6 +338,7 @@ class BenchmarkGrapher(QMainWindow):
         self.headers = {}
         self.rows = {}
         self.file_categories = {}
+        self.file_ws_subtypes = {}
         self.color_cycle = []
         for cmap_name in ['tab20', 'tab20b', 'tab20c', 'Set1', 'Set2', 'Set3', 'Dark2', 'Paired', 'Accent', 'Pastel1', 'Pastel2']:
             cmap = plt.get_cmap(cmap_name)
@@ -238,55 +356,73 @@ class BenchmarkGrapher(QMainWindow):
         app.setStyle(QStyleFactory.create("Fusion"))
         app.setPalette(_make_light_palette())
         app.setFont(QFont(FONT_FAMILY, FONT_SIZE))
-        app.setStyleSheet(_app_stylesheet())
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(8, 8, 8, 8)
 
-        def _btn(text, slot, min_w=90):
+        # All buttons: same height, same min width, same policy — homogeneous
+        BTN_MIN_W = 88
+        def _btn(text, slot, min_w=None):
+            w = min_w if min_w is not None else BTN_MIN_W
             b = QPushButton(text, clicked=slot)
-            b.setMinimumWidth(min_w)
-            b.setMinimumHeight(26)
+            b.setMinimumWidth(w)
+            b.setMinimumHeight(CONTROL_HEIGHT)
+            b.setMaximumHeight(CONTROL_HEIGHT)
+            b.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
             return b
 
+        GAP = 6
         splitter = QSplitter(Qt.Horizontal)
 
-        # --- Left panel: Data (tall file list) + Plot + Save/Format/Help/Summary at bottom ---
         left_panel = QWidget()
-        left_panel.setMinimumWidth(420)  # Keep buttons ("Select all", "Deselect all") fully readable
+        left_panel.setMinimumWidth(380)
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setSpacing(8)
+        left_layout.setSpacing(GAP)
 
         data_group = QGroupBox("Data")
         data_layout = QVBoxLayout(data_group)
-        data_layout.setSpacing(6)
+        data_layout.setSpacing(GAP)
         row1 = QHBoxLayout()
+        row1.setSpacing(GAP)
         row1.addWidget(_btn("Select files", self.browse_files))
         row1.addWidget(_btn("Select folder", self.load_all_csvs_in_folder))
+        row1.addStretch()
         data_layout.addLayout(row1)
         row2 = QHBoxLayout()
-        row2.addWidget(_btn("Clear all", self.clear_files, 80))
-        self.select_all_btn = _btn("Select all", self.select_all_files, 95)
+        row2.setSpacing(GAP)
+        row2.addWidget(_btn("Clear all", self.clear_files))
+        self.select_all_btn = _btn("Select all", self.select_all_files)
         self.select_all_btn.setEnabled(False)
         row2.addWidget(self.select_all_btn)
-        self.deselect_all_btn = _btn("Deselect all", self.deselect_all_files, 100)
+        self.deselect_all_btn = _btn("Deselect all", self.deselect_all_files)
         self.deselect_all_btn.setEnabled(False)
         row2.addWidget(self.deselect_all_btn)
+        row2.addStretch()
         data_layout.addLayout(row2)
         row3 = QHBoxLayout()
-        row3.addWidget(QLabel("Filter:"))
-        self.category_combo = _DropUpComboBox()
-        self.category_combo.setItemDelegate(_ComboDelegate(self.category_combo))
-        self.category_combo.addItem("All")
-        self.category_combo.currentTextChanged.connect(self._on_filter_changed)
-        row3.addWidget(self.category_combo)
+        row3.setSpacing(GAP)
+        self.category_selector = MenuSelectorWidget(placeholder=BENCHMARK_TYPE_PLACEHOLDER, parent=self)
+        self.category_selector.set_options([])
+        self.category_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self._on_filter_changed))
+        row3.addWidget(self.category_selector)
         self.file_count_label = QLabel("0 loaded, 0 selected")
-        row3.addWidget(self.file_count_label)
+        row3.addWidget(self.file_count_label, 1)
         data_layout.addLayout(row3)
+        self.ws_type_row = QWidget()
+        row_ws = QHBoxLayout(self.ws_type_row)
+        row_ws.setContentsMargins(0, 0, 0, 0)
+        row_ws.setSpacing(GAP)
+        self.ws_type_selector = MenuSelectorWidget(placeholder=WS_TYPE_PLACEHOLDER, parent=self)
+        self.ws_type_selector.set_options([WS_TYPE_ALL, WS_TYPE_CONCURRENCY, WS_TYPE_PAYLOAD, WS_TYPE_BURST_STREAM])
+        self.ws_type_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self._on_filter_changed))
+        row_ws.addWidget(self.ws_type_selector)
+        row_ws.addStretch()
+        self.ws_type_row.setVisible(False)
+        data_layout.addWidget(self.ws_type_row)
         self.file_listbox = QListWidget()
         self.file_listbox.setSelectionMode(QListWidget.ExtendedSelection)
-        self.file_listbox.setMinimumHeight(180)
+        self.file_listbox.setMinimumHeight(140)
         self.file_listbox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.file_listbox.itemSelectionChanged.connect(self._on_selection_changed)
         self.file_listbox.itemDoubleClicked.connect(self.plot_selected)
@@ -295,47 +431,55 @@ class BenchmarkGrapher(QMainWindow):
 
         plot_group = QGroupBox("Plot")
         plot_layout = QVBoxLayout(plot_group)
-        plot_layout.setSpacing(6)
+        plot_layout.setSpacing(GAP)
+        plot_layout.setContentsMargins(8, 10, 8, 8)
         plot_layout.addWidget(QLabel("Metric:"))
-        self.metric_combo = _DropUpComboBox()
-        self.metric_combo.setItemDelegate(_ComboDelegate(self.metric_combo))
-        self.metric_combo.currentTextChanged.connect(self.plot_selected)
-        plot_layout.addWidget(self.metric_combo)
+        self.metric_selector = MenuSelectorWidget(placeholder="(select metric)", parent=self)
+        self.metric_selector.set_options([])
+        self.metric_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self.plot_selected))
+        plot_layout.addWidget(self.metric_selector)
         pr = QHBoxLayout()
+        pr.setSpacing(GAP)
         pr.addWidget(QLabel("Type:"))
-        self.plot_type_combo = _DropUpComboBox()
-        self.plot_type_combo.setItemDelegate(_ComboDelegate(self.plot_type_combo))
-        self.plot_type_combo.addItems(["Auto", "Bar", "Line"])
-        self.plot_type_combo.currentTextChanged.connect(self.plot_selected)
-        pr.addWidget(self.plot_type_combo)
-        plot_btn = _btn("Plot", self.plot_selected)
-        plot_btn.clicked.connect(self.plot_selected)
-        pr.addWidget(plot_btn)
+        self.plot_type_selector = MenuSelectorWidget(placeholder="Auto", parent=self)
+        self.plot_type_selector.set_options(["Auto", "Bar", "Line"])
+        self.plot_type_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self.plot_selected))
+        pr.addWidget(self.plot_type_selector)
+        pr.addWidget(_btn("Plot", self.plot_selected))
+        pr.addStretch()
         plot_layout.addLayout(pr)
         left_layout.addWidget(plot_group)
 
         bottom_left = QFrame()
         bottom_left.setFrameShape(QFrame.NoFrame)
         bl_layout = QVBoxLayout(bottom_left)
-        bl_layout.setSpacing(6)
+        bl_layout.setSpacing(GAP)
         save_row = QHBoxLayout()
+        save_row.setSpacing(GAP)
         save_row.addWidget(_btn("Save", self.export_graph))
         save_row.addWidget(QLabel("Format:"))
-        self.format_combo = _DropUpComboBox()
+        self.format_combo = QComboBox()
         self.format_combo.setItemDelegate(_ComboDelegate(self.format_combo))
         self.format_combo.addItems(["PNG", "PDF", "SVG"])
+        self.format_combo.setMinimumWidth(BTN_MIN_W)
         save_row.addWidget(self.format_combo)
         save_row.addWidget(_btn("Help", self.show_help))
         save_row.addStretch()
         bl_layout.addLayout(save_row)
         self.summary_label = QLabel("")
-        self.summary_label.setStyleSheet("color: #5a6c7d; padding: 4px; font-style: italic;")
+        self.summary_label.setStyleSheet(f"color: {TEXT_DISABLED}; padding: 2px; font-size: {FONT_SIZE}pt; font-style: italic;")
         self.summary_label.setWordWrap(True)
         bl_layout.addWidget(self.summary_label)
         left_layout.addWidget(bottom_left)
 
-        self.left_panel = left_panel
-        splitter.addWidget(left_panel)
+        scroll = QScrollArea()
+        scroll.setWidget(left_panel)
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(360)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.left_panel = scroll
+        splitter.addWidget(scroll)
 
         # --- Right panel: Graph (resizable) ---
         right_panel = QWidget()
@@ -344,11 +488,11 @@ class BenchmarkGrapher(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         graph_group = QGroupBox("Graph")
         graph_layout = QVBoxLayout(graph_group)
-        graph_layout.setContentsMargins(4, 4, 4, 4)
+        graph_layout.setContentsMargins(2, 2, 2, 2)
         top_row = QHBoxLayout()
         self.sidebar_toggle_btn = QPushButton("◀")
         self.sidebar_toggle_btn.setToolTip("Hide sidebar (full screen graph)")
-        self.sidebar_toggle_btn.setFixedSize(32, 28)
+        self.sidebar_toggle_btn.setFixedSize(28, CONTROL_HEIGHT)
         self.sidebar_toggle_btn.setStyleSheet("QPushButton { font-size: 14px; }")
         self.sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
         top_row.addWidget(self.sidebar_toggle_btn)
@@ -366,9 +510,10 @@ class BenchmarkGrapher(QMainWindow):
         splitter.addWidget(right_panel)
 
         # Initial split: left at minimum readable width, graph gets the rest
-        splitter.setSizes([420, 10000])
+        splitter.setSizes([400, 10000])
 
         main_layout.addWidget(splitter)
+        central.setStyleSheet(_app_stylesheet())
 
         QShortcut(QKeySequence("Ctrl+A"), self).activated.connect(self.select_all_files)
         QShortcut(QKeySequence(Qt.Key_Return), self).activated.connect(self.plot_selected)
@@ -404,6 +549,11 @@ class BenchmarkGrapher(QMainWindow):
         return "Unknown"
 
     def _on_filter_changed(self):
+        cat = self.category_selector.currentText()
+        if getattr(self, "ws_type_row", None):
+            self.ws_type_row.setVisible(cat == "WebSocket")
+            if cat != "WebSocket" and getattr(self, "ws_type_selector", None):
+                self.ws_type_selector.set_current(WS_TYPE_PLACEHOLDER)
         self.update_file_listbox_display()
         self.update_metric_options()
 
@@ -416,15 +566,15 @@ class BenchmarkGrapher(QMainWindow):
         self.deselect_all_btn.setEnabled(has_items)
 
     def _update_filter_combo(self):
-        """Populate filter from loaded file categories (dynamic)."""
+        """Populate benchmark type from loaded file categories (no separate label; dropdown shows current choice)."""
         cats = ["All"] + sorted(set(self.file_categories.values()))
-        current = self.category_combo.currentText()
-        self.category_combo.clear()
-        self.category_combo.addItems(cats)
+        current = self.category_selector.currentText()
+        self.category_selector.set_options(cats)
         if current in cats:
-            self.category_combo.setCurrentText(current)
-        elif cats:
-            self.category_combo.setCurrentIndex(0)
+            self.category_selector.set_current(current)
+        else:
+            self.category_selector.set_current(BENCHMARK_TYPE_PLACEHOLDER)
+        self._on_filter_changed()
 
     def _update_file_count_label(self):
         total = len(self.get_visible_files())
@@ -439,26 +589,37 @@ class BenchmarkGrapher(QMainWindow):
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Failed to read {f}: {e}")
                     continue
+                if not header:
+                    QMessageBox.warning(self, "Empty or invalid CSV", f"No header in {f}; skipping.")
+                    continue
                 typ = detect_csv_type(header)
                 category = self.detect_file_category(f)
+                ws_sub = detect_websocket_subtype(f, header, rows) if typ == "websocket" else None
                 self.files.append(f)
                 self.file_types[f] = typ
                 self.headers[f] = header
                 self.rows[f] = rows
                 self.file_categories[f] = category
+                self.file_ws_subtypes[f] = ws_sub
         self._update_filter_combo()
         self.update_metric_options()
         self.update_file_listbox_display()
 
     def update_file_listbox_display(self):
-        filter_cat = self.category_combo.currentText()
         self.file_listbox.clear()
-        for f in self.files:
-            if filter_cat == "All" or self.file_categories.get(f, "Unknown") == filter_cat:
-                typ = self.file_types.get(f, "unknown")
-                item = QListWidgetItem(os.path.basename(f) + f"  [{typ}]")
-                item.setData(Qt.UserRole, f)
-                self.file_listbox.addItem(item)
+        visible = self.get_visible_files()
+        for f in visible:
+            typ = self.file_types.get(f, "unknown")
+            suffix = f"  [{typ}]"
+            if typ == "websocket":
+                sub = self.file_ws_subtypes.get(f)
+                if sub:
+                    sub_display = websocket_subtype_display_name(sub)
+                    if sub_display:
+                        suffix = f"  [{typ} / {sub_display}]"
+            item = QListWidgetItem(os.path.basename(f) + suffix)
+            item.setData(Qt.UserRole, f)
+            self.file_listbox.addItem(item)
         self.file_listbox.selectAll()
         self._update_file_count_label()
         self._update_selection_buttons_state()
@@ -469,10 +630,15 @@ class BenchmarkGrapher(QMainWindow):
         self.headers.clear()
         self.rows.clear()
         self.file_categories.clear()
+        self.file_ws_subtypes.clear()
         self.file_listbox.clear()
-        self.category_combo.clear()
-        self.category_combo.addItem("All")
-        self.metric_combo.clear()
+        self.category_selector.set_options([BENCHMARK_TYPE_PLACEHOLDER])
+        self.category_selector.set_current(BENCHMARK_TYPE_PLACEHOLDER)
+        if getattr(self, "ws_type_row", None):
+            self.ws_type_row.setVisible(False)
+        if getattr(self, "ws_type_selector", None):
+            self.ws_type_selector.set_current(WS_TYPE_PLACEHOLDER)
+        self.metric_selector.set_options([])
         self.ax.clear()
         self.canvas.draw()
         self.summary_label.setText("")
@@ -481,25 +647,20 @@ class BenchmarkGrapher(QMainWindow):
         self.deselect_all_btn.setEnabled(False)
 
     def update_metric_options(self):
-        self.metric_combo.blockSignals(True)
-        try:
-            visible = self.get_visible_files()
-            if not visible:
-                self.metric_combo.clear()
-                return
-            metrics = set(get_numeric_columns(self.headers[visible[0]]))
-            for f in visible[1:]:
-                metrics &= set(get_numeric_columns(self.headers[f]))
-            metrics = sorted(metrics)
-            old = self.metric_combo.currentText()
-            self.metric_combo.clear()
-            self.metric_combo.addItems(metrics)
-            if old in metrics:
-                self.metric_combo.setCurrentText(old)
-            elif metrics:
-                self.metric_combo.setCurrentIndex(0)
-        finally:
-            self.metric_combo.blockSignals(False)
+        visible = self.get_visible_files()
+        if not visible:
+            self.metric_selector.set_options([])
+            return
+        metrics = set(get_numeric_columns(self.headers[visible[0]]))
+        for f in visible[1:]:
+            metrics &= set(get_numeric_columns(self.headers[f]))
+        metrics = sorted(metrics)
+        old = self.metric_selector.currentText()
+        self.metric_selector.set_options(metrics)
+        if old in metrics:
+            self.metric_selector.set_current(old)
+        elif metrics:
+            self.metric_selector.set_current(metrics[0])
 
     def get_selected_files(self):
         visible = self.get_visible_files()
@@ -519,8 +680,8 @@ class BenchmarkGrapher(QMainWindow):
 
     def plot_selected(self):
         selected_files = self.get_selected_files()
-        metric = self.metric_combo.currentText()
-        if not metric:
+        metric = self.metric_selector.currentText()
+        if not metric or metric == "(select metric)":
             return
         if not selected_files:
             return
@@ -539,26 +700,35 @@ class BenchmarkGrapher(QMainWindow):
             self.bar_cursor = None
 
         all_vals = []
-        plot_type = self.plot_type_combo.currentText()
-        n_bars = max(1, len(selected_files))
-        bar_width = min(0.4, 0.8 / n_bars) if n_bars <= 3 else min(0.7, 2.4 / n_bars)
-        bar_width *= getattr(self, 'bar_width_scale', 1.0)
+        plot_type = self.plot_type_selector.currentText()
+        n_series = max(1, len(selected_files))
 
         for idx, f in enumerate(selected_files):
             header = self.headers[f]
             rows = self.rows[f]
             typ = self.file_types[f]
-            x, y, label = self.get_plot_data(header, rows, typ, metric, os.path.basename(f))
+            x, y, label = self.get_plot_data(header, rows, typ, metric, os.path.basename(f), filepath=f)
             if x and y:
                 color = self.color_cycle[idx % len(self.color_cycle)]
                 marker = self.marker_cycle[(idx // len(self.linestyle_cycle)) % len(self.marker_cycle)]
                 linestyle = self.linestyle_cycle[idx % len(self.linestyle_cycle)]
                 use_bar = (plot_type == "Bar") or (plot_type == "Auto" and typ == "websocket")
                 if use_bar:
+                    n_points = len(x)
                     if isinstance(x[0], (int, float, np.integer, np.floating)):
-                        x_vals = np.array(x) + (idx - (len(selected_files) - 1) / 2) * bar_width
+                        x_arr = np.array(x, dtype=float)
+                        x_min, x_max = x_arr.min(), x_arr.max()
+                        x_range = (x_max - x_min) if (x_max > x_min) else (x_max or 1.0)
+                        slot_width = x_range / max(n_points, 1)
+                        bar_width = max(slot_width * 0.4, x_range * 0.02)
+                        bar_width = min(bar_width, slot_width * 0.9 / n_series)
+                        bar_width *= getattr(self, "bar_width_scale", 1.0)
+                        x_vals = x_arr + (idx - (n_series - 1) / 2) * bar_width
                     else:
-                        x_vals = np.arange(len(x)) + (idx - (len(selected_files) - 1) / 2) * bar_width
+                        slot_width = 1.0
+                        bar_width = max(0.15, 0.8 / n_series)
+                        bar_width *= getattr(self, "bar_width_scale", 1.0)
+                        x_vals = np.arange(len(x)) + (idx - (n_series - 1) / 2) * bar_width
                         self.ax.set_xticks(np.arange(len(x)))
                         self.ax.set_xticklabels([str(v) for v in x])
                     self.ax.bar(x_vals, y, width=bar_width, label=label, color=color, alpha=0.85)
@@ -570,9 +740,10 @@ class BenchmarkGrapher(QMainWindow):
                 all_vals.extend(y)
 
         if selected_files:
-            x_axis_label = self.get_x_axis_column_name(self.headers[selected_files[0]], self.rows[selected_files[0]], self.file_types[selected_files[0]])
+            x_col = self.get_x_axis_column_name(self.headers[selected_files[0]], self.rows[selected_files[0]], self.file_types[selected_files[0]], filepath=selected_files[0])
+            x_axis_label = XAXIS_DISPLAY_NAMES.get(x_col, x_col) if x_col else "Test parameter"
         else:
-            x_axis_label = "Test Parameter"
+            x_axis_label = "Test parameter"
         self.ax.set_title(f"{metric} vs. {x_axis_label}")
         self.ax.set_xlabel(x_axis_label)
         self.ax.set_ylabel(metric)
@@ -585,58 +756,61 @@ class BenchmarkGrapher(QMainWindow):
         else:
             self.summary_label.setText("")
 
-        if self.ax.lines:
-            self.cursor = mplcursors.cursor(self.ax.lines, hover=True, highlight=False,
-                annotation_kwargs={'fontsize': 9, 'arrowprops': dict(arrowstyle="->", color="#333", lw=1.2),
-                    'bbox': dict(boxstyle="round,pad=0.2", fc="#f7f7f7", ec="#333", lw=0.8)})
-            @self.cursor.connect("add")
-            def on_add(sel):
-                for line in self.ax.get_lines():
-                    line.set_linewidth(2)
-                    line.set_alpha(0.7)
-                sel.artist.set_linewidth(4)
-                sel.artist.set_alpha(1.0)
-                sel.annotation.set_text(sel.artist.get_label())
-                for ann in self.ax.texts:
-                    if ann is not sel.annotation:
+        try:
+            if self.ax.lines and len(self.ax.lines) > 0:
+                self.cursor = mplcursors.cursor(self.ax.lines, hover=True, highlight=False,
+                    annotation_kwargs={'fontsize': 9, 'arrowprops': dict(arrowstyle="->", color="#333", lw=1.2),
+                        'bbox': dict(boxstyle="round,pad=0.2", fc="#f7f7f7", ec="#333", lw=0.8)})
+                @self.cursor.connect("add")
+                def on_add(sel):
+                    for line in self.ax.get_lines():
+                        line.set_linewidth(2)
+                        line.set_alpha(0.7)
+                    sel.artist.set_linewidth(4)
+                    sel.artist.set_alpha(1.0)
+                    sel.annotation.set_text(sel.artist.get_label())
+                    for ann in self.ax.texts:
+                        if ann is not sel.annotation:
+                            ann.set_visible(False)
+                @self.cursor.connect("remove")
+                def on_remove(_):
+                    for line in self.ax.get_lines():
+                        line.set_linewidth(2)
+                        line.set_alpha(1.0)
+                    for ann in self.ax.texts:
                         ann.set_visible(False)
-            @self.cursor.connect("remove")
-            def on_remove(_):
-                for line in self.ax.get_lines():
-                    line.set_linewidth(2)
-                    line.set_alpha(1.0)
-                for ann in self.ax.texts:
-                    ann.set_visible(False)
-                self.canvas.draw_idle()
+                    self.canvas.draw_idle()
 
-        if self.ax.containers:
-            self.bar_cursor = mplcursors.cursor(self.ax.containers, hover=True, highlight=False,
-                annotation_kwargs={'fontsize': 9, 'arrowprops': dict(arrowstyle="->", color="#333", lw=1.2),
-                    'bbox': dict(boxstyle="round,pad=0.2", fc="#f7f7f7", ec="#333", lw=0.8)})
-            @self.bar_cursor.connect("add")
-            def on_bar_add(sel):
-                target_label = sel.artist.get_label() if hasattr(sel.artist, 'get_label') else None
-                if target_label:
+            if self.ax.containers and len(self.ax.containers) > 0:
+                self.bar_cursor = mplcursors.cursor(self.ax.containers, hover=True, highlight=False,
+                    annotation_kwargs={'fontsize': 9, 'arrowprops': dict(arrowstyle="->", color="#333", lw=1.2),
+                        'bbox': dict(boxstyle="round,pad=0.2", fc="#f7f7f7", ec="#333", lw=0.8)})
+                @self.bar_cursor.connect("add")
+                def on_bar_add(sel):
+                    target_label = sel.artist.get_label() if hasattr(sel.artist, 'get_label') else None
+                    if target_label:
+                        for cont in self.ax.containers:
+                            for bar in cont:
+                                if (bar.get_label() if hasattr(bar, 'get_label') else None) == target_label:
+                                    bar.set_linewidth(3)
+                                    bar.set_edgecolor('#d62728')
+                                    bar.set_alpha(1.0)
+                    sel.annotation.set_text(target_label or '')
+                    for ann in self.ax.texts:
+                        if ann is not sel.annotation:
+                            ann.set_visible(False)
+                @self.bar_cursor.connect("remove")
+                def on_bar_remove(_):
                     for cont in self.ax.containers:
                         for bar in cont:
-                            if (bar.get_label() if hasattr(bar, 'get_label') else None) == target_label:
-                                bar.set_linewidth(3)
-                                bar.set_edgecolor('#d62728')
-                                bar.set_alpha(1.0)
-                sel.annotation.set_text(target_label or '')
-                for ann in self.ax.texts:
-                    if ann is not sel.annotation:
+                            bar.set_linewidth(0.5)
+                            bar.set_edgecolor('black')
+                            bar.set_alpha(0.85)
+                    for ann in self.ax.texts:
                         ann.set_visible(False)
-            @self.bar_cursor.connect("remove")
-            def on_bar_remove(_):
-                for cont in self.ax.containers:
-                    for bar in cont:
-                        bar.set_linewidth(0.5)
-                        bar.set_edgecolor('black')
-                        bar.set_alpha(0.85)
-                for ann in self.ax.texts:
-                    ann.set_visible(False)
-                self.canvas.draw_idle()
+                    self.canvas.draw_idle()
+        except Exception:
+            pass
 
         def on_leave(event):
             for line in self.ax.get_lines():
@@ -652,10 +826,13 @@ class BenchmarkGrapher(QMainWindow):
             self.canvas.draw_idle()
         self.canvas.mpl_connect('axes_leave_event', on_leave)
 
-    def get_plot_data(self, header, rows, typ, metric, label):
+    def get_plot_data(self, header, rows, typ, metric, label, filepath=None):
+        if not rows:
+            return [], [], label
+        header_list = list(header) if hasattr(header, "__iter__") and not isinstance(header, dict) else list(header.keys()) if isinstance(header, dict) else []
         file_basename = os.path.splitext(os.path.basename(label))[0] if isinstance(label, str) else ""
-        if "Container Name" in header and rows and rows[0].get("Container Name"):
-            container_name = str(rows[0]["Container Name"]).strip()
+        if header_list and "Container Name" in header_list and rows and _row_value(rows[0], "Container Name", header_list) not in (None, ""):
+            container_name = str(_row_value(rows[0], "Container Name", header_list)).strip()
             if file_basename and file_basename != container_name and container_name in file_basename:
                 label = file_basename
             else:
@@ -663,57 +840,90 @@ class BenchmarkGrapher(QMainWindow):
         else:
             label = file_basename or label
         if typ == "websocket":
-            for xkey in ["Num Clients", "Message Size (KB)", "Rate (msg/s)", "Bursts", "Duration (s)", "Interval (s)"]:
-                if xkey in header:
-                    x = [float(r[xkey]) if r.get(xkey) not in (None, '', 'NaN') else 0 for r in rows]
-                    y = [float(r[metric]) if r.get(metric) not in (None, '', 'NaN') else 0 for r in rows]
-                    return x, y, label
+            subtype = self.file_ws_subtypes.get(filepath) if filepath and getattr(self, "file_ws_subtypes", None) else None
+            xcol = websocket_xaxis_column(header_list, rows, subtype)
+            if xcol:
+                x = [safe_float(_row_value(r, xcol, header_list)) for r in rows]
+                y = [safe_float(_row_value(r, metric, header_list)) for r in rows]
+            else:
+                x = list(range(1, len(rows) + 1))
+                y = [safe_float(_row_value(r, metric, header_list)) for r in rows]
+            if not x:
+                x = list(range(1, len(rows) + 1))
+            if not y:
+                y = [0.0] * len(rows)
+            return x, y, label
+        if header_list and "Total Requests" in header_list:
+            x = [safe_float(_row_value(r, "Total Requests", header_list)) for r in rows]
+            y = [safe_float(_row_value(r, metric, header_list)) for r in rows]
+        else:
             x = list(range(1, len(rows) + 1))
-            y = [float(r[metric]) if r.get(metric) not in (None, '', 'NaN') else 0 for r in rows]
-            return x, y, label
-        if "Total Requests" in header:
-            x = [float(r["Total Requests"]) if r.get("Total Requests") not in (None, '', 'NaN') else 0 for r in rows]
-            y = [float(r[metric]) if r.get(metric) not in (None, '', 'NaN') else 0 for r in rows]
-            return x, y, label
-        x = list(range(1, len(rows) + 1))
-        y = [float(r[metric]) if r.get(metric) not in (None, '', 'NaN') else 0 for r in rows]
+            y = [safe_float(_row_value(r, metric, header_list)) for r in rows]
+        if not y:
+            y = [0.0] * len(rows)
         return x, y, label
 
-    def get_x_axis_column_name(self, header, rows, typ):
+    def get_x_axis_column_name(self, header, rows, typ, filepath=None):
         if typ == "websocket":
-            for xkey in ["Num Clients", "Message Size (KB)", "Rate (msg/s)", "Bursts", "Duration (s)", "Interval (s)"]:
-                if xkey in header:
-                    return xkey
+            subtype = self.file_ws_subtypes.get(filepath) if filepath and getattr(self, 'file_ws_subtypes', None) else None
+            xcol = websocket_xaxis_column(header, rows, subtype)
+            if xcol:
+                return xcol
+            return "Test Parameter"
         if "Total Requests" in header:
             return "Total Requests"
         return "Test Parameter"
 
     def _default_save_path(self):
         """Default path: graphs/<category>/<metric>-<N>bench-<YYYYMMDD-HHMM>.ext"""
-        metric = self.metric_combo.currentText() or "graph"
+        metric = self.metric_selector.currentText() or "graph"
+        if metric == "(select metric)":
+            metric = "graph"
         slug = re.sub(r"[^\w\s-]", "", metric).strip().lower()
         slug = re.sub(r"[-\s]+", "-", slug) or "graph"
         n = len(self.get_selected_files()) or len(self.get_visible_files()) or 0
         ts = datetime.now().strftime("%Y%m%d-%H%M")
-        fmt = self.format_combo.currentText().lower()
+        fmt = self.format_combo.currentText().strip().lower()
         ext = ".png" if fmt == "png" else ".pdf" if fmt == "pdf" else ".svg"
         name = f"{slug}-{n}bench-{ts}{ext}"
         base = os.path.abspath("graphs")
-        cat = self.category_combo.currentText().lower().replace(" ", "")
-        if cat and cat != "all":
+        cat = (self.category_selector.currentText() or "").lower().replace(" ", "")
+        if cat and cat not in ("all", "", BENCHMARK_TYPE_PLACEHOLDER.lower().replace(" ", "")):
             base = os.path.join(base, cat)
         os.makedirs(base, exist_ok=True)
         return os.path.join(base, name)
 
     def get_visible_files(self):
-        filter_cat = self.category_combo.currentText()
-        return [f for f in self.files if filter_cat == "All" or self.file_categories.get(f, "Unknown") == filter_cat]
+        filter_cat = self.category_selector.currentText()
+        if filter_cat in (None, "", BENCHMARK_TYPE_PLACEHOLDER, "All"):
+            base = list(self.files)
+        else:
+            base = [f for f in self.files if self.file_categories.get(f, "Unknown") == filter_cat]
+        if filter_cat != "WebSocket":
+            return base
+        ws_type = self.ws_type_selector.currentText() if getattr(self, "ws_type_selector", None) else WS_TYPE_PLACEHOLDER
+        if not ws_type or ws_type in (WS_TYPE_PLACEHOLDER, WS_TYPE_ALL):
+            return base
+        out = []
+        for f in base:
+            sub = self.file_ws_subtypes.get(f)
+            if ws_type == WS_TYPE_CONCURRENCY and sub == WS_SUBTYPE_CONCURRENCY:
+                out.append(f)
+            elif ws_type == WS_TYPE_PAYLOAD and sub == WS_SUBTYPE_PAYLOAD:
+                out.append(f)
+            elif ws_type == WS_TYPE_BURST_STREAM and sub in (WS_SUBTYPE_BURST, WS_SUBTYPE_STREAM, None):
+                out.append(f)
+            else:
+                pass
+        return out
 
     def export_graph(self):
-        if not self.ax.has_data():
+        _has_data = getattr(self.ax, 'has_data', None)
+        has_data = _has_data() if callable(_has_data) else (len(self.ax.lines) + len(self.ax.containers)) > 0
+        if not has_data:
             QMessageBox.warning(self, "No graph", "No graph to export. Please plot something first.")
             return
-        fmt = self.format_combo.currentText().lower()
+        fmt = self.format_combo.currentText().strip().lower()
         if fmt == "png":
             filetypes, defaultext, save_kwargs = "PNG Image (*.png)", ".png", {"dpi": 300}
         elif fmt == "pdf":
@@ -735,7 +945,8 @@ class BenchmarkGrapher(QMainWindow):
             "Benchmark Graph Generator\n\n"
             "• Select one or more CSV files (from results directories).\n"
             "• Auto-detects file type (HTTP, WebSocket, gRPC, etc).\n"
-            "• Filter by category (Static, Dynamic, WebSocket, gRPC, etc — extensible).\n"
+            "• Filter by category (Static, Dynamic, WebSocket, gRPC, etc).\n"
+            "• WebSocket files show subtype: Burst, Stream, Concurrency, Payload.\n"
             "• Choose a metric to plot (latency, throughput, CPU, etc).\n"
             "• Overlay/combine results from multiple files.\n"
             "• Export graphs as PNG, PDF, or SVG (Save button below).\n"

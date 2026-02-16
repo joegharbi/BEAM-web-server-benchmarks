@@ -243,7 +243,7 @@ def stop_server_container(container_name, docker_path):
 async def echo_burst_client(url, size_kb, bursts, interval, results, client_id, verbose=False):
     latencies = []
     try:
-        async with websockets.connect(url, max_size=None) as ws:
+        async with websockets.connect(url, max_size=None, ping_interval=None) as ws:
             payload = os.urandom(size_kb * 1024)
             for b in range(bursts):
                 start = time.perf_counter()
@@ -269,7 +269,7 @@ async def echo_burst_client(url, size_kb, bursts, interval, results, client_id, 
 async def echo_stream_client(url, size_kb, rate, duration, results, client_id, verbose=False):
     latencies = []
     try:
-        async with websockets.connect(url, max_size=None) as ws:
+        async with websockets.connect(url, max_size=None, ping_interval=None) as ws:
             payload = os.urandom(size_kb * 1024)
             end_time = time.time() + duration
             while time.time() < end_time:

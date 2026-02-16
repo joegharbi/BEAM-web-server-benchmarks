@@ -12,7 +12,7 @@ results/
     └── websocket/
 ```
 
-**File names:** One CSV per container: `static/st-cowboy-27.csv`, `dynamic/dy-phoenix-1-8.csv`, `websocket/ws-cowboy-27.csv`, etc.
+**File names:** One CSV per container: `static/st-erlang-cowboy-27.csv`, `dynamic/dy-elixir-phoenix-1-8.csv`, `websocket/ws-erlang-cowboy-27.csv`, etc.
 
 **CSV contents:** First column is "Container Name". Multiple rows = different request counts or test parameters.
 

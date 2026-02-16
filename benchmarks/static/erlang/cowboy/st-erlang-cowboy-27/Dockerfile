@@ -1,5 +1,5 @@
-# Multi-stage build for optimized Cowboy static server
-# Builder stage
+# Minimal Erlang base: same stages as all BEAM benchmarks (see docs/MINIMAL_BASES_AND_UNIFICATION.md)
+# Stage 1: build on language image
 FROM erlang:27 AS builder
 
 # Set working directory
@@ -22,17 +22,16 @@ RUN rebar3 get-deps && \
 # Build release
 RUN rebar3 as prod release
 
-# Final stage - minimal runtime image
+# Stage 2: minimal runtime — bookworm-slim + same apt list as all containers
 FROM debian:bookworm-slim
 
-# Install only the minimal runtime dependencies
 RUN apt-get update && apt-get install -y \
     libncurses5 \
     libssl3 \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy only the Erlang runtime from builder stage
+# Minimal Erlang = Erlang runtime only (no Elixir, no build tools)
 COPY --from=builder /usr/local/lib/erlang /usr/local/lib/erlang
 
 # Set up environment
@@ -45,7 +44,6 @@ WORKDIR /app
 # Copy only the built release from builder stage
 COPY --from=builder /app/_build/prod/rel/simple_cowboy_app /app/simple_cowboy_app
 
-# Expose port 8080
 EXPOSE 80
 
 # Start the application

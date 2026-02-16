@@ -4,8 +4,8 @@ The benchmark framework is **general-purpose** and designed to be extended with 
 
 ## Architecture
 
-- **benchmarks/** — Each subdirectory is a benchmark type (e.g. `static`, `dynamic`, `websocket`). The build and health check scripts discover these dynamically.
-- **Path-based routing** — The health check infers the test to run from the container’s path (e.g. `benchmarks/websocket/...` → WebSocket handshake + echo). No naming prefix is required.
+- **benchmarks/** — Each subdirectory is a benchmark type (e.g. `static`, `dynamic`, `websocket`). The build and health check scripts discover these dynamically. Container directory name = Docker image name = CSV/graph label; use unified naming `<type>-<language>-<framework>-<version>` (see [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md)).
+- **Path-based routing** — The health check infers the test to run from the container’s path (e.g. `benchmarks/websocket/...` → WebSocket handshake + echo).
 - **Measurement tools** — **One script per type**: each supported type has its own Python measurement script (`measure_docker.py` for HTTP, `measure_websocket.py` for WebSocket). New types (gRPC, etc.) need a new script. This keeps each script focused and makes extending straightforward.
 
 ## Adding a New Benchmark Type

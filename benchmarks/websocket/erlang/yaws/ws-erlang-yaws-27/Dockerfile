@@ -1,24 +1,24 @@
-# Single-stage build for Yaws WebSocket echo server
-FROM debian:bookworm-slim
+# Minimal Yaws base: same two-stage pattern as all BEAM benchmarks (see docs/MINIMAL_BASES_AND_UNIFICATION.md)
+# Stage 1: build — compile WebSocket handler and prepare config/content
+FROM debian:bookworm-slim AS builder
 
-# Install Yaws and dependencies
 RUN apt-get update && apt-get install -y \
     yaws \
     libncurses5 \
     libssl3 \
     ca-certificates \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Create necessary directories
-RUN mkdir -p /etc/yaws /var/log/yaws /var/www/html /app
+WORKDIR /build
+RUN mkdir -p app etc/yaws www/html
 
-# Create the WebSocket handler
+# WebSocket handler (Yaws defaults to 16 MB max; benchmark uses 64 MB messages)
 RUN echo '-module(ws_handler).\n\
 -include("/usr/lib/yaws-2.1.1/include/yaws_api.hrl").\n\
 -export([out/1, handle_message/1, terminate/2]).\n\
 out(Arg) ->\n\
-    {websocket, ws_handler, []}.\n\
+    Opts = [{max_frame_size, 64*1024*1024}, {max_message_size, 64*1024*1024}],\n\
+    {websocket, ws_handler, Opts}.\n\
 handle_message({text, Data}) ->\n\
     {reply, {text, Data}};\n\
 handle_message({binary, Data}) ->\n\
@@ -26,54 +26,49 @@ handle_message({binary, Data}) ->\n\
 handle_message({close, Status, Reason}) ->\n\
     {close, Status, Reason}.\n\
 terminate(_Reason, _State) ->\n\
-    ok.' > /app/ws_handler.erl
+    ok.' > /build/app/ws_handler.erl
+RUN erlc -I /usr/lib/yaws-2.1.1/include -o /build/app /build/app/ws_handler.erl
 
-# Compile the WebSocket handler
-RUN erlc -I /usr/lib/yaws-2.1.1/include -o /app /app/ws_handler.erl
-
-# Create static content
-RUN echo '<!DOCTYPE html>\n\
-<html>\n\
-<head><title>Yaws WebSocket Server</title></head>\n\
-<body><h1>Yaws WebSocket Server</h1></body>\n\
-</html>' > /var/www/html/index.html
-
-# Create Yaws configuration
+# Yaws config (acceptor_pool_size=8, max_connections=100000)
 RUN echo 'logdir = /var/log/yaws\n\
-    ebin_dir = /app\n\
-    <server localhost>\n\
-        port = 80\n\
-        listen = 0.0.0.0\n\
+ebin_dir = /app\n\
+acceptor_pool_size = 8\n\
+max_connections = 100000\n\
+<server localhost>\n\
+    port = 80\n\
+    listen = 0.0.0.0\n\
     docroot = /var/www/html\n\
-        appmods = </ws, ws_handler>\n\
-</server>' > /etc/yaws/yaws.conf
+    appmods = </ws, ws_handler>\n\
+</server>' > /build/etc/yaws/yaws.conf
 
-# Create startup script
-RUN echo '#!/bin/bash\n\
+RUN echo '<!DOCTYPE html><html><head><title>Yaws WebSocket</title></head><body><h1>Yaws WebSocket Server</h1></body></html>' > /build/www/html/index.html
+
+RUN echo '#!/bin/sh\n\
 set -e\n\
-echo "Starting Yaws WebSocket server..."\n\
-echo "Configuration:"\n\
-cat /etc/yaws/yaws.conf\n\
-echo "WebSocket handler:"\n\
-ls -la /app/\n\
-echo "Testing Yaws configuration..."\n\
 yaws --configtest /etc/yaws/yaws.conf\n\
-echo "Starting Yaws in daemon mode..."\n\
 yaws --daemon --conf /etc/yaws/yaws.conf\n\
-echo "Yaws started in daemon mode. Waiting for it to be ready..."\n\
 sleep 3\n\
-echo "Checking Yaws status..."\n\
-yaws --status\n\
-echo "Yaws is running. Keeping container alive..."\n\
 while true; do\n\
-    sleep 10\n\
-    if ! yaws --status > /dev/null 2>&1; then\n\
-        echo "Yaws has stopped. Exiting..."\n\
-        exit 1\n\
-    fi\n\
-done' > /start.sh && chmod +x /start.sh
+  sleep 10\n\
+  yaws --status > /dev/null 2>&1 || exit 1\n\
+done' > /build/start.sh
+
+# Stage 2: minimal runtime — bookworm-slim + same apt list + yaws (no build-only deps in final)
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    yaws \
+    libncurses5 \
+    libssl3 \
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /etc/yaws /var/log/yaws /var/www/html /app
+COPY --from=builder /build/app/ws_handler.beam /app/
+COPY --from=builder /build/etc/yaws/yaws.conf /etc/yaws/yaws.conf
+COPY --from=builder /build/www/html/index.html /var/www/html/
+COPY --from=builder /build/start.sh /start.sh
+RUN chmod +x /start.sh
 
 EXPOSE 80
-
-# Use the startup script
 CMD ["/start.sh"]

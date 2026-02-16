@@ -127,7 +127,7 @@ run: check-env ## Run all benchmarks (static, dynamic, websocket)
 	done; \
 	bash scripts/run_benchmarks.sh
 
-run-single: check-env ## Run a single server (make run-single SERVER=dy-erlang27)
+run-single: check-env ## Run a single server (e.g. make run-single SERVER=dy-erlang-pure-27)
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
@@ -232,7 +232,7 @@ help:  ## Show this help message
 	@printf "  %-22s %s\n" "run-all" "Alias for run (full benchmark suite)"
 	@printf "  %-22s %s\n" "run-quick" "Quick test (3 request counts per container)"
 	@printf "  %-22s %s\n" "run-super-quick" "Super-quick test (1 request count per container)"
-	@printf "  %-22s %s\n" "run-single" "Run a single server (SERVER=dy-erlang27)"
+	@printf "  %-22s %s\n" "run-single" "Run a single server (e.g. SERVER=dy-erlang-pure-27)"
 	@printf "  %-22s %s\n" "run-static/dynamic/websocket" "Run a specific type only"
 	@printf "  %-22s %s\n" "run-<type>" "New types (e.g. gRPC): add benchmarks/<type>/ and measure script → make run-<type> works"
 	@printf "\n"
@@ -266,7 +266,7 @@ help:  ## Show this help message
 	@printf "${CYAN}Auto-Discovery:${NC}\n"
 	@printf "  - Add new servers: benchmarks/type/language/framework/container-name/ with Dockerfile\n"
 	@printf "  - Framework automatically detects, builds, tests, and benchmarks all containers\n"
-	@printf "  - No naming conventions required - any directory name works\n"
+	@printf "  - Use unified naming (e.g. st-erlang-cowboy-27) for clear CSV/graph labels; see docs/MINIMAL_BASES_AND_UNIFICATION.md\n"
 	@printf "  - Port assignment based on Dockerfile EXPOSE directive\n"
 	@printf "\n"
 	@printf "${CYAN}Advanced:${NC}\n"

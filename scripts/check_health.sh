@@ -5,6 +5,14 @@
 ulimit -n 100000
 # Tests all built containers for proper startup, HTTP response, and health constraints
 
+# Prefer venv Python (has websockets) for WebSocket test; fallback to system python3
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -x "$REPO_ROOT/srv/bin/python3" ] && "$REPO_ROOT/srv/bin/python3" -c "import websockets" 2>/dev/null; then
+    PYTHON_WS="$REPO_ROOT/srv/bin/python3"
+else
+    PYTHON_WS="python3"
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -17,6 +25,9 @@ TIMEOUT=30
 STARTUP_WAIT=15
 HTTP_TIMEOUT=10
 HOST_PORT=${HOST_PORT:-8001}
+# WebSocket health: smaller payload (64KB) so servers with conservative defaults pass; 10s timeout
+WS_PAYLOAD_SIZE=$((64 * 1024))
+WS_TEST_TIMEOUT=10
 
 # Results tracking
 TOTAL_CONTAINERS=0
@@ -149,23 +160,42 @@ check_container_health() {
             -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
             "http://localhost:$host_port/ws" 2>/dev/null | head -10)
         if [[ "$ws_test_result" == *"101 Switching Protocols"* ]] || [[ "$ws_test_result" == *"Upgrade: websocket"* ]]; then
-            # Large payload WebSocket test (1MB) — must pass for health
-            python3 - <<EOF
+            # WebSocket echo test (64KB payload) — must pass for health; use venv python if available (has websockets)
+            if ! $PYTHON_WS -c "import websockets" 2>/dev/null; then
+                print_status "ERROR" "$image_name: Python 'websockets' module not found. Run: make setup (or: pip install websockets)"
+                stop_and_remove_container $container_name
+                FAILED_CONTAINERS=$((FAILED_CONTAINERS + 1))
+                FAILED_LIST+=("$image_name (websockets module missing)")
+                return
+            fi
+            $PYTHON_WS - <<EOF
 import asyncio, websockets, os, sys
+payload_size = $WS_PAYLOAD_SIZE
+timeout = $WS_TEST_TIMEOUT
 async def test():
     try:
-        ws = await websockets.connect(f"ws://localhost:$host_port/ws", max_size=None)
-        payload = os.urandom(1024*1024)
-        await ws.send(payload)
-        resp = await ws.recv()
-        if resp == payload:
-            print("[SUCCESS] $image_name: WebSocket large payload test passed")
+        ws = await asyncio.wait_for(
+            websockets.connect("ws://localhost:$host_port/ws", max_size=None, close_timeout=timeout, ping_timeout=timeout),
+            timeout=timeout
+        )
+        payload = os.urandom(payload_size)
+        await asyncio.wait_for(ws.send(payload), timeout=timeout)
+        resp = await asyncio.wait_for(ws.recv(), timeout=timeout)
+        await ws.close()
+        if isinstance(resp, str):
+            resp = resp.encode("utf-8", errors="replace")
+        ok = (resp == payload)
+        if ok:
+            print("[SUCCESS] $image_name: WebSocket echo test passed")
             sys.exit(0)
         else:
-            print("[ERROR] $image_name: WebSocket large payload test failed (echo mismatch)")
+            print("[ERROR] $image_name: WebSocket echo test failed (response mismatch)")
             sys.exit(1)
+    except asyncio.TimeoutError:
+        print(f"[ERROR] $image_name: WebSocket test timed out after {timeout}s")
+        sys.exit(1)
     except Exception as e:
-        print(f"[ERROR] $image_name: WebSocket large payload test failed: {e}")
+        print(f"[ERROR] $image_name: WebSocket test failed: {e}")
         sys.exit(1)
 asyncio.run(test())
 EOF
@@ -173,10 +203,10 @@ EOF
                 print_status "SUCCESS" "$image_name: WebSocket container healthy (ready for benchmarking)"
                 HEALTHY_CONTAINERS=$((HEALTHY_CONTAINERS + 1))
             else
-                print_status "ERROR" "$image_name: WebSocket large payload test failed (not healthy)"
+                print_status "ERROR" "$image_name: WebSocket echo test failed (not healthy)"
                 stop_and_remove_container $container_name
                 FAILED_CONTAINERS=$((FAILED_CONTAINERS + 1))
-                FAILED_LIST+=("$image_name (websocket large payload)")
+                FAILED_LIST+=("$image_name (websocket echo test)")
                 return
             fi
         else

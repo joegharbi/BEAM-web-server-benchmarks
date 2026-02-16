@@ -12,12 +12,12 @@ defmodule ElixirStatic.Server do
   @response_body """
   <!DOCTYPE html>
   <html>
-    <head>
+  <head>
       <title>Energy Test</title>
-    </head>
-    <body>
+  </head>
+  <body>
       <h1>Hello, Energy Test!</h1>
-    </body>
+  </body>
   </html>
   """
 

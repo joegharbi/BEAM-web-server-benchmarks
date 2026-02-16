@@ -13,9 +13,8 @@ This document explains every major configuration used by the framework and by th
 
 ### Current configuration
 
-- **We do not set** `max_connections` in any benchmark (static, dynamic, or WebSocket).
-- All Cowboy/Ranch-based servers use **Ranch default 1024**.
-- If you hit "connection refused" under very high concurrency, you can add `max_connections` to the relevant transport options (e.g. `{max_connections, 100000}` for Erlang; `%{max_connections: 100_000, socket_opts: [port: 80]}` for Elixir Ranch 2.0 map).
+- **Canonical value**: **100_000** for parity with ulimit (see [CONFIGURATION_PARITY.md](CONFIGURATION_PARITY.md)). All Cowboy/Ranch-based benchmarks set `max_connections: 100_000` (or equivalent) so no server throttles before the FD limit.
+- Yaws uses `max_connections = 100000` in config. Ranch/Cowboy use transport options (e.g. `{max_connections, 100000}` for Erlang; `transport_options: [max_connections: 100_000]` for Elixir).
 
 
 ## 2. ulimit / nofile (100,000)
@@ -162,9 +161,12 @@ This supports high concurrency; Cowboy/Ranch listeners use their default connect
 
 ## 8. Consistency summary and recommendations
 
+**See [docs/CONFIGURATION_PARITY.md](CONFIGURATION_PARITY.md) for canonical values and full parity matrix.**
+
 | Setting | Intended value | Inconsistency / note |
 |---------|----------------|----------------------|
-| **max_connections** | Not set (Ranch default 1024) | No benchmark sets it; static, dynamic, and WebSocket Cowboy/Ranch use default. |
+| **num_acceptors / acceptor_pool_size** | 8 | Canonical; set in all Cowboy/Ranch and Yaws. |
+| **max_connections** | 100,000 | Canonical; set in all Cowboy/Ranch and Yaws. |
 | **ulimit / nofile** | 100,000 | Consistent in scripts and Docker. |
 | **Port** | Host 8001, container 80 | Consistent; EXPOSE 80 everywhere. |
 | **Request counts** | Script-defined (full/quick/super-quick) | Consistent; only the script defines them. |
@@ -172,7 +174,7 @@ This supports high concurrency; Cowboy/Ranch listeners use their default connect
 
 ### For a green engineer
 
-1. **max_connections**: Not set; Ranch default is 1024. If you see "connection refused" under high concurrency, add max_connections to the listener transport options.
+1. **Configuration parity**: All servers use canonical values (num_acceptors=8, max_connections=100000). See [CONFIGURATION_PARITY.md](CONFIGURATION_PARITY.md).
 2. **ulimit 100000**: Do not lower it if you run high-concurrency or full benchmarks.
 3. **Changing load (requests, WebSocket params)**: Prefer changing only in **scripts/run_benchmarks.sh** (one place); tools should keep taking args from the script.
 4. **Changing port**: Use **HOST_PORT**; ensure nothing else uses that port during the run (clean-port only clears Docker containers).

@@ -5,8 +5,12 @@ defmodule PhoenixStaticWeb.PageController do
     html(conn, """
     <!DOCTYPE html>
     <html>
-      <head><title>Energy Test</title></head>
-      <body><h1>Hello, Energy Test!</h1></body>
+    <head>
+        <title>Energy Test</title>
+    </head>
+    <body>
+        <h1>Hello, Energy Test!</h1>
+    </body>
     </html>
     """)
   end

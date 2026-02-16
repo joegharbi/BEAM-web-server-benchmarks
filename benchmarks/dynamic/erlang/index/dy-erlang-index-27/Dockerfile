@@ -1,5 +1,5 @@
-# Multi-stage build for optimized Erlindex server
-# Builder stage
+# Minimal Erlang base: same stages as all BEAM benchmarks (see docs/MINIMAL_BASES_AND_UNIFICATION.md)
+# Stage 1: build on language image
 FROM erlang:27 AS builder
 
 # Set working directory
@@ -30,17 +30,16 @@ RUN echo '-module(hello).' > /app/hello.erl && \
 # Compile the Erlang app
 RUN erlc -o /app /app/hello.erl
 
-# Final stage - minimal runtime image
+# Stage 2: minimal runtime — bookworm-slim + same apt list as all containers
 FROM debian:bookworm-slim
 
-# Install only the minimal runtime dependencies
 RUN apt-get update && apt-get install -y \
     libncurses5 \
     libssl3 \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy only the Erlang runtime from builder stage
+# Minimal Erlang = Erlang runtime only (no Elixir, no build tools)
 COPY --from=builder /usr/local/lib/erlang /usr/local/lib/erlang
 
 # Set up environment
@@ -53,16 +52,7 @@ WORKDIR /app
 # Create the document root directory
 RUN mkdir -p /var/www/html
 
-# Embed a simple index.html file directly in the image
-RUN echo "<!DOCTYPE html>" > /var/www/html/index.html && \
-    echo "<html>" >> /var/www/html/index.html && \
-    echo "  <head>" >> /var/www/html/index.html && \
-    echo "    <title>Energy Test</title>" >> /var/www/html/index.html && \
-    echo "  </head>" >> /var/www/html/index.html && \
-    echo "  <body>" >> /var/www/html/index.html && \
-    echo "    <h1>Hello, Energy Test!</h1>" >> /var/www/html/index.html && \
-    echo "  </body>" >> /var/www/html/index.html && \
-    echo "</html>" >> /var/www/html/index.html
+COPY index.html /var/www/html/index.html
 
 # Copy the compiled beam file from builder stage
 COPY --from=builder /app/hello.beam /app/hello.beam

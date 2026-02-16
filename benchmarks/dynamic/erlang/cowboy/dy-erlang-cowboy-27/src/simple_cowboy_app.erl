@@ -15,8 +15,9 @@ start(_StartType, _StartArgs) ->
         _ -> exit({error, invalid_port})
     end,
     io:format("Starting Cowboy on port: ~p~n", [Port]), % Debug log to verify the port value
+    % Canonical transport opts: num_acceptors=8, max_connections=100000 (see docs/CONFIGURATION_PARITY.md)
     {ok, _} = cowboy:start_clear(http_listener,
-        [{port, Port}],
+        [{port, Port}, {num_acceptors, 8}, {max_connections, 100000}],
         #{env => #{dispatch => Dispatch}}
     ),
     simple_cowboy_sup:start_link().

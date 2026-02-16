@@ -25,12 +25,14 @@ case "${1:-}" in
         echo "Options:"
         echo "  --quick     Run quick benchmarks with reduced parameters"
         echo "  --super-quick Run super quick benchmarks with single test per type"
+        echo "  --single IMAGE  Run a single server (e.g. --single ws-erlang-yaws-27)"
         echo "  clean       Clean repository to fresh state"
         echo ""
         echo "Examples:"
         echo "  $0                    # Run all benchmarks"
         echo "  $0 static             # Run all static containers"
-        echo "  $0 dynamic dy-erlang27   # Run specific container"
+        echo "  $0 dynamic dy-erlang-pure-27   # Run specific container(s)"
+        echo "  $0 --single ws-erlang-yaws-27   # Run single server (type auto-detected)"
         echo "  $0 --quick static     # Quick static benchmarks"
         echo ""
         echo "Port Assignment:"
@@ -189,9 +191,31 @@ if [[ $# -gt 0 ]]; then
         exit 0
     fi
     RUN_ALL=0
-    TARGET_TYPE="$1"
-    shift
-    TARGET_IMAGES=("$@")
+    if [[ "$1" == "--single" && -n "${2:-}" ]]; then
+        # Run a single server: --single ws-erlang-yaws-27
+        SINGLE_IMAGE="$2"
+        SINGLE_DIR=$(find_container_dir "$SINGLE_IMAGE")
+        if [[ -z "$SINGLE_DIR" ]]; then
+            echo -e "${RED}[ERROR]${NC} Container '$SINGLE_IMAGE' not found under benchmarks/"
+            echo "Use the Docker image name (e.g. ws-erlang-yaws-27, dy-erlang-pure-27, st-erlang-cowboy-27)"
+            exit 1
+        fi
+        if [[ "$SINGLE_DIR" == *"/websocket/"* ]]; then
+            TARGET_TYPE="websocket"
+        elif [[ "$SINGLE_DIR" == *"/dynamic/"* ]]; then
+            TARGET_TYPE="dynamic"
+        elif [[ "$SINGLE_DIR" == *"/static/"* ]]; then
+            TARGET_TYPE="static"
+        else
+            echo -e "${RED}[ERROR]${NC} Cannot infer type for '$SINGLE_IMAGE' (path: $SINGLE_DIR)"
+            exit 1
+        fi
+        TARGET_IMAGES=("$SINGLE_IMAGE")
+    else
+        TARGET_TYPE="$1"
+        shift
+        TARGET_IMAGES=("$@")
+    fi
 fi
 
 check_port_free() {

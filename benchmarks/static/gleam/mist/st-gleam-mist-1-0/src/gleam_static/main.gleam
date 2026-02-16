@@ -6,7 +6,7 @@ import gleam/http/response.{type Response}
 import mist.{type Connection, type ResponseData}
 
 const static_html =
-  "<!DOCTYPE html><html><head><title>Energy Test</title></head><body><h1>Hello, Energy Test!</h1></body></html>"
+  "<!DOCTYPE html>\n<html>\n<head>\n    <title>Energy Test</title>\n</head>\n<body>\n    <h1>Hello, Energy Test!</h1>\n</body>\n</html>"
 
 pub fn main() {
   let handler = fn(req: Request(Connection)) -> Response(ResponseData) {

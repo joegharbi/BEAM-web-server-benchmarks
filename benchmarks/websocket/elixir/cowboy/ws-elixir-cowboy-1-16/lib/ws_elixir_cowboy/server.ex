@@ -17,9 +17,16 @@ defmodule WsElixirCowboy.Server do
          ]}
       ])
 
-    # Ranch 2.0 map format; max_connections omitted => Ranch default (1024)
-    trans_opts = %{socket_opts: [port: 80]}
-    proto_opts = %{env: %{dispatch: dispatch}}
+    # Canonical transport opts (docs/CONFIGURATION_PARITY.md): num_acceptors=8, max_connections=100000
+    trans_opts = %{
+      socket_opts: [port: 80],
+      num_acceptors: 8,
+      max_connections: 100_000
+    }
+    proto_opts = %{
+      env: %{dispatch: dispatch},
+      max_frame_size: 64 * 1024 * 1024
+    }
 
     case :cowboy.start_clear(:http, trans_opts, proto_opts) do
       {:ok, _pid} -> {:ok, %{}}

@@ -6,7 +6,8 @@ defmodule ElixirCowboyDynamic.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      {Plug.Cowboy, scheme: :http, plug: ElixirCowboyDynamic.Router, options: [port: 80]}
+      {Plug.Cowboy, scheme: :http, plug: ElixirCowboyDynamic.Router,
+       options: [port: 80, transport_options: [num_acceptors: 8, max_connections: 100_000]]}
     ]
 
     opts = [strategy: :one_for_one, name: ElixirCowboyDynamic.Supervisor]

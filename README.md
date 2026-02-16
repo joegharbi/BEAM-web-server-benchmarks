@@ -47,7 +47,7 @@ tools/                # measure_docker.py, measure_websocket.py, gui_graph_gener
 results/              # Output CSVs (results/<timestamp>/{static,dynamic,websocket}/)
 ```
 
-Each directory containing a `Dockerfile` under `benchmarks/` is one benchmark. The **directory name** is the Docker image name. Type is inferred from the path (`benchmarks/websocket/...` → WebSocket test).
+Each directory containing a `Dockerfile` under `benchmarks/` is one benchmark. The **directory name** is the Docker image name (use unified naming: `<type>-<language>-<framework>-<version>`, e.g. `st-erlang-cowboy-27`). Type is inferred from the path (`benchmarks/websocket/...` → WebSocket test). See [docs/MINIMAL_BASES_AND_UNIFICATION.md](docs/MINIMAL_BASES_AND_UNIFICATION.md) for base images and Dockerfile structure.
 
 ## Adding a Server
 
@@ -77,7 +77,9 @@ Port: `HOST_PORT=9001 make check-health` (default 8001). Full clean options: [do
 | Document | Description |
 |----------|-------------|
 | [docs/CONFIGURATION_AUDIT.md](docs/CONFIGURATION_AUDIT.md) | All settings (ulimit, ports, request counts, Scaphandre) |
-| [docs/BENCHMARKS_AUDIT.md](docs/BENCHMARKS_AUDIT.md) | Current BEAM benchmark set |
+| [docs/CONFIGURATION_PARITY.md](docs/CONFIGURATION_PARITY.md) | Canonical values (acceptors, max_connections, base image) |
+| [docs/MINIMAL_BASES_AND_UNIFICATION.md](docs/MINIMAL_BASES_AND_UNIFICATION.md) | Unified Dockerfile stages and naming |
+| [docs/BENCHMARKS_AUDIT.md](docs/BENCHMARKS_AUDIT.md) | Current BEAM benchmark set (34 containers) |
 | [docs/RESULTS.md](docs/RESULTS.md) | CSV format, parameters, visualization |
 | [docs/EXTENDING.md](docs/EXTENDING.md) | Adding new benchmark types (gRPC, etc.) |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Setup, health, Docker, energy, ulimit |
