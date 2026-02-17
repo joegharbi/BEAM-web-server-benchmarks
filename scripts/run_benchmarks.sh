@@ -41,12 +41,12 @@ case "${1:-}" in
         echo "  - Default container port: 80"
         exit 0
         ;;
-    "concurrency-sweep")
-        echo "Run concurrency sweep: test increasing client counts with fixed payload size."
+    "concurrency")
+        echo "Run Concurrency: test increasing client counts with fixed payload size."
         exit 0
         ;;
-    "payload-sweep")
-        echo "Run payload sweep: test increasing payload sizes with fixed client count."
+    "payload")
+        echo "Run Payload: test increasing payload sizes with fixed client count."
         exit 0
         ;;
 esac
@@ -81,18 +81,18 @@ quick_ws_stream_clients=(5)
 quick_ws_stream_sizes=(8)
 quick_ws_stream_rates=(1)
 quick_ws_stream_durations=(1)
-quick_concurrency_sweep_clients=(100)
-quick_concurrency_sweep_size=8
-quick_payload_sweep_clients=5
-quick_payload_sweep_sizes=(8)
+quick_concurrency_clients=(100)
+quick_concurrency_size=8
+quick_payload_clients=5
+quick_payload_sizes=(8)
 
-# Concurrency sweep parameters (balanced)
-concurrency_sweep_clients=(100 1000 5000)
-concurrency_sweep_size=8
+# Concurrency parameters (balanced)
+concurrency_clients=(100 1000 5000)
+concurrency_size=8
 
-# Payload sweep parameters (balanced)
-payload_sweep_clients=5
-payload_sweep_sizes=(8 1024 65536)
+# Payload parameters (balanced)
+payload_clients=5
+payload_sizes=(8 1024 65536)
 
 # Color codes for output
 RED='\033[0;31m'
@@ -260,9 +260,9 @@ run_websocket_tests() {
             --size_kb ${quick_ws_burst_sizes[0]} \
             --bursts ${quick_ws_burst_bursts[0]} \
             --interval ${quick_ws_burst_intervals[0]} \
-            --output_csv "$RESULTS_DIR/websocket/${image}.csv" \
+            --output_csv "$RESULTS_DIR/websocket/${image}_burst.csv" \
             --measurement_type "burst_${quick_ws_burst_clients[0]}_${quick_ws_burst_sizes[0]}_${quick_ws_burst_bursts[0]}_${quick_ws_burst_intervals[0]}"
-        print_csv_summary "$RESULTS_DIR/websocket/${image}.csv"
+        print_csv_summary "$RESULTS_DIR/websocket/${image}_burst.csv"
         echo -e "${BLUE}--- WebSocket Stream Test (Super Quick) ---${NC}"
         "$PYTHON_PATH" ./tools/measure_websocket.py \
             --server_image "$image" \
@@ -272,9 +272,9 @@ run_websocket_tests() {
             --size_kb ${quick_ws_stream_sizes[0]} \
             --rate ${quick_ws_stream_rates[0]} \
             --duration ${quick_ws_stream_durations[0]} \
-            --output_csv "$RESULTS_DIR/websocket/${image}.csv" \
+            --output_csv "$RESULTS_DIR/websocket/${image}_stream.csv" \
             --measurement_type "stream_${quick_ws_stream_clients[0]}_${quick_ws_stream_sizes[0]}_${quick_ws_stream_rates[0]}_${quick_ws_stream_durations[0]}"
-        print_csv_summary "$RESULTS_DIR/websocket/${image}.csv"
+        print_csv_summary "$RESULTS_DIR/websocket/${image}_stream.csv"
     else
         burst_clients=("${full_ws_burst_clients[@]}")
         burst_sizes=("${full_ws_burst_sizes[@]}")
@@ -301,7 +301,7 @@ run_websocket_tests() {
                             --size_kb $size_kb \
                             --bursts $bursts \
                             --interval $interval \
-                            --output_csv "$RESULTS_DIR/websocket/${image}.csv" \
+                            --output_csv "$RESULTS_DIR/websocket/${image}_burst.csv" \
                             --measurement_type "burst_${clients}_${size_kb}_${bursts}_${interval}"
                     done
                 done
@@ -320,7 +320,7 @@ run_websocket_tests() {
                             --size_kb $size_kb \
                             --rate $rate \
                             --duration $duration \
-                            --output_csv "$RESULTS_DIR/websocket/${image}.csv" \
+                            --output_csv "$RESULTS_DIR/websocket/${image}_stream.csv" \
                             --measurement_type "stream_${clients}_${size_kb}_${rate}_${duration}"
                     done
                 done
@@ -364,95 +364,95 @@ EOF
     fi
 }
 
-run_concurrency_sweep() {
+run_concurrency() {
     local image=$1
     local host_port=$2
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
-        echo -e "${BLUE}--- WebSocket Concurrency Sweep (Super Quick) ---${NC}"
-        local csv_file="$RESULTS_DIR/websocket/${image}_concurrency_sweep.csv"
+        echo -e "${BLUE}--- WebSocket Concurrency (Super Quick) ---${NC}"
+        local csv_file="$RESULTS_DIR/websocket/${image}_concurrency.csv"
         "$PYTHON_PATH" ./tools/measure_websocket.py \
             --server_image "$image" \
             --pattern burst \
             --mode echo \
-            --clients ${quick_concurrency_sweep_clients[0]} \
-            --size_kb $quick_concurrency_sweep_size \
+            --clients ${quick_concurrency_clients[0]} \
+            --size_kb $quick_concurrency_size \
             --bursts 1 \
             --interval 0.5 \
             --output_csv "$csv_file" \
-            --measurement_type "concurrency_${quick_concurrency_sweep_clients[0]}_${quick_concurrency_sweep_size}"
+            --measurement_type "concurrency_${quick_concurrency_clients[0]}_${quick_concurrency_size}"
         print_csv_summary "$csv_file"
-        echo -e "${BLUE}Concurrency sweep completed for $image at $(date)${NC}"
+        echo -e "${BLUE}Concurrency completed for $image at $(date)${NC}"
         echo "Results saved to: $csv_file"
     else
-        echo -e "${BLUE}\n=== WebSocket Concurrency Sweep: $image ===${NC}"
+        echo -e "${BLUE}\n=== WebSocket Concurrency: $image ===${NC}"
         local port_mapping=$(get_container_port_mapping $image $host_port)
         local ws_url="ws://localhost:$host_port/ws"
-        local ntests=${#concurrency_sweep_clients[@]}
+        local ntests=${#concurrency_clients[@]}
         local idx=1
-        for clients in "${concurrency_sweep_clients[@]}"; do
-            local csv_file="$RESULTS_DIR/websocket/${image}_concurrency_sweep.csv"
-            echo "[$idx/$ntests] Concurrency: $clients clients, ${concurrency_sweep_size}KB payload"
+        for clients in "${concurrency_clients[@]}"; do
+            local csv_file="$RESULTS_DIR/websocket/${image}_concurrency.csv"
+            echo "[$idx/$ntests] Concurrency: $clients clients, ${concurrency_size}KB payload"
             "$PYTHON_PATH" ./tools/measure_websocket.py \
                 --server_image "$image" \
                 --pattern burst \
                 --mode echo \
                 --clients $clients \
-                --size_kb $concurrency_sweep_size \
+                --size_kb $concurrency_size \
                 --bursts 3 \
                 --interval 0.5 \
                 --output_csv "$csv_file" \
-                --measurement_type "concurrency_${clients}_${concurrency_sweep_size}"
+                --measurement_type "concurrency_${clients}_${concurrency_size}"
             print_csv_summary "$csv_file"
             idx=$((idx+1))
         done
-        echo -e "${BLUE}Concurrency sweep completed for $image at $(date)${NC}"
-        echo "Results saved to: $RESULTS_DIR/websocket/${image}_concurrency_sweep.csv"
+        echo -e "${BLUE}Concurrency completed for $image at $(date)${NC}"
+        echo "Results saved to: $RESULTS_DIR/websocket/${image}_concurrency.csv"
     fi
 }
 
-run_payload_sweep() {
+run_payload() {
     local image=$1
     local host_port=$2
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
-        echo -e "${BLUE}--- WebSocket Payload Sweep (Super Quick) ---${NC}"
-        local csv_file="$RESULTS_DIR/websocket/${image}_payload_sweep.csv"
+        echo -e "${BLUE}--- WebSocket Payload (Super Quick) ---${NC}"
+        local csv_file="$RESULTS_DIR/websocket/${image}_payload.csv"
         "$PYTHON_PATH" ./tools/measure_websocket.py \
             --server_image "$image" \
             --pattern burst \
             --mode echo \
-            --clients $quick_payload_sweep_clients \
-            --size_kb ${quick_payload_sweep_sizes[0]} \
+            --clients $quick_payload_clients \
+            --size_kb ${quick_payload_sizes[0]} \
             --bursts 1 \
             --interval 0.5 \
             --output_csv "$csv_file" \
-            --measurement_type "payload_${quick_payload_sweep_clients}_${quick_payload_sweep_sizes[0]}"
+            --measurement_type "payload_${quick_payload_clients}_${quick_payload_sizes[0]}"
         print_csv_summary "$csv_file"
-        echo -e "${BLUE}Payload sweep completed for $image at $(date)${NC}"
+        echo -e "${BLUE}Payload completed for $image at $(date)${NC}"
         echo "Results saved to: $csv_file"
     else
-        echo -e "${BLUE}\n=== WebSocket Payload Sweep: $image ===${NC}"
+        echo -e "${BLUE}\n=== WebSocket Payload: $image ===${NC}"
         local port_mapping=$(get_container_port_mapping $image $host_port)
         local ws_url="ws://localhost:$host_port/ws"
-        local ntests=${#payload_sweep_sizes[@]}
+        local ntests=${#payload_sizes[@]}
         local idx=1
-        for size_kb in "${payload_sweep_sizes[@]}"; do
-            local csv_file="$RESULTS_DIR/websocket/${image}_payload_sweep.csv"
-            echo "[$idx/$ntests] Payload: $payload_sweep_clients clients, ${size_kb}KB payload"
+        for size_kb in "${payload_sizes[@]}"; do
+            local csv_file="$RESULTS_DIR/websocket/${image}_payload.csv"
+            echo "[$idx/$ntests] Payload: $payload_clients clients, ${size_kb}KB payload"
             "$PYTHON_PATH" ./tools/measure_websocket.py \
                 --server_image "$image" \
                 --pattern burst \
                 --mode echo \
-                --clients $payload_sweep_clients \
+                --clients $payload_clients \
                 --size_kb $size_kb \
                 --bursts 3 \
                 --interval 0.5 \
                 --output_csv "$csv_file" \
-                --measurement_type "payload_${payload_sweep_clients}_${size_kb}"
+                --measurement_type "payload_${payload_clients}_${size_kb}"
             print_csv_summary "$csv_file"
             idx=$((idx+1))
         done
-        echo -e "${BLUE}Payload sweep completed for $image at $(date)${NC}"
-        echo "Results saved to: $RESULTS_DIR/websocket/${image}_payload_sweep.csv"
+        echo -e "${BLUE}Payload completed for $image at $(date)${NC}"
+        echo "Results saved to: $RESULTS_DIR/websocket/${image}_payload.csv"
     fi
 }
 
@@ -602,8 +602,8 @@ main() {
                 docker rm "$container" > /dev/null 2>&1 || true
                 sleep 1
             fi
-            run_concurrency_sweep "$container" "$HOST_PORT"
-            run_payload_sweep "$container" "$HOST_PORT"
+            run_concurrency "$container" "$HOST_PORT"
+            run_payload "$container" "$HOST_PORT"
             sleep 1
         done
     else
@@ -668,7 +668,7 @@ main() {
                     sleep 1
                 done
                 ;;
-            "concurrency-sweep")
+            "concurrency")
                 TARGET_TYPE="websocket"
                 if [ ${#TARGET_IMAGES[@]} -eq 0 ]; then
                     TARGET_IMAGES=($(discover_containers "websocket"))
@@ -685,15 +685,15 @@ main() {
                         docker rm "$container" > /dev/null 2>&1 || true
                         sleep 1
                     fi
-                    run_concurrency_sweep "$container" "$HOST_PORT"
+                    run_concurrency "$container" "$HOST_PORT"
                     sleep 1
                 done
                 echo ""
-                echo -e "${BLUE}Concurrency sweep completed at $(date)${NC}"
+                echo -e "${BLUE}Concurrency completed at $(date)${NC}"
                 echo "Results saved to: $RESULTS_DIR"
                 exit 0
                 ;;
-            "payload-sweep")
+            "payload")
                 TARGET_TYPE="websocket"
                 if [ ${#TARGET_IMAGES[@]} -eq 0 ]; then
                     TARGET_IMAGES=($(discover_containers "websocket"))
@@ -710,11 +710,11 @@ main() {
                         docker rm "$container" > /dev/null 2>&1 || true
                         sleep 1
                     fi
-                    run_payload_sweep "$container" "$HOST_PORT"
+                    run_payload "$container" "$HOST_PORT"
                     sleep 1
                 done
                 echo ""
-                echo -e "${BLUE}Payload sweep completed at $(date)${NC}"
+                echo -e "${BLUE}Payload completed at $(date)${NC}"
                 echo "Results saved to: $RESULTS_DIR"
                 exit 0
                 ;;

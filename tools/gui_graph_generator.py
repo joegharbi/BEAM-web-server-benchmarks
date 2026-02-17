@@ -270,16 +270,21 @@ def detect_csv_type(header):
     return "unknown"
 
 # WebSocket CSV: test subtypes and x-axis column names (from measure_websocket.py + run_benchmarks.sh)
-WS_SUBTYPE_CONCURRENCY = "concurrency_sweep"
-WS_SUBTYPE_PAYLOAD = "payload_sweep"
+WS_SUBTYPE_CONCURRENCY = "concurrency"
+WS_SUBTYPE_PAYLOAD = "payload"
 WS_SUBTYPE_BURST = "burst"
 WS_SUBTYPE_STREAM = "stream"
 WS_XAXIS_COLUMNS = ["Num Clients", "Message Size (KB)", "Rate (msg/s)", "Bursts", "Duration (s)", "Interval (s)"]
 WS_TYPE_ALL = "All"
-WS_TYPE_CONCURRENCY = "Concurrency sweep"
-WS_TYPE_PAYLOAD = "Payload sweep"
-WS_TYPE_BURST_STREAM = "Burst / Stream"
-WS_TYPE_OPTIONS = [WS_TYPE_ALL, WS_TYPE_CONCURRENCY, WS_TYPE_PAYLOAD, WS_TYPE_BURST_STREAM]
+WS_TYPE_CONCURRENCY = "Concurrency"
+WS_TYPE_PAYLOAD = "Payload"
+WS_TYPE_BURST = "Burst"
+WS_TYPE_STREAM = "Stream"
+WS_TYPE_OPTIONS = [WS_TYPE_ALL, WS_TYPE_CONCURRENCY, WS_TYPE_PAYLOAD, WS_TYPE_BURST, WS_TYPE_STREAM]
+WS_PLOT_HEATMAP = "Heatmap"
+WS_PLOT_MULTILINE = "Multi-line"
+WS_PLOT_BAR = "Bar"
+WS_PLOT_STYLE_OPTIONS = [WS_PLOT_MULTILINE, WS_PLOT_HEATMAP, WS_PLOT_BAR]
 BENCHMARK_TYPE_PLACEHOLDER = "Benchmark type"
 METRIC_PLACEHOLDER = "Metric"
 WS_TYPE_PLACEHOLDER = "WebSocket type"
@@ -287,7 +292,8 @@ WS_TYPE_PLACEHOLDER = "WebSocket type"
 WS_TYPE_SAVE_ACRONYM = {
     WS_TYPE_CONCURRENCY: "conc",
     WS_TYPE_PAYLOAD: "pay",
-    WS_TYPE_BURST_STREAM: "burst",
+    WS_TYPE_BURST: "burst",
+    WS_TYPE_STREAM: "stream",
     WS_TYPE_ALL: "all",
     WS_TYPE_PLACEHOLDER: "all",
 }
@@ -306,10 +312,15 @@ XAXIS_DISPLAY_NAMES = {
 def detect_websocket_subtype(filepath, header, rows):
     """Return WebSocket subtype from filename or CSV content for correct x-axis and display."""
     base = os.path.basename(filepath).lower()
-    if "_concurrency_sweep" in base:
+    if "_concurrency" in base:
         return WS_SUBTYPE_CONCURRENCY
-    if "_payload_sweep" in base:
+    if "_payload" in base:
         return WS_SUBTYPE_PAYLOAD
+    if "_burst" in base:
+        return WS_SUBTYPE_BURST
+    if "_stream" in base:
+        return WS_SUBTYPE_STREAM
+    # Legacy: detect from Pattern column when filename has no _burst/_stream
     if not rows or "Pattern" not in header:
         return None
     patterns = {str(r.get("Pattern", "")).strip().lower() for r in rows}
@@ -474,7 +485,7 @@ class BenchmarkGrapher(QMainWindow):
         row_ws.setContentsMargins(0, 0, 0, 0)
         row_ws.setSpacing(GAP)
         self.ws_type_selector = MenuSelectorWidget(placeholder=WS_TYPE_PLACEHOLDER, parent=self)
-        self.ws_type_selector.set_options([WS_TYPE_ALL, WS_TYPE_CONCURRENCY, WS_TYPE_PAYLOAD, WS_TYPE_BURST_STREAM])
+        self.ws_type_selector.set_options([WS_TYPE_ALL, WS_TYPE_CONCURRENCY, WS_TYPE_PAYLOAD, WS_TYPE_BURST, WS_TYPE_STREAM])
         self.ws_type_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self._on_filter_changed))
         row_ws.addWidget(self.ws_type_selector)
         row_ws.addStretch()
@@ -615,6 +626,13 @@ class BenchmarkGrapher(QMainWindow):
             self.ws_type_row.setVisible(cat == "WebSocket")
             if cat != "WebSocket" and getattr(self, "ws_type_selector", None):
                 self.ws_type_selector.set_current(WS_TYPE_PLACEHOLDER)
+        if getattr(self, "plot_type_selector", None):
+            if cat == "WebSocket":
+                self.plot_type_selector.set_options(WS_PLOT_STYLE_OPTIONS)
+                self.plot_type_selector.set_current(WS_PLOT_MULTILINE)
+            else:
+                self.plot_type_selector.set_options(["Auto", "Line", "Bar"])
+                self.plot_type_selector.set_current("Auto")
         self.update_file_listbox_display()
         self.update_metric_options()
 
@@ -709,6 +727,9 @@ class BenchmarkGrapher(QMainWindow):
             self.ws_type_row.setVisible(False)
         if getattr(self, "ws_type_selector", None):
             self.ws_type_selector.set_current(WS_TYPE_PLACEHOLDER)
+        if getattr(self, "plot_type_selector", None):
+            self.plot_type_selector.set_options(["Auto", "Line", "Bar"])
+            self.plot_type_selector.set_current("Auto")
         self.metric_selector.set_options([])
         self.metric_selector.set_current(METRIC_PLACEHOLDER)
         self._set_data_controls_enabled(False)
@@ -770,6 +791,82 @@ class BenchmarkGrapher(QMainWindow):
         self.file_listbox.clearSelection()
         self._update_file_count_label()
 
+    # Fixed axes positions so repeated plot/heatmap never shrinks (colorbar in its own axes)
+    _AXES_FULL = [0.1, 0.12, 0.85, 0.8]   # main plot when no colorbar
+    _AXES_WITH_CBAR = [0.1, 0.12, 0.72, 0.8]  # main plot when heatmap; leaves room for colorbar
+    _CBAR_RECT = [0.85, 0.12, 0.025, 0.8]    # colorbar axes (fixed, so main ax never shrinks)
+
+    def _plot_websocket_heatmap(self, selected_files, metric):
+        """Build and draw a heatmap: rows = files, columns = unique x-axis values, color = metric."""
+        self.ax.set_position(self._AXES_WITH_CBAR)
+        data_rows = []
+        row_labels = []
+        all_x_ordered = []
+        for f in selected_files:
+            header = self.headers[f]
+            rows = self.rows[f]
+            typ = self.file_types[f]
+            x, y, label = self.get_plot_data(header, rows, typ, metric, os.path.basename(f), filepath=f)
+            if not x or not y:
+                continue
+            data_rows.append((x, y))
+            row_labels.append(label or os.path.basename(f))
+            all_x_ordered.extend(x)
+        if not data_rows:
+            self._heatmap_vals = []
+            return
+        # Unique x values in order of first appearance (or sorted if numeric)
+        seen = set()
+        x_unique = []
+        for v in all_x_ordered:
+            try:
+                vf = float(v)
+                if vf not in seen:
+                    seen.add(vf)
+                    x_unique.append(vf)
+            except (TypeError, ValueError):
+                if v not in seen:
+                    seen.add(v)
+                    x_unique.append(v)
+        try:
+            x_unique = sorted(x_unique)
+        except TypeError:
+            pass
+        if not x_unique:
+            self._heatmap_vals = []
+            return
+        x_to_col = {xv: j for j, xv in enumerate(x_unique)}
+        n_rows = len(data_rows)
+        n_cols = len(x_unique)
+        matrix = np.full((n_rows, n_cols), np.nan)
+        heatmap_vals = []
+        for i, (x_list, y_list) in enumerate(data_rows):
+            for xv, yv in zip(x_list, y_list):
+                j = x_to_col.get(xv)
+                if j is not None and yv is not None:
+                    try:
+                        matrix[i, j] = float(yv)
+                        heatmap_vals.append(float(yv))
+                    except (TypeError, ValueError):
+                        pass
+        self._heatmap_vals = heatmap_vals
+        if not heatmap_vals:
+            return
+        im = self.ax.imshow(matrix, aspect="auto", cmap="viridis", interpolation="nearest")
+        self.ax.set_xticks(np.arange(n_cols))
+        self.ax.set_xticklabels([str(x_unique[j]) for j in range(n_cols)], rotation=45, ha="right")
+        self.ax.set_yticks(np.arange(n_rows))
+        self.ax.set_yticklabels(row_labels)
+        first_file = selected_files[0]
+        x_col = self.get_x_axis_column_name(self.headers[first_file], self.rows[first_file], "websocket", filepath=first_file)
+        x_axis_label = XAXIS_DISPLAY_NAMES.get(x_col, x_col) if x_col else "Parameter"
+        self.ax.set_xlabel(x_axis_label)
+        self.ax.set_ylabel("Benchmark")
+        self.ax.set_title(f"{metric} (heatmap)")
+        # Use a separate fixed axes for colorbar so main ax is never shrunk (no shrink on repeated plot)
+        cax = self.fig.add_axes(self._CBAR_RECT)
+        self.fig.colorbar(im, cax=cax, label=metric)
+
     def plot_selected(self):
         selected_files = self.get_selected_files()
         metric = self.metric_selector.currentText()
@@ -778,6 +875,14 @@ class BenchmarkGrapher(QMainWindow):
         if not selected_files:
             return
         self.ax.clear()
+        # Remove every axes that is not the main plot (colorbar etc.) so none accumulate
+        while True:
+            extra = [ax for ax in self.fig.axes if ax is not self.ax]
+            if not extra:
+                break
+            for ax in extra:
+                ax.remove()
+        self.ax.set_position(self._AXES_FULL)
         if hasattr(self, 'cursor') and self.cursor is not None:
             try:
                 self.cursor.remove()
@@ -792,8 +897,20 @@ class BenchmarkGrapher(QMainWindow):
             self.bar_cursor = None
 
         all_vals = []
-        plot_type = self.plot_type_selector.currentText()
+        type_choice = self.plot_type_selector.currentText()
         n_series = max(1, len(selected_files))
+        is_websocket = selected_files and all(self.file_types.get(f) == "websocket" for f in selected_files)
+
+        if is_websocket and type_choice == WS_PLOT_HEATMAP:
+            self._plot_websocket_heatmap(selected_files, metric)
+            self.canvas.draw()
+            if getattr(self, "_heatmap_vals", None):
+                v = self._heatmap_vals
+                s = f"{metric}: min={min(v):.2f}, max={max(v):.2f}, avg={sum(v)/len(v):.2f}"
+                self.summary_label.setText(s)
+            else:
+                self.summary_label.setText("")
+            return
 
         for idx, f in enumerate(selected_files):
             header = self.headers[f]
@@ -804,7 +921,10 @@ class BenchmarkGrapher(QMainWindow):
                 color = self.color_cycle[idx % len(self.color_cycle)]
                 marker = self.marker_cycle[(idx // len(self.linestyle_cycle)) % len(self.marker_cycle)]
                 linestyle = self.linestyle_cycle[idx % len(self.linestyle_cycle)]
-                use_bar = (plot_type == "Bar") or (plot_type == "Auto" and typ == "websocket")
+                if is_websocket:
+                    use_bar = (type_choice == WS_PLOT_BAR)
+                else:
+                    use_bar = (type_choice == "Bar")
                 if use_bar:
                     n_points = len(x)
                     if isinstance(x[0], (int, float, np.integer, np.floating)):
@@ -968,7 +1088,7 @@ class BenchmarkGrapher(QMainWindow):
 
     def _default_save_path(self):
         """Default path: graphs/<category>/<metric>[-<ws-subtype>]-<N>bench-<YYYYMMDD-HHMM>.ext.
-        WebSocket subtype (conc/pay/burst/all) in filename avoids overwriting when saving different subtypes in the same second."""
+        WebSocket subtype (conc/pay/burst/stream/all) in filename avoids overwriting when saving different subtypes in the same second."""
         metric = self.metric_selector.currentText() or "graph"
         if metric == METRIC_PLACEHOLDER:
             metric = "graph"
@@ -1009,7 +1129,9 @@ class BenchmarkGrapher(QMainWindow):
                 out.append(f)
             elif ws_type == WS_TYPE_PAYLOAD and sub == WS_SUBTYPE_PAYLOAD:
                 out.append(f)
-            elif ws_type == WS_TYPE_BURST_STREAM and sub in (WS_SUBTYPE_BURST, WS_SUBTYPE_STREAM, None):
+            elif ws_type == WS_TYPE_BURST and sub == WS_SUBTYPE_BURST:
+                out.append(f)
+            elif ws_type == WS_TYPE_STREAM and sub == WS_SUBTYPE_STREAM:
                 out.append(f)
             else:
                 pass
@@ -1036,7 +1158,8 @@ class BenchmarkGrapher(QMainWindow):
             "• Select one or more CSV files (from results directories).\n"
             "• Auto-detects file type (HTTP, WebSocket, gRPC, etc).\n"
             "• Filter by category (Static, Dynamic, WebSocket, gRPC, etc).\n"
-            "• WebSocket files show subtype: Burst, Stream, Concurrency, Payload.\n"
+            "• WebSocket: subtype (Burst, Stream, Concurrency, Payload) is auto-detected from filename.\n"
+            "• Type changes by category: WebSocket = Multi-line / Heatmap / Bar; others = Auto / Line / Bar.\n"
             "• Choose a metric to plot (latency, throughput, CPU, etc).\n"
             "• Overlay/combine results from multiple files.\n"
             "• Export graphs as SVG (Save button below).\n"

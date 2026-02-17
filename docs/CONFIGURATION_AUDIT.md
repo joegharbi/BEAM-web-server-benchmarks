@@ -109,8 +109,8 @@ This supports high concurrency; Cowboy/Ranch listeners use their default connect
 
 - **Burst**: N clients, each sending M bursts of K KB; interval between bursts.
 - **Stream**: N clients, each sending at R messages/sec for D seconds; message size K KB.
-- **Concurrency sweep**: Vary number of clients (e.g. 100, 1000, 5000).
-- **Payload sweep**: Vary message size (e.g. 8, 1024, 65536 KB).
+- **Concurrency**: Vary number of clients (e.g. 100, 1000, 5000).
+- **Payload**: Vary message size (e.g. 8, 1024, 65536 KB).
 
 ### Where they are set
 
@@ -118,8 +118,8 @@ This supports high concurrency; Cowboy/Ranch listeners use their default connect
 
 - **Full**: `full_ws_burst_*`, `full_ws_stream_*` (e.g. clients 5,50,100; sizes 8,1024,65536 KB; etc.).
 - **Quick / super-quick**: `quick_ws_burst_*`, `quick_ws_stream_*` (e.g. 5 clients, 8 KB, 1 burst; stream 1 msg/s, 1 s).
-- **Concurrency**: `quick_concurrency_sweep_clients`, `concurrency_sweep_clients`.
-- **Payload**: `quick_payload_sweep_*`, `payload_sweep_*`.
+- **Concurrency**: `quick_concurrency_clients`, `concurrency_clients`.
+- **Payload**: `quick_payload_*`, `payload_*`.
 
 **tools/measure_websocket.py**: Reads `--clients`, `--size_kb`, `--bursts`, `--interval`, `--rate`, `--duration` from the script; no hard-coded defaults that override the script.
 
