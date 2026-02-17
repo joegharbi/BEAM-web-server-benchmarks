@@ -161,13 +161,12 @@ def _app_stylesheet():
         }}
 
         QSplitter::handle {{
-            width: 10px;
-            background: #dee2e6;
-            border-left: 1px solid #ced4da;
-            border-right: 1px solid #ced4da;
+            width: 6px;
+            background: #f1f3f5;
+            border: none;
         }}
         QSplitter::handle:hover {{
-            background: #ced4da;
+            background: #e9ecef;
         }}
 
         QPushButton#sidebarToggleBtn {{
@@ -282,6 +281,7 @@ WS_TYPE_PAYLOAD = "Payload sweep"
 WS_TYPE_BURST_STREAM = "Burst / Stream"
 WS_TYPE_OPTIONS = [WS_TYPE_ALL, WS_TYPE_CONCURRENCY, WS_TYPE_PAYLOAD, WS_TYPE_BURST_STREAM]
 BENCHMARK_TYPE_PLACEHOLDER = "Benchmark type"
+METRIC_PLACEHOLDER = "Metric"
 WS_TYPE_PLACEHOLDER = "WebSocket type"
 # Short acronyms for WebSocket subtype in save filenames (avoids overwriting when saving different subtypes in the same second)
 WS_TYPE_SAVE_ACRONYM = {
@@ -429,7 +429,7 @@ class BenchmarkGrapher(QMainWindow):
 
         GAP = 6
         splitter = QSplitter(Qt.Horizontal)
-        splitter.setHandleWidth(10)
+        splitter.setHandleWidth(6)
         splitter.setChildrenCollapsible(False)
 
         left_panel = QWidget()
@@ -448,7 +448,9 @@ class BenchmarkGrapher(QMainWindow):
         data_layout.addLayout(row1)
         row2 = QHBoxLayout()
         row2.setSpacing(GAP)
-        row2.addWidget(_btn("Clear all", self.clear_files))
+        self.clear_all_btn = _btn("Clear all", self.clear_files)
+        self.clear_all_btn.setEnabled(False)
+        row2.addWidget(self.clear_all_btn)
         self.select_all_btn = _btn("Select all", self.select_all_files)
         self.select_all_btn.setEnabled(False)
         row2.addWidget(self.select_all_btn)
@@ -461,6 +463,7 @@ class BenchmarkGrapher(QMainWindow):
         row3.setSpacing(GAP)
         self.category_selector = MenuSelectorWidget(placeholder=BENCHMARK_TYPE_PLACEHOLDER, parent=self)
         self.category_selector.set_options([])
+        self.category_selector.setEnabled(False)
         self.category_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self._on_filter_changed))
         row3.addWidget(self.category_selector)
         self.file_count_label = QLabel("0 loaded, 0 selected")
@@ -492,8 +495,9 @@ class BenchmarkGrapher(QMainWindow):
         plot_layout.setSpacing(GAP)
         plot_layout.setContentsMargins(8, 10, 8, 8)
         plot_layout.addWidget(QLabel("Metric:"))
-        self.metric_selector = MenuSelectorWidget(placeholder="(select metric)", parent=self)
+        self.metric_selector = MenuSelectorWidget(placeholder=METRIC_PLACEHOLDER, parent=self)
         self.metric_selector.set_options([])
+        self.metric_selector.setEnabled(False)
         self.metric_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self.plot_selected))
         plot_layout.addWidget(self.metric_selector)
         pr = QHBoxLayout()
@@ -501,9 +505,12 @@ class BenchmarkGrapher(QMainWindow):
         pr.addWidget(QLabel("Type:"))
         self.plot_type_selector = MenuSelectorWidget(placeholder="Auto", parent=self)
         self.plot_type_selector.set_options(["Auto", "Bar", "Line"])
+        self.plot_type_selector.setEnabled(False)
         self.plot_type_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self.plot_selected))
         pr.addWidget(self.plot_type_selector)
-        pr.addWidget(_btn("Plot", self.plot_selected))
+        self.plot_btn = _btn("Plot", self.plot_selected)
+        self.plot_btn.setEnabled(False)
+        pr.addWidget(self.plot_btn)
         pr.addStretch()
         plot_layout.addLayout(pr)
         left_layout.addWidget(plot_group)
@@ -514,13 +521,9 @@ class BenchmarkGrapher(QMainWindow):
         bl_layout.setSpacing(GAP)
         save_row = QHBoxLayout()
         save_row.setSpacing(GAP)
-        save_row.addWidget(_btn("Save", self.export_graph))
-        save_row.addWidget(QLabel("Format:"))
-        self.format_combo = QComboBox()
-        self.format_combo.setItemDelegate(_ComboDelegate(self.format_combo))
-        self.format_combo.addItems(["PNG", "PDF", "SVG"])
-        self.format_combo.setMinimumWidth(BTN_MIN_W)
-        save_row.addWidget(self.format_combo)
+        self.save_btn = _btn("Save", self.export_graph)
+        self.save_btn.setEnabled(False)
+        save_row.addWidget(self.save_btn)
         save_row.addWidget(_btn("Help", self.show_help))
         save_row.addStretch()
         bl_layout.addLayout(save_row)
@@ -548,7 +551,7 @@ class BenchmarkGrapher(QMainWindow):
         graph_layout = QVBoxLayout(graph_group)
         graph_layout.setContentsMargins(2, 2, 2, 2)
         top_row = QHBoxLayout()
-        self.sidebar_toggle_btn = QPushButton("\u25c0")  # ◀ (black left-pointing triangle)
+        self.sidebar_toggle_btn = QPushButton("\u00AB")  # « = collapse/hide sidebar (IDE convention)
         self.sidebar_toggle_btn.setObjectName("sidebarToggleBtn")
         self.sidebar_toggle_btn.setToolTip("Hide sidebar (full screen graph)")
         self.sidebar_toggle_btn.setFixedSize(38, CONTROL_HEIGHT)
@@ -582,10 +585,10 @@ class BenchmarkGrapher(QMainWindow):
         visible = self.left_panel.isVisible()
         self.left_panel.setVisible(not visible)
         if visible:
-            self.sidebar_toggle_btn.setText("\u25b6")   # ▶ (black right-pointing triangle) = show panel
+            self.sidebar_toggle_btn.setText("\u00BB")   # » = expand/show sidebar
             self.sidebar_toggle_btn.setToolTip("Show sidebar")
         else:
-            self.sidebar_toggle_btn.setText("\u25c0")  # ◀ (black left-pointing triangle) = hide panel
+            self.sidebar_toggle_btn.setText("\u00AB")  # « = collapse/hide sidebar
             self.sidebar_toggle_btn.setToolTip("Hide sidebar (full screen graph)")
 
     def browse_files(self):
@@ -667,6 +670,7 @@ class BenchmarkGrapher(QMainWindow):
         self._update_filter_combo()
         self.update_metric_options()
         self.update_file_listbox_display()
+        self._set_data_controls_enabled(len(self.files) > 0)
 
     def update_file_listbox_display(self):
         self.file_listbox.clear()
@@ -706,12 +710,23 @@ class BenchmarkGrapher(QMainWindow):
         if getattr(self, "ws_type_selector", None):
             self.ws_type_selector.set_current(WS_TYPE_PLACEHOLDER)
         self.metric_selector.set_options([])
+        self.metric_selector.set_current(METRIC_PLACEHOLDER)
+        self._set_data_controls_enabled(False)
         self.ax.clear()
         self.canvas.draw()
         self.summary_label.setText("")
         self.file_count_label.setText("0 loaded, 0 selected")
         self.select_all_btn.setEnabled(False)
         self.deselect_all_btn.setEnabled(False)
+
+    def _set_data_controls_enabled(self, enabled):
+        """Enable or disable data/plot/save controls (only usable after files are loaded)."""
+        self.clear_all_btn.setEnabled(enabled)
+        self.category_selector.setEnabled(enabled)
+        self.metric_selector.setEnabled(enabled)
+        self.plot_type_selector.setEnabled(enabled)
+        self.plot_btn.setEnabled(enabled)
+        self.save_btn.setEnabled(enabled)
 
     def update_metric_options(self):
         visible = self.get_visible_files()
@@ -758,7 +773,7 @@ class BenchmarkGrapher(QMainWindow):
     def plot_selected(self):
         selected_files = self.get_selected_files()
         metric = self.metric_selector.currentText()
-        if not metric or metric == "(select metric)":
+        if not metric or metric == METRIC_PLACEHOLDER:
             return
         if not selected_files:
             return
@@ -955,14 +970,13 @@ class BenchmarkGrapher(QMainWindow):
         """Default path: graphs/<category>/<metric>[-<ws-subtype>]-<N>bench-<YYYYMMDD-HHMM>.ext.
         WebSocket subtype (conc/pay/burst/all) in filename avoids overwriting when saving different subtypes in the same second."""
         metric = self.metric_selector.currentText() or "graph"
-        if metric == "(select metric)":
+        if metric == METRIC_PLACEHOLDER:
             metric = "graph"
         slug = re.sub(r"[^\w\s-]", "", metric).strip().lower()
         slug = re.sub(r"[-\s]+", "-", slug) or "graph"
         n = len(self.get_selected_files()) or len(self.get_visible_files()) or 0
         ts = datetime.now().strftime("%Y%m%d-%H%M")
-        fmt = self.format_combo.currentText().strip().lower()
-        ext = ".png" if fmt == "png" else ".pdf" if fmt == "pdf" else ".svg"
+        ext = ".svg"
         cat = (self.category_selector.currentText() or "").strip()
         cat_lower = cat.lower().replace(" ", "")
         subtype_part = ""
@@ -1007,21 +1021,13 @@ class BenchmarkGrapher(QMainWindow):
         if not has_data:
             QMessageBox.warning(self, "No graph", "No graph to export. Please plot something first.")
             return
-        fmt = self.format_combo.currentText().strip().lower()
-        if fmt == "png":
-            filetypes, defaultext, save_kwargs = "PNG Image (*.png)", ".png", {"dpi": 300}
-        elif fmt == "pdf":
-            filetypes, defaultext, save_kwargs = "PDF Document (*.pdf)", ".pdf", {}
-        elif fmt == "svg":
-            filetypes, defaultext, save_kwargs = "SVG Image (*.svg)", ".svg", {}
-        else:
-            filetypes, defaultext, save_kwargs = "PNG Image (*.png)", ".png", {"dpi": 300}
+        filetypes, defaultext = "SVG Image (*.svg)", ".svg"
         default_path = self._default_save_path()
         filepath, _ = QFileDialog.getSaveFileName(self, "Save graph", default_path, filetypes)
         if filepath:
             if not filepath.lower().endswith(defaultext):
                 filepath = filepath + defaultext
-            self.fig.savefig(filepath, bbox_inches='tight', pad_inches=0.1, format=fmt, **save_kwargs)
+            self.fig.savefig(filepath, bbox_inches='tight', pad_inches=0.1, format="svg")
             QMessageBox.information(self, "Exported", f"Graph exported to {filepath}")
 
     def show_help(self):
@@ -1033,7 +1039,7 @@ class BenchmarkGrapher(QMainWindow):
             "• WebSocket files show subtype: Burst, Stream, Concurrency, Payload.\n"
             "• Choose a metric to plot (latency, throughput, CPU, etc).\n"
             "• Overlay/combine results from multiple files.\n"
-            "• Export graphs as PNG, PDF, or SVG (Save button below).\n"
+            "• Export graphs as SVG (Save button below).\n"
             "• Summary stats (min, max, avg) shown below the graph.\n"
             "• Double-click a file to plot. Use Plot button or change metric.\n"
             "• Select folder: recursively loads all CSVs from subfolders.\n"
