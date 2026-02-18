@@ -7,5 +7,6 @@ gleam_http = "~> 4.0"
 gleam_otp = "~> 1.0"
 gleam_stdlib = "~> 0.36"
 mist = "~> 5.0"
+simplifile = "~> 2.3"
 
 [dev-dependencies]
