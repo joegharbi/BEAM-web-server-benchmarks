@@ -60,7 +60,8 @@ Each directory containing a `Dockerfile` under `benchmarks/` is one benchmark. T
 | Task           | Command                         |
 |----------------|---------------------------------|
 | Build          | `make build`                    |
-| Health check   | `make check-health`             |
+| Health check   | `make check-health` (no build; use after `make build`) |
+| Container test | `make test` (build + health check; run before long `make run`) |
 | Benchmarks     | `make run-quick`, `make run-all`|
 | Graphs         | `make graph`                    |
 | Clean results  | `make clean-results`            |

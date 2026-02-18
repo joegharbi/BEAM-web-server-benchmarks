@@ -141,14 +141,14 @@ run-%: check-env
 	done; \
 	bash scripts/run_benchmarks.sh --$*
 
-check-health:  ## Check health of all built containers (startup, HTTP response, stability)
+check-health: check-env ## Health check only: run health check on all already-built containers (no build). Log in logs/test_*.log.
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	bash scripts/check_health.sh
+	bash scripts/test_containers.sh --no-build
 
-test: check-env install ## Build all images and run quick health check on every container (logs in logs/). Run before long benchmark.
-	@printf "${YELLOW}Test: build + quick health check (logs in logs/)...${NC}\n"
+test: check-env install ## Build all images, then run health check on every container. Run before long benchmark. Logs in logs/.
+	@printf "${YELLOW}Test: build then health check (logs in logs/)...${NC}\n"
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
@@ -266,8 +266,8 @@ help:  ## Show this help message
 	@printf "${YELLOW}Validation & Health:${NC}\n"
 	@printf "  %-22s %s\n" "check-tools" "Check for required tools (Python, pip, Docker, scaphandre)"
 	@printf "  %-22s %s\n" "check-env" "Check if virtual environment is active"
-	@printf "  %-22s %s\n" "check-health" "Check health of all built containers (startup, HTTP response, stability)"
-	@printf "  %-22s %s\n" "test" "Build + quick health check on all containers (logs in logs/). Run before make run"
+	@printf "  %-22s %s\n" "check-health" "Health check only on already-built containers (no build). Log: logs/test_*.log"
+	@printf "  %-22s %s\n" "test" "Build all images, then health check on every container. Run before make run. Logs in logs/"
 	@printf "  %-22s %s\n" "validate" "Validate all prerequisites and health"
 	@printf "\n"
 	@printf "${YELLOW}Build & Clean:${NC}\n"
