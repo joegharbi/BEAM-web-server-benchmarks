@@ -7,7 +7,7 @@
 VENV_NAME ?= srv
 VENV_PATH = $(VENV_NAME)/bin/activate
 
-.PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-env clean-nuclear build run setup graph validate check-health build-test-run run-single clean-all
+.PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-env clean-nuclear build run setup graph validate check-health build-test-run run-single clean-all clean-build-run clean-all-build-run
 
 # --- Colors ---
 GREEN=\033[0;32m
@@ -157,6 +157,26 @@ build-test-run: check-env ## Build all containers, check health, and run all ben
 	@printf "${YELLOW}=== Running all benchmarks ===${NC}\n"
 	@$(MAKE) run
 
+clean-build-run: check-env ## Clean results, build, and run (keeps srv/ and Docker cache)
+	@printf "${YELLOW}=== Cleaning results ===${NC}\n"
+	@$(MAKE) clean-results
+	@printf "\n"
+	@$(MAKE) build
+	@printf "\n"
+	@$(MAKE) run
+
+# Fully clean (results + env + Docker), recreate env, build, and run.
+clean-all-build-run: ## Completely clean (results, srv, Docker), then setup, build, and run
+	@printf "${YELLOW}=== Full clean (results, venv, Docker) ===${NC}\n"
+	@$(MAKE) clean-all
+	@printf "\n"
+	@printf "${YELLOW}=== Recreating environment (srv) ===${NC}\n"
+	@$(MAKE) setup
+	@printf "\n"
+	@$(MAKE) build
+	@printf "\n"
+	@$(MAKE) run
+
 graph:  ## Launch the GUI graph generator (uses PyQt5 from requirements.txt)
 	@$(MAKE) check-env
 	@# Suppress benign Qt/Wayland warnings
@@ -244,6 +264,8 @@ help:  ## Show this help message
 	@printf "\n"
 	@printf "${YELLOW}Build & Clean:${NC}\n"
 	@printf "  %-22s %s\n" "build-test-run" "Build all containers, check health, and run all benchmarks"
+	@printf "  %-22s %s\n" "clean-build-run" "Clean results, build, and run (keeps srv/ and Docker cache)"
+	@printf "  %-22s %s\n" "clean-all-build-run" "Full clean (results + srv + Docker), setup, build, and run"
 	@printf "  %-22s %s\n" "clean-build" "Clean up Docker containers and images"
 	@printf "  %-22s %s\n" "clean-results" "Remove only generated outputs (results/, logs/, graphs/, __pycache__) for fresh measurement"
 	@printf "  %-22s %s\n" "clean-env" "Remove Python venv (srv) and __pycache__. Run 'make setup' to recreate"
