@@ -6,8 +6,12 @@ set -e
 
 ulimit -n 100000
 # Prefer venv; fall back to system python3 if venv missing or not executable
-if [ -x "$(pwd)/srv/bin/python3" ]; then
-    PYTHON_PATH="$(pwd)/srv/bin/python3"
+# Use script location for repo root so paths work when repo path contains spaces or script is run from another dir
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT" || exit 1
+if [ -x "$REPO_ROOT/srv/bin/python3" ]; then
+    PYTHON_PATH="$REPO_ROOT/srv/bin/python3"
 else
     PYTHON_PATH="python3"
 fi
@@ -285,7 +289,7 @@ run_websocket_tests() {
         stream_rates=("${full_ws_stream_rates[@]}")
         stream_durations=("${full_ws_stream_durations[@]}")
         echo "Running WebSocket tests for $image on port $host_port"
-        local port_mapping=$(get_container_port_mapping $image $host_port)
+        local port_mapping=$(get_container_port_mapping "$image" "$host_port")
         local container_port=$(echo $port_mapping | cut -d: -f2)
         local ws_url="ws://localhost:$host_port/ws"
         for clients in "${burst_clients[@]}"; do
@@ -385,7 +389,7 @@ run_concurrency() {
         echo "Results saved to: $csv_file"
     else
         echo -e "${BLUE}\n=== WebSocket Concurrency: $image ===${NC}"
-        local port_mapping=$(get_container_port_mapping $image $host_port)
+        local port_mapping=$(get_container_port_mapping "$image" "$host_port")
         local ws_url="ws://localhost:$host_port/ws"
         local ntests=${#concurrency_clients[@]}
         local idx=1
@@ -431,7 +435,7 @@ run_payload() {
         echo "Results saved to: $csv_file"
     else
         echo -e "${BLUE}\n=== WebSocket Payload: $image ===${NC}"
-        local port_mapping=$(get_container_port_mapping $image $host_port)
+        local port_mapping=$(get_container_port_mapping "$image" "$host_port")
         local ws_url="ws://localhost:$host_port/ws"
         local ntests=${#payload_sizes[@]}
         local idx=1
@@ -462,7 +466,7 @@ run_docker_tests() {
     local host_port=$2
     local test_type=$3
     echo -e "${BLUE}Running $test_type tests for $image on port $host_port${NC}"
-    local port_mapping=$(get_container_port_mapping $image $host_port)
+    local port_mapping=$(get_container_port_mapping "$image" "$host_port")
     local ntests=0
     local -a test_counts
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
@@ -541,7 +545,7 @@ main() {
         echo -e "${BLUE}=== Static Container Tests ===${NC}"
         local static_containers=($(discover_containers "static"))
         for container in "${static_containers[@]}"; do
-            if ! check_port_free $HOST_PORT; then
+            if ! check_port_free "$HOST_PORT"; then
                 echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                 exit 1
             fi
@@ -558,7 +562,7 @@ main() {
         echo -e "${BLUE}=== Dynamic Container Tests ===${NC}"
         local dynamic_containers=($(discover_containers "dynamic"))
         for container in "${dynamic_containers[@]}"; do
-            if ! check_port_free $HOST_PORT; then
+            if ! check_port_free "$HOST_PORT"; then
                 echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                 exit 1
             fi
@@ -575,7 +579,7 @@ main() {
         echo -e "${BLUE}=== WebSocket Tests ===${NC}"
         local websocket_containers=($(discover_containers "websocket"))
         for container in "${websocket_containers[@]}"; do
-            if ! check_port_free $HOST_PORT; then
+            if ! check_port_free "$HOST_PORT"; then
                 echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                 exit 1
             fi
@@ -591,7 +595,7 @@ main() {
         done
         # Also run sweeps for all websocket servers
         for container in "${websocket_containers[@]}"; do
-            if ! check_port_free $HOST_PORT; then
+            if ! check_port_free "$HOST_PORT"; then
                 echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                 exit 1
             fi
@@ -613,7 +617,7 @@ main() {
                     TARGET_IMAGES=($(discover_containers "static"))
                 fi
                 for container in "${TARGET_IMAGES[@]}"; do
-                    if ! check_port_free $HOST_PORT; then
+                    if ! check_port_free "$HOST_PORT"; then
                         echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                         exit 1
                     fi
@@ -633,7 +637,7 @@ main() {
                     TARGET_IMAGES=($(discover_containers "dynamic"))
                 fi
                 for container in "${TARGET_IMAGES[@]}"; do
-                    if ! check_port_free $HOST_PORT; then
+                    if ! check_port_free "$HOST_PORT"; then
                         echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                         exit 1
                     fi
@@ -653,7 +657,7 @@ main() {
                     TARGET_IMAGES=($(discover_containers "websocket"))
                 fi
                 for container in "${TARGET_IMAGES[@]}"; do
-                    if ! check_port_free $HOST_PORT; then
+                    if ! check_port_free "$HOST_PORT"; then
                         echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                         exit 1
                     fi
@@ -674,7 +678,7 @@ main() {
                     TARGET_IMAGES=($(discover_containers "websocket"))
                 fi
                 for container in "${TARGET_IMAGES[@]}"; do
-                    if ! check_port_free $HOST_PORT; then
+                    if ! check_port_free "$HOST_PORT"; then
                         echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                         exit 1
                     fi
@@ -699,7 +703,7 @@ main() {
                     TARGET_IMAGES=($(discover_containers "websocket"))
                 fi
                 for container in "${TARGET_IMAGES[@]}"; do
-                    if ! check_port_free $HOST_PORT; then
+                    if ! check_port_free "$HOST_PORT"; then
                         echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                         exit 1
                     fi

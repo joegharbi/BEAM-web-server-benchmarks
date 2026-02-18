@@ -93,6 +93,8 @@ Scaphandre attributes energy by container. On systems where it reports `containe
 
 - **Setup fails**: `sudo apt install python3-venv`; if `srv/` is broken, `make clean-env && make setup`
 - **Health check fails**: Check `docker logs health-check-<name>`, ensure port 8001 is free, verify ulimit inside container
+- **"Container health check failed" during long runs**: BEAM containers may need more time to boot. Set `MEASURE_STARTUP_WAIT=25 MEASURE_HEALTH_RETRIES=30` before `make run` (or use higher values). The script will also print container logs on failure.
+- **Avoid late failures**: Before a long benchmark run, use **`make test`** to build all images (log in `logs/build_*.log`) and run a quick health check on every container (log in `logs/test_*.log`). If the test passes, you can start `make run` with confidence.
 - **Energy 0.00 J**: See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#energy-measurement-000-j-container-not-found)
 - **ulimit errors**: Increase system/Docker limits; health check requires 100000
 

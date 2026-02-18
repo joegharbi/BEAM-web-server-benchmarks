@@ -328,9 +328,15 @@ def main():
     if not url:
         url = f"ws://localhost:{args.port_mapping.split(':')[0]}/ws"
     logger.info(f"Checking container health at {url}...")
-    
+    startup_wait = int(os.environ.get("MEASURE_STARTUP_WAIT", "15"))
+    if startup_wait > 0:
+        logger.info("Waiting %ds for container to boot before WebSocket health check...", startup_wait)
+        time.sleep(startup_wait)
+
     # Actual WebSocket health check: try to connect and echo a small binary message
-    async def check_websocket_health(ws_url, max_attempts=10, delay=2):
+    max_attempts = int(os.environ.get("MEASURE_HEALTH_RETRIES", "20"))
+    delay = int(os.environ.get("MEASURE_HEALTH_DELAY", "2"))
+    async def check_websocket_health(ws_url, max_attempts=max_attempts, delay=delay):
         for attempt in range(1, max_attempts + 1):
             try:
                 async with websockets.connect(ws_url, max_size=None, ping_interval=None) as ws:

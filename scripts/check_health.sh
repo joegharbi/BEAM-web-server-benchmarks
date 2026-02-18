@@ -6,8 +6,11 @@ ulimit -n 100000
 # Tests all built containers for proper startup, HTTP response, and health constraints
 
 # Prefer venv Python (has websockets) for WebSocket test; fallback to system python3
+# When invoked from test_containers.sh, PYTHON_WS_FOR_HEALTH is set to the venv python we just installed into
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-if [ -x "$REPO_ROOT/srv/bin/python3" ] && "$REPO_ROOT/srv/bin/python3" -c "import websockets" 2>/dev/null; then
+if [ -n "${PYTHON_WS_FOR_HEALTH-}" ] && [ -x "$PYTHON_WS_FOR_HEALTH" ] && "$PYTHON_WS_FOR_HEALTH" -c "import websockets" 2>/dev/null; then
+    PYTHON_WS="$PYTHON_WS_FOR_HEALTH"
+elif [ -x "$REPO_ROOT/srv/bin/python3" ] && "$REPO_ROOT/srv/bin/python3" -c "import websockets" 2>/dev/null; then
     PYTHON_WS="$REPO_ROOT/srv/bin/python3"
 else
     PYTHON_WS="python3"
@@ -100,7 +103,7 @@ check_port_free() {
 }
 
 stop_and_remove_container() {
-    local cname=$1
+    local cname="$1"
     docker stop "$cname" > /dev/null 2>&1 || true
     docker rm "$cname" > /dev/null 2>&1 || true
 }
@@ -109,9 +112,9 @@ check_container_health() {
     local image_name=$1
     local host_port=$2
     local container_name="health-check-${image_name}"
-    local port_mapping=$(get_container_port_mapping $image_name $host_port)
+    local port_mapping=$(get_container_port_mapping "$image_name" "$host_port")
     print_status "INFO" "Testing $image_name..."
-    if ! check_port_free $host_port; then
+    if ! check_port_free "$host_port"; then
         print_status "ERROR" "Port $host_port is already in use. Please free the port and rerun the health check."
         exit 1
     fi
@@ -129,12 +132,12 @@ check_container_health() {
         return
     fi
     # Check ulimit inside the running container
-    container_ulimit=$(docker exec $container_name sh -c 'ulimit -n' 2>/dev/null)
+    container_ulimit=$(docker exec "$container_name" sh -c 'ulimit -n' 2>/dev/null)
     if [[ "$container_ulimit" -ge 100000 ]]; then
         print_status "SUCCESS" "$image_name: ulimit inside container is $container_ulimit (OK)"
     else
         print_status "ERROR" "$image_name: ulimit inside container is $container_ulimit (too low)"
-        stop_and_remove_container $container_name
+        stop_and_remove_container "$container_name"
         FAILED_CONTAINERS=$((FAILED_CONTAINERS + 1))
         FAILED_LIST+=("$image_name (ulimit)")
         return
@@ -161,14 +164,14 @@ check_container_health() {
             "http://localhost:$host_port/ws" 2>/dev/null | head -10)
         if [[ "$ws_test_result" == *"101 Switching Protocols"* ]] || [[ "$ws_test_result" == *"Upgrade: websocket"* ]]; then
             # WebSocket echo test (64KB payload) — must pass for health; use venv python if available (has websockets)
-            if ! $PYTHON_WS -c "import websockets" 2>/dev/null; then
-                print_status "ERROR" "$image_name: Python 'websockets' module not found. Run: make setup (or: pip install websockets)"
-                stop_and_remove_container $container_name
+            if ! "$PYTHON_WS" -c "import websockets" 2>/dev/null; then
+                print_status "ERROR" "$image_name: Python 'websockets' module not found. Run: make install (or: make setup)"
+                stop_and_remove_container "$container_name"
                 FAILED_CONTAINERS=$((FAILED_CONTAINERS + 1))
                 FAILED_LIST+=("$image_name (websockets module missing)")
                 return
             fi
-            $PYTHON_WS - <<EOF
+            "$PYTHON_WS" - <<EOF
 import asyncio, websockets, os, sys
 payload_size = $WS_PAYLOAD_SIZE
 timeout = $WS_TEST_TIMEOUT
@@ -204,14 +207,14 @@ EOF
                 HEALTHY_CONTAINERS=$((HEALTHY_CONTAINERS + 1))
             else
                 print_status "ERROR" "$image_name: WebSocket echo test failed (not healthy)"
-                stop_and_remove_container $container_name
+                stop_and_remove_container "$container_name"
                 FAILED_CONTAINERS=$((FAILED_CONTAINERS + 1))
                 FAILED_LIST+=("$image_name (websocket echo test)")
                 return
             fi
         else
             print_status "ERROR" "$image_name: WebSocket handshake failed (not healthy)"
-            stop_and_remove_container $container_name
+            stop_and_remove_container "$container_name"
             FAILED_CONTAINERS=$((FAILED_CONTAINERS + 1))
             FAILED_LIST+=("$image_name (websocket)")
             return
@@ -224,7 +227,7 @@ EOF
             HEALTHY_CONTAINERS=$((HEALTHY_CONTAINERS + 1))
         else
             print_status "ERROR" "$image_name: HTTP health check failed (code $http_code)"
-            stop_and_remove_container $container_name
+            stop_and_remove_container "$container_name"
             FAILED_CONTAINERS=$((FAILED_CONTAINERS + 1))
             FAILED_LIST+=("$image_name (http)")
             return

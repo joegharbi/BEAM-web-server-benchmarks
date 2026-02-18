@@ -69,7 +69,7 @@ def cleanup_existing_container(container_name, docker_path):
         time.sleep(1)
     else:
         logger.warning(f"Container '{container_name}' could not be removed after multiple attempts.")
-    time.sleep(2)  # Ensure Docker/OS releases resources
+    time.sleep(3)  # Ensure port and resources released (important after long runs)
 
 def cleanup_existing_scaphandre():
     subprocess.run(["sudo", "pkill", "-9", "scaphandre"], capture_output=True, text=True, check=False)
@@ -100,13 +100,22 @@ def stop_scaphandre(scaphandre_process):
     scaphandre_process.wait(timeout=5)
     time.sleep(2)  # Ensure OS releases resources
 
-def check_container_health(url, retries=5, delay=1):
-    for _ in range(retries):
+def check_container_health(url, retries=None, delay=None, startup_wait=None):
+    """Wait for container to respond with HTTP 200. BEAM/Elixir apps often need 15–60s to boot, especially after long runs."""
+    startup_wait = int(os.environ.get("MEASURE_STARTUP_WAIT", startup_wait or 15))
+    retries = int(os.environ.get("MEASURE_HEALTH_RETRIES", retries or 25))
+    delay = int(os.environ.get("MEASURE_HEALTH_DELAY", delay or 2))
+    total_max = startup_wait + retries * delay
+    logger.info("Waiting up to %ds for container (initial %ds, then %d retries every %ds)...", total_max, startup_wait, retries, delay)
+    time.sleep(startup_wait)
+    for attempt in range(1, retries + 1):
         try:
-            if requests.get(url, timeout=5).status_code == 200:
+            if requests.get(url, timeout=10).status_code == 200:
+                logger.info("Container ready after %d attempt(s).", attempt)
                 return True
         except requests.exceptions.RequestException:
-            time.sleep(delay)
+            if attempt < retries:
+                time.sleep(delay)
     return False
 
 def start_server_container(server_image, port_mapping, container_name, docker_path, network="bridge"):
@@ -333,7 +342,17 @@ def main():
     start_server_container(args.server_image, args.port_mapping, container_name, docker_path, args.network)
     
     if not check_container_health(url):
-        logger.error("Container health check failed")
+        logger.error("Container health check failed (no HTTP 200 within wait time).")
+        try:
+            out = subprocess.run(
+                [docker_path, "logs", "--tail", "30", container_name],
+                capture_output=True, text=True, timeout=5
+            )
+            if out.stdout or out.stderr:
+                logger.error("Container logs (last 30 lines):\n%s%s", out.stdout or "", out.stderr or "")
+        except Exception as e:
+            logger.debug("Could not get container logs: %s", e)
+        logger.error("To allow more boot time: MEASURE_STARTUP_WAIT=25 MEASURE_HEALTH_RETRIES=30 make run")
         stop_server_container(container_name, docker_path)
         return
     

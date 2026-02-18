@@ -7,7 +7,7 @@
 VENV_NAME ?= srv
 VENV_PATH = $(VENV_NAME)/bin/activate
 
-.PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-env clean-nuclear build run setup graph validate check-health build-test-run run-single clean-all clean-build-run clean-all-build-run
+.PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-env clean-nuclear build run setup graph validate check-health build-test-run run-single clean-all clean-build-run clean-all-build-run test
 
 # --- Colors ---
 GREEN=\033[0;32m
@@ -147,6 +147,13 @@ check-health:  ## Check health of all built containers (startup, HTTP response, 
 	done; \
 	bash scripts/check_health.sh
 
+test: check-env install ## Build all images and run quick health check on every container (logs in logs/). Run before long benchmark.
+	@printf "${YELLOW}Test: build + quick health check (logs in logs/)...${NC}\n"
+	@for v in ./*/bin/activate; do \
+		if [ -f "$$v" ]; then . "$$v"; break; fi; \
+	done; \
+	bash scripts/test_containers.sh
+
 build-test-run: check-env ## Build all containers, check health, and run all benchmarks
 	@printf "${YELLOW}=== Building all containers ===${NC}\n"
 	@$(MAKE) build
@@ -260,6 +267,7 @@ help:  ## Show this help message
 	@printf "  %-22s %s\n" "check-tools" "Check for required tools (Python, pip, Docker, scaphandre)"
 	@printf "  %-22s %s\n" "check-env" "Check if virtual environment is active"
 	@printf "  %-22s %s\n" "check-health" "Check health of all built containers (startup, HTTP response, stability)"
+	@printf "  %-22s %s\n" "test" "Build + quick health check on all containers (logs in logs/). Run before make run"
 	@printf "  %-22s %s\n" "validate" "Validate all prerequisites and health"
 	@printf "\n"
 	@printf "${YELLOW}Build & Clean:${NC}\n"

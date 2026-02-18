@@ -29,4 +29,4 @@ COPY --from=builder /build/etc/yaws/yaws.conf /usr/local/etc/yaws/yaws.conf
 COPY --from=builder /build/www/html/index.yaws /var/www/html/index.yaws
 
 EXPOSE 80
-CMD ["/bin/sh", "-c", "yaws --daemon --conf /usr/local/etc/yaws/yaws.conf && sleep infinity"]
+CMD ["/bin/sh", "-c", "ulimit -n 100000 && yaws --daemon --conf /usr/local/etc/yaws/yaws.conf && sleep infinity"]
