@@ -12,51 +12,51 @@ This document summarizes the **BEAM benchmark set** in this repository. This rep
 
 See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for base-image and build-pattern details.
 
-## Current layout (34 containers)
+## Current layout (58 containers)
 
-### Static (15)
-
-| Language | Framework/Variant | Container(s) | Notes |
-|----------|-------------------|--------------|--------|
-| Erlang  | cowboy  | `st-erlang-cowboy-27` | ✓ |
-| Erlang  | index   | `st-erlang-index-23`, `st-erlang-index-26`, `st-erlang-index-27` | Serves index HTML file |
-| Erlang  | pure    | `st-erlang-pure-23`, `st-erlang-pure-26`, `st-erlang-pure-27` | HTML in code |
-| Erlang  | yaws    | `st-erlang-yaws-26`, `st-erlang-yaws-27` | ✓ |
-| Elixir  | cowboy  | `st-elixir-cowboy-1-16` | ✓ |
-| Elixir  | index   | `st-elixir-index-1-16` | Serves index HTML file |
-| Elixir  | phoenix | `st-elixir-phoenix-1-8` | ✓ |
-| Elixir  | pure    | `st-elixir-pure-1-16` | ✓ |
-| Gleam   | index   | `st-gleam-index-1-0` | Serves index HTML file |
-| Gleam   | mist    | `st-gleam-mist-1-0` | ✓ |
-
-### Dynamic (15)
+### Static (25)
 
 | Language | Framework/Variant | Container(s) | Notes |
 |----------|-------------------|--------------|--------|
-| Erlang  | cowboy  | `dy-erlang-cowboy-27` | ✓ |
-| Erlang  | index   | `dy-erlang-index-23`, `dy-erlang-index-26`, `dy-erlang-index-27` | ✓ |
-| Erlang  | pure    | `dy-erlang-pure-23`, `dy-erlang-pure-26`, `dy-erlang-pure-27` | ✓ |
-| Erlang  | yaws    | `dy-erlang-yaws-26`, `dy-erlang-yaws-27` | ✓ |
-| Elixir  | cowboy  | `dy-elixir-cowboy-1-16` | ✓ |
-| Elixir  | index   | `dy-elixir-index-1-16` | ✓ |
-| Elixir  | phoenix | `dy-elixir-phoenix-1-8` | ✓ |
-| Elixir  | pure    | `dy-elixir-pure-1-16` | ✓ |
-| Gleam   | index   | `dy-gleam-index-1-0` | ✓ |
-| Gleam   | mist    | `dy-gleam-mist-1-0` | ✓ |
+| Erlang  | cowboy  | `st-erlang-cowboy-27`, `st-erlang-cowboy-28-4-3` | Includes latest OTP lane |
+| Erlang  | index   | `st-erlang-index-23`, `st-erlang-index-26`, `st-erlang-index-27`, `st-erlang-index-28-4-3` | Serves index HTML file |
+| Erlang  | pure    | `st-erlang-pure-23`, `st-erlang-pure-26`, `st-erlang-pure-27`, `st-erlang-pure-28-4-3` | HTML in code |
+| Erlang  | yaws    | `st-erlang-yaws-26`, `st-erlang-yaws-27`, `st-erlang-yaws-28-4-3` | Includes latest OTP lane |
+| Elixir  | cowboy  | `st-elixir-cowboy-1-16`, `st-elixir-cowboy-1-19-5` | Includes latest Elixir lane |
+| Elixir  | index   | `st-elixir-index-1-16`, `st-elixir-index-1-19-5` | Serves index HTML file |
+| Elixir  | phoenix | `st-elixir-phoenix-1-8`, `st-elixir-phoenix-1-8-5` | Includes latest Phoenix lane |
+| Elixir  | pure    | `st-elixir-pure-1-16`, `st-elixir-pure-1-19-5` | Includes latest Elixir lane |
+| Gleam   | index   | `st-gleam-index-1-0`, `st-gleam-index-1-15-2` | Serves index HTML file |
+| Gleam   | mist    | `st-gleam-mist-1-0`, `st-gleam-mist-1-15-2` | Includes latest Gleam/Mist lane |
 
-### WebSocket (4)
+### Dynamic (25)
 
 | Language | Framework/Variant | Container(s) | Notes |
 |----------|-------------------|--------------|--------|
-| Erlang  | cowboy | `ws-erlang-cowboy-27` | ✓ |
-| Erlang  | yaws   | `ws-erlang-yaws-27` | ✓ |
-| Elixir  | cowboy | `ws-elixir-cowboy-1-16` | ✓ |
-| Elixir  | phoenix | `ws-elixir-phoenix-1-8` | ✓ |
+| Erlang  | cowboy  | `dy-erlang-cowboy-27`, `dy-erlang-cowboy-28-4-3` | Includes latest OTP lane |
+| Erlang  | index   | `dy-erlang-index-23`, `dy-erlang-index-26`, `dy-erlang-index-27`, `dy-erlang-index-28-4-3` | ✓ |
+| Erlang  | pure    | `dy-erlang-pure-23`, `dy-erlang-pure-26`, `dy-erlang-pure-27`, `dy-erlang-pure-28-4-3` | ✓ |
+| Erlang  | yaws    | `dy-erlang-yaws-26`, `dy-erlang-yaws-27`, `dy-erlang-yaws-28-4-3` | Includes latest OTP lane |
+| Elixir  | cowboy  | `dy-elixir-cowboy-1-16`, `dy-elixir-cowboy-1-19-5` | Includes latest Elixir lane |
+| Elixir  | index   | `dy-elixir-index-1-16`, `dy-elixir-index-1-19-5` | ✓ |
+| Elixir  | phoenix | `dy-elixir-phoenix-1-8`, `dy-elixir-phoenix-1-8-5` | Includes latest Phoenix lane |
+| Elixir  | pure    | `dy-elixir-pure-1-16`, `dy-elixir-pure-1-19-5` | Includes latest Elixir lane |
+| Gleam   | index   | `dy-gleam-index-1-0`, `dy-gleam-index-1-15-2` | ✓ |
+| Gleam   | mist    | `dy-gleam-mist-1-0`, `dy-gleam-mist-1-15-2` | Includes latest Gleam/Mist lane |
+
+### WebSocket (8)
+
+| Language | Framework/Variant | Container(s) | Notes |
+|----------|-------------------|--------------|--------|
+| Erlang  | cowboy | `ws-erlang-cowboy-27`, `ws-erlang-cowboy-28-4-3` | Includes latest OTP lane |
+| Erlang  | yaws   | `ws-erlang-yaws-27`, `ws-erlang-yaws-28-4-3` | Includes latest OTP lane |
+| Elixir  | cowboy | `ws-elixir-cowboy-1-16`, `ws-elixir-cowboy-1-19-5` | Includes latest Elixir lane |
+| Elixir  | phoenix | `ws-elixir-phoenix-1-8`, `ws-elixir-phoenix-1-8-5` | Includes latest Phoenix lane |
 | **Gleam** | — | **None** | **Missing** (could be added later if Mist/gramps WebSocket support is used) |
 
 ## Consistency check
 
-- All 34 directories with a `Dockerfile` have **EXPOSE 80**.
+- All 58 directories with a `Dockerfile` have **EXPOSE 80**.
 - Folder names match the image names used by scripts (auto-discovery).
 - Static and dynamic cover **Erlang, Elixir, Gleam** with the intended frameworks/variants; index and pure variants exist where documented.
 - WebSocket covers **Erlang** and **Elixir** only; **Gleam WebSocket is missing** (not required for scripts to run).
@@ -87,7 +87,7 @@ From repo root:
    make setup    # create srv/ venv and install dependencies (uses srv/bin/python3 -m pip)
    ```
    If `make setup` fails with "Failed to create venv", install python3-venv and run again. If you have an existing broken `srv/` (e.g. no pip), run `make clean-env && make setup`.
-2. **Build**: Build all 34 images (already done if you see `[BUILD SUMMARY] All images built successfully`):
+2. **Build**: Build all 58 images (already done if you see `[BUILD SUMMARY] All images built successfully`):
    ```bash
    make build
    ```

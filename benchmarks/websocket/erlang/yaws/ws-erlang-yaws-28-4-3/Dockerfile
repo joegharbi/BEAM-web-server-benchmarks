@@ -1,11 +1,11 @@
 # Minimal Yaws base: same two-stage pattern as all BEAM benchmarks (see docs/MINIMAL_BASES_AND_UNIFICATION.md)
 # Stage 1: build — compile WebSocket handler and prepare config/content
-FROM debian:bookworm-slim AS builder
+FROM debian:trixie-slim AS builder
 
 RUN apt-get update && apt-get install -y \
     yaws \
-    libncurses5 \
-    libssl3 \
+    libncurses6 \
+    libssl3t64 \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -13,7 +13,7 @@ WORKDIR /build
 RUN mkdir -p app etc/yaws www/html
 
 # WebSocket handler (Yaws defaults to 16 MB max; benchmark uses 64 MB messages).
-# Resolve yaws_api.hrl at build time (path varies by Debian/Yaws package version).
+# Resolve yaws_api.hrl at build time (Debian trixie may ship a different yaws version than bookworm).
 RUN set -eux; \
     YAWS_HRL="$(find /usr/lib /usr/share -name yaws_api.hrl 2>/dev/null | head -n1)"; \
     test -n "$YAWS_HRL"; \
@@ -60,13 +60,13 @@ while true; do\n\
   yaws --status > /dev/null 2>&1 || exit 1\n\
 done' > /build/start.sh
 
-# Stage 2: minimal runtime — bookworm-slim + same apt list + yaws (no build-only deps in final)
-FROM debian:bookworm-slim
+# Stage 2: minimal runtime — trixie-slim + same apt list + yaws (no build-only deps in final)
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \
     yaws \
-    libncurses5 \
-    libssl3 \
+    libncurses6 \
+    libssl3t64 \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 

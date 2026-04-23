@@ -1,0 +1,6 @@
+<erl>
+out(A) when A#arg.req == 'POST' ->
+    {status, 204, []};
+out(A) ->
+    {status, 200, [{html, "<h1>Hello, Energy Test!</h1>"}]}
+</erl> 
