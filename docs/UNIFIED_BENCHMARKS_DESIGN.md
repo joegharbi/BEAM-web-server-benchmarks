@@ -17,13 +17,13 @@ This document assesses the benchmark framework, proposes a clear naming scheme (
 
 | Container name           | Language | Framework | Version | Base   |
 |--------------------------|----------|-----------|---------|--------|
-| st-erlang-cowboy-27      | Erlang   | Cowboy    | 27      | bookworm-slim  |
-| st-erlang-pure-23/26/27  | Erlang   | pure      | 23/26/27| bookworm-slim  |
-| st-erlang-index-23/26/27 | Erlang   | index     | 23/26/27| bookworm-slim  |
-| st-erlang-yaws-26/27     | Erlang   | Yaws      | 26/27   | bookworm-slim  |
-| st-elixir-cowboy-1-16    | Elixir   | Cowboy    | 1.16    | bookworm-slim  |
-| st-elixir-pure-1-16      | Elixir   | pure      | 1.16    | bookworm-slim  |
-| st-elixir-phoenix-1-8    | Elixir   | Phoenix   | 1.8     | bookworm-slim  |
+| st-erlang-cowboy-27      | Erlang   | Cowboy    | 27      | trixie-slim  |
+| st-erlang-pure-23/26/27  | Erlang   | pure      | 23/26/27| trixie-slim  |
+| st-erlang-index-23/26/27 | Erlang   | index     | 23/26/27| trixie-slim  |
+| st-erlang-yaws-26/27     | Erlang   | Yaws      | 26/27   | trixie-slim  |
+| st-elixir-cowboy-1-16    | Elixir   | Cowboy    | 1.16    | trixie-slim  |
+| st-elixir-pure-1-16      | Elixir   | pure      | 1.16    | trixie-slim  |
+| st-elixir-phoenix-1-8    | Elixir   | Phoenix   | 1.8     | trixie-slim  |
 | st-gleam-mist-1-0        | Gleam    | Mist      | 1.0     | Alpine         |
 
 Names follow `<type>-<language>-<framework>-<version>` so graphs are self-explanatory.
@@ -44,7 +44,7 @@ Goal: **From the container name alone, we know: type, language, framework, versi
 - **language**: `erlang`, `elixir`, `gleam`
 - **framework**: `cowboy`, `phoenix`, `pure`, `index`, `yaws`, `mist`
 - **version**: OTP/Elixir/Phoenix/Gleam version (e.g. `27`, `1-16`, `1-8`, `1-0`)
-- **base** (optional): `bw` = bookworm-slim, `full` = full Elixir image, `alpine` = Alpine (Gleam)
+- **base** (optional): `bw` = trixie-slim, `full` = full Elixir image, `alpine` = Alpine (Gleam)
 
 When there is only one base for a stack, we can omit the suffix and document it (e.g. all Erlang = bw).
 
@@ -52,15 +52,15 @@ When there is only one base for a stack, we can omit the suffix and document it 
 
 | New name                         | Meaning                                      | Base        |
 |----------------------------------|----------------------------------------------|-------------|
-| st-erlang-cowboy-27              | Static, Erlang, Cowboy, OTP 27               | bookworm-slim |
-| dy-erlang-pure-27                | Dynamic, Erlang, pure, OTP 27                 | bookworm-slim |
-| st-erlang-index-27               | Static, Erlang, index (serve file)           | bookworm-slim |
-| st-elixir-cowboy-1-16-bw        | Static, Elixir, Cowboy, 1.16, bookworm-slim  | bookworm-slim |
+| st-erlang-cowboy-27              | Static, Erlang, Cowboy, OTP 27               | trixie-slim |
+| dy-erlang-pure-27                | Dynamic, Erlang, pure, OTP 27                 | trixie-slim |
+| st-erlang-index-27               | Static, Erlang, index (serve file)           | trixie-slim |
+| st-elixir-cowboy-1-16-bw        | Static, Elixir, Cowboy, 1.16, trixie-slim  | trixie-slim |
 | st-elixir-cowboy-1-16-full      | Static, Elixir, Cowboy, 1.16, full Elixir    | elixir:1.16 |
-| st-elixir-pure-1-16-bw          | Static, Elixir, pure, 1.16, bookworm-slim    | bookworm-slim |
+| st-elixir-pure-1-16-bw          | Static, Elixir, pure, 1.16, trixie-slim    | trixie-slim |
 | st-gleam-mist-1-0-alpine        | Static, Gleam, Mist, 1.0                     | Alpine      |
-| ws-erlang-cowboy-27             | WebSocket, Erlang, Cowboy, 27                | bookworm-slim |
-| ws-elixir-phoenix-1-8-bw       | WebSocket, Elixir, Phoenix, 1.8, bookworm-slim | bookworm-slim |
+| ws-erlang-cowboy-27             | WebSocket, Erlang, Cowboy, 27                | trixie-slim |
+| ws-elixir-phoenix-1-8-bw       | WebSocket, Elixir, Phoenix, 1.8, trixie-slim | trixie-slim |
 
 So on the graph:
 
@@ -71,7 +71,7 @@ So on the graph:
 
 1. **Rename directories** (and thus image names) to the new scheme. Scripts use `basename` of the dir containing the Dockerfile, so renaming is enough for discovery and CSV/graph labels.
 2. **Add full-Elixir variants** for a subset of Elixir containers (e.g. cowboy, phoenix, pure, index) so we have both:
-   - `-bw`: multi-stage, runtime = debian:bookworm-slim
+   - `-bw`: multi-stage, runtime = debian:trixie-slim
    - `-full`: single-stage, runtime = elixir:1.16
 
 ---
@@ -82,18 +82,18 @@ You want **three** base-image configurations across the suite:
 
 | Base              | Description                    | Current use                          | Naming suffix |
 |-------------------|--------------------------------|--------------------------------------|---------------|
-| **bookworm-slim** | Minimal Debian runtime         | Erlang, Elixir (multi-stage)         | `-bw` or omit for Erlang |
+| **trixie-slim** | Minimal Debian runtime         | Erlang, Elixir (multi-stage)         | `-bw` or omit for Erlang |
 | **elixir:1.16**   | Full Elixir image as runtime   | Not used today (we switched to bw)   | `-full`       |
 | **Alpine**        | Gleam official image           | Gleam only                           | `-alpine` or omit for Gleam |
 
 To get “all three bases with all different configurations”:
 
 1. **Erlang**  
-   - Keep as-is: all use bookworm-slim.  
+   - Keep as-is: all use trixie-slim.  
    - Optionally rename to the new scheme (e.g. st-erlang-cowboy-27) and document “Erlang = bw”.
 
 2. **Elixir**  
-   - **Current**: All Elixir containers use multi-stage → bookworm-slim.  
+   - **Current**: All Elixir containers use multi-stage → trixie-slim.  
    - **Add**: For each important Elixir container (cowboy, phoenix, pure, index – static and dynamic, and websocket if desired), add a **second** image that uses `FROM elixir:1.16` (no multi-stage) and the same app code.  
    - Name the new ones with `-full`, e.g. `st-elixir-cowboy-1-16-full`.  
    - Name the existing ones with `-bw`, e.g. `st-elixir-cowboy-1-16-bw`, so the graph clearly shows base.
@@ -139,13 +139,13 @@ and can compare “same stack, different base” (e.g. st-elixir-cowboy-1-16-bw 
 
 ### 4.6 Optional: metadata file for display
 
-- [ ] Optional: Add `benchmarks/.../container-name/metadata.json` with e.g. `{"base": "bookworm-slim", "display_label": "Erlang Cowboy 27 (bw)"}`. Measurement scripts could read it and add a "Display Label" or "Base Image" column to the CSV so the GUI can use a friendlier label without changing the image name.
+- [ ] Optional: Add `benchmarks/.../container-name/metadata.json` with e.g. `{"base": "trixie-slim", "display_label": "Erlang Cowboy 27 (bw)"}`. Measurement scripts could read it and add a "Display Label" or "Base Image" column to the CSV so the GUI can use a friendlier label without changing the image name.
 
 ---
 
 ## 5. Suggested order of work
 
-1. **Define final naming** (agree on scheme and whether to use `-bw` for all bookworm-slim or only for Elixir).
+1. **Define final naming** (agree on scheme and whether to use `-bw` for all trixie-slim or only for Elixir).
 2. **Rename existing containers** to the new scheme (and update docs). This is a one-time, mechanical rename.
 3. **Add full-Elixir variants** for the Elixir containers you care about (e.g. st/dy-elixir-cowboy-1-16-full, st/dy-elixir-phoenix-1-8-full, st/dy-elixir-pure-1-16-full, st/dy-elixir-index-1-16-full, and optionally ws-*).
 4. **Update BENCHMARKS_AUDIT.md** (and any other docs) with the new names and base-image column.
@@ -156,5 +156,5 @@ and can compare “same stack, different base” (e.g. st-elixir-cowboy-1-16-bw 
 ## 6. Summary
 
 - **What we have**: Single port, config parity, auto-discovery, CSV/graph by container name.
-- **What we need for “unified” and clear graphs**: (1) a **consistent naming scheme** that encodes type, language, framework, version, and base; (2) **three base variants** implemented as: Erlang/Gleam as today (bw / alpine), Elixir split into **-bw** (bookworm-slim) and **-full** (elixir:1.16).
+- **What we need for “unified” and clear graphs**: (1) a **consistent naming scheme** that encodes type, language, framework, version, and base; (2) **three base variants** implemented as: Erlang/Gleam as today (bw / alpine), Elixir split into **-bw** (trixie-slim) and **-full** (elixir:1.16).
 - **Missing pieces**: Rename to the new scheme, add full-Elixir image variants, update docs. Optionally add metadata for richer graph labels later.

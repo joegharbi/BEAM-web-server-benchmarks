@@ -4,20 +4,20 @@ All benchmark containers use **three minimal base types**, built with the **same
 
 ---
 
-## 1. Minimal bases (Bookworm-slim / Alpine)
+## 1. Minimal bases (Trixie-slim / Alpine)
 
-Every runtime image is **debian:bookworm-slim** plus only what the app needs. No full Erlang/Elixir image as runtime.
+Every runtime image is **debian:trixie-slim** plus only what the app needs. No full Erlang/Elixir image as runtime.
 
 | Base type | Final image contents | Used by |
 |-----------|----------------------|--------|
-| **Minimal Erlang** | bookworm-slim + same apt deps + `/usr/local/lib/erlang` only | Erlang apps (cowboy, pure, index) |
-| **Minimal Yaws** | bookworm-slim + same apt deps + yaws (two-stage: builder prepares config/content) | Yaws (static, dynamic, websocket) |
-| **Minimal Elixir** | bookworm-slim + same apt deps + Erlang + Elixir + Hex (`.mix`) | Elixir apps (cowboy, phoenix, pure, index) |
+| **Minimal Erlang** | trixie-slim + same apt deps + `/usr/local/lib/erlang` only | Erlang apps (cowboy, pure, index) |
+| **Minimal Yaws** | trixie-slim + same apt deps + yaws (two-stage: builder prepares config/content) | Yaws (static, dynamic, websocket) |
+| **Minimal Elixir** | trixie-slim + same apt deps + Erlang + Elixir + Hex (`.mix`) | Elixir apps (cowboy, phoenix, pure, index) |
 | **Minimal Gleam** | Alpine + same apk deps + Erlang + Gleam binary (no compiler, no build) | Gleam apps (mist, index) |
 
 So:
-- **One common OS** for Erlang/Elixir/Yaws: `debian:bookworm-slim`. **Gleam**: `alpine` (no Debian Gleam image yet).
-- **Same apt list** (Debian): `libncurses5`, `libssl3`, `ca-certificates` (then clean). **Same apk list** (Gleam): `openssl`, `ncurses-libs`, `ca-certificates`, `libgcc`, `libstdc++`.
+- **One common OS** for Erlang/Elixir/Yaws: `debian:trixie-slim`. **Gleam**: `alpine` (no Debian Gleam image yet).
+- **Same apt list** (Debian): `libncurses6`, `libssl3t64`, `ca-certificates` (then clean). **Same apk list** (Gleam): `openssl`, `ncurses-libs`, `ca-certificates`, `libgcc`, `libstdc++`.
 - **Only the runtime layer differs**: Erlang only, or Erlang+Elixir, or system packages, or Erlang+Gleam binary.
 
 That gives comparable, minimal images and similar footprint.
@@ -35,10 +35,10 @@ Stage 1 (builder)
   ... install build tools, copy source, compile ...
 
 Stage 2 (runtime) — same for all
-  FROM debian:bookworm-slim
+  FROM debian:trixie-slim
   RUN apt-get update && apt-get install -y \
-      libncurses5 \
-      libssl3 \
+      libncurses6 \
+      libssl3t64 \
       ca-certificates \
       && apt-get clean && rm -rf /var/lib/apt/lists/*
   COPY --from=builder <only what's needed for runtime>
@@ -50,12 +50,12 @@ Stage 2 (runtime) — same for all
 ```
 
 Rules:
-- **Single final stage**: always `FROM debian:bookworm-slim`.
+- **Single final stage**: always `FROM debian:trixie-slim`.
 - **Same apt packages** in that stage (no extra packages unless strictly required).
 - **No build tools** in the final image; copy only runtime (Erlang beams, Elixir libs, or app release).
 - **Same order**: apt → copy runtime → env → workdir → app → expose → cmd.
 
-**Yaws** uses the same two-stage pattern: Stage 1 (builder) prepares config and content (and compiles the WebSocket handler for ws); Stage 2 is bookworm-slim + same apt list + yaws, COPY config/content from builder. **Gleam** uses the same two-stage pattern but Stage 2 is Alpine with the same apk deps and COPY-only runtime (Erlang + Gleam binary + app).
+**Yaws** uses the same two-stage pattern: Stage 1 (builder) prepares config and content (and compiles the WebSocket handler for ws); Stage 2 is trixie-slim + same apt list + yaws, COPY config/content from builder. **Gleam** uses the same two-stage pattern but Stage 2 is Alpine with the same apk deps and COPY-only runtime (Erlang + Gleam binary + app).
 
 ---
 
@@ -74,7 +74,7 @@ Proposed pattern:
 - **framework**: `cowboy` | `phoenix` | `pure` | `index` | `yaws` | `mist`
 - **version**: e.g. `27`, `1-16`, `1-8`, `1-0`
 
-Examples (all minimal, bookworm-slim except Gleam):
+Examples (all minimal, trixie-slim except Gleam):
 
 | Container name | Base type | Meaning |
 |----------------|-----------|--------|
@@ -85,20 +85,20 @@ Examples (all minimal, bookworm-slim except Gleam):
 | st-erlang-yaws-27 | Minimal Yaws (two-stage, same pattern) | Static, Erlang stack, Yaws |
 | st-gleam-mist-1-0 | Minimal Gleam (Alpine; two-stage, same pattern) | Static, Gleam, Mist |
 
-So from the name you see: **language = which minimal base** (erlang → minimal Erlang, elixir → minimal Elixir, yaws → bookworm-slim + system Yaws).
+So from the name you see: **language = which minimal base** (erlang → minimal Erlang, elixir → minimal Elixir, yaws → trixie-slim + system Yaws).
 
 ---
 
 ## 4. Same approximate footprint
 
-- **Same base OS**: bookworm-slim (Erlang/Elixir/Yaws); Alpine (Gleam).
+- **Same base OS**: trixie-slim (Erlang/Elixir/Yaws); Alpine (Gleam).
 - **Same apt/apk set**: one line, same packages, then clean.
 - **Runtime**: only BEAM runtime + app, no compilers or build deps.
 
 So:
-- Erlang-only images: bookworm-slim + erlang lib + app (smallest).
-- Elixir images: bookworm-slim + erlang + elixir + .mix + app (larger but still minimal).
-- Yaws: bookworm-slim + yaws (two-stage: builder prepares config/content; runtime copies from builder).
+- Erlang-only images: trixie-slim + erlang lib + app (smallest).
+- Elixir images: trixie-slim + erlang + elixir + .mix + app (larger but still minimal).
+- Yaws: trixie-slim + yaws (two-stage: builder prepares config/content; runtime copies from builder).
 - Gleam: Alpine + erlang + gleam binary + app (two-stage: build on Gleam image, copy to minimal Alpine).
 
 Image sizes will sit in a narrow band per base type; we can document expected ranges and check in CI later.
@@ -107,7 +107,7 @@ Image sizes will sit in a narrow band per base type; we can document expected ra
 
 ## 5. Summary
 
-- **Four minimal bases**: Minimal Erlang, Minimal Yaws, Minimal Elixir (all bookworm-slim, same two-stage pattern); Minimal Gleam (Alpine, same two-stage pattern).
+- **Four minimal bases**: Minimal Erlang, Minimal Yaws, Minimal Elixir (all trixie-slim, same two-stage pattern); Minimal Gleam (Alpine, same two-stage pattern).
 - **Unification**: Same stages (builder → minimal runtime), same apt/apk list per base, copy-only runtime, no build tools in final image.
 - **Naming**: Folder = container name; pattern `st-erlang-cowboy-27` / `dy-elixir-cowboy-1-16` so the name encodes type, language (base), framework, and version.
 
@@ -129,11 +129,11 @@ COPY mix.exs ./
 COPY lib ./lib
 RUN mix deps.get --only prod && mix compile
 
-# Stage 2: minimal runtime (same for all — bookworm-slim + same apt)
-FROM debian:bookworm-slim
+# Stage 2: minimal runtime (same for all — trixie-slim + same apt)
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y \
-    libncurses5 \
-    libssl3 \
+    libncurses6 \
+    libssl3t64 \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -156,7 +156,7 @@ RUN chmod +x /start.sh
 CMD ["/start.sh"]
 ```
 
-**Minimal Erlang** containers use the same Stage 2 base (bookworm-slim + same apt), then only `COPY --from=builder /usr/local/lib/erlang` and app beams/release — no Elixir.
+**Minimal Erlang** containers use the same Stage 2 base (trixie-slim + same apt), then only `COPY --from=builder /usr/local/lib/erlang` and app beams/release — no Elixir.
 
 **Minimal Gleam** containers use the same two-stage pattern but Stage 2 is Alpine:
 

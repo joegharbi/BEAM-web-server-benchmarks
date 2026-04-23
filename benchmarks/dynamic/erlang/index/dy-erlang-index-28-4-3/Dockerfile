@@ -30,7 +30,7 @@ RUN echo '-module(hello).' > /app/hello.erl && \
 # Compile the Erlang app
 RUN erlc -o /app /app/hello.erl
 
-# Stage 2: minimal runtime — bookworm-slim + same apt list as all containers
+# Stage 2: minimal runtime — trixie-slim + same apt list as all containers
 FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \

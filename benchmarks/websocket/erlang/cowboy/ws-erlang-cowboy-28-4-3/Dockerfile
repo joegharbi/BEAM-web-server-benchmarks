@@ -22,7 +22,7 @@ RUN rebar3 get-deps && \
 # Build release
 RUN rebar3 as prod release
 
-# Stage 2: minimal runtime — bookworm-slim + same apt list as all containers
+# Stage 2: minimal runtime — trixie-slim + same apt list as all containers
 FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \

@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.3 (runtime OS cohort unification)
+
+- **Unified Debian runtime cohort**: All non-Gleam benchmark Dockerfiles now use `debian:trixie-slim` in runtime stages to remove Bookworm/Trixie split in measured containers.
+- **Aligned Debian runtime libs**: Runtime apt dependency set was normalized to Trixie-compatible packages (`libncurses6`, `libssl3t64`, `ca-certificates`) across Erlang, Elixir, and Yaws benchmarks.
+- **Consistency cleanup**: Legacy Dockerfile/runtime inconsistencies between old and latest lanes were standardized so benchmark infrastructure conditions are uniform across cohorts.
+
 ## v2.2 (unified naming and minimal bases)
 
 - **Unified container naming**: All containers renamed to `<type>-<language>-<framework>-<version>` (e.g. `st-erlang-cowboy-27`, `dy-elixir-pure-1-16`, `ws-erlang-yaws-27`) so graphs and CSVs are self-explanatory.

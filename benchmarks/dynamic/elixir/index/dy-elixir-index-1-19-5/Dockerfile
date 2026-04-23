@@ -15,7 +15,7 @@ COPY lib ./lib
 RUN mix deps.get --only prod && \
     mix compile
 
-# Final stage: same debian:bookworm-slim base as Erlang benchmarks
+# Final stage: same debian:trixie-slim base as Erlang benchmarks
 FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \

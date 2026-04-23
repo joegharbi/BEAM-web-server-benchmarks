@@ -28,17 +28,17 @@ The **measurement pipeline** (start Scaphandre → start container → send load
 
 | Language / Stack | Current base | Runtime size / distro |
 |------------------|--------------|------------------------|
-| **Erlang** (cowboy, pure, index) | `erlang:X` → `debian:bookworm-slim` | Minimal: only Erlang copied into slim Debian |
+| **Erlang** (cowboy, pure, index) | `erlang:X` → `debian:trixie-slim` | Minimal: only Erlang copied into slim Debian |
 | **Elixir** (cowboy, phoenix, pure) | `elixir:1.16` directly | Full Elixir image (Erlang + Elixir, Debian-based) |
 | **Gleam** | `ghcr.io/gleam-lang/gleam:v1.14.0-erlang-alpine` | Alpine-based, different distro |
-| **Yaws** | `debian:bookworm-slim` + apt install yaws | System Erlang/Yaws, no OTP version control |
+| **Yaws** | `debian:trixie-slim` + apt install yaws | System Erlang/Yaws, no OTP version control |
 
 Implication: different base images mean different system libs, kernels, and baseline resource use. Energy differences may reflect base-image choice, not only the server implementation.
 
 Recommendation:
 
 - Use a **common base strategy** for BEAM benchmarks:
-  - Erlang: `erlang:27` → `debian:bookworm-slim` (keep current approach).
+  - Erlang: `erlang:27` → `debian:trixie-slim` (keep current approach).
   - Elixir: build on `erlang:27` (or the chosen Erlang base), then add Elixir in the build stage. Final image: same slim Debian + Erlang + Elixir runtime only.
   - Gleam: consider `erlang:27`-based image instead of Alpine for consistency with Erlang/Elixir.
 - Create **shared base images** if desired:
