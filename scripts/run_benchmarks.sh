@@ -16,6 +16,18 @@ else
     PYTHON_PATH="python3"
 fi
 
+# Benchmark root directory (default: ./benchmarks)
+# Override with BENCHMARKS_DIR=/path/to/benchmarks
+BENCHMARKS_DIR="${BENCHMARKS_DIR:-./benchmarks}"
+if [[ "$BENCHMARKS_DIR" != /* ]]; then
+    BENCHMARKS_DIR="$REPO_ROOT/$BENCHMARKS_DIR"
+fi
+if [ ! -d "$BENCHMARKS_DIR" ]; then
+    echo "[ERROR] Benchmarks directory not found: $BENCHMARKS_DIR"
+    echo "Set BENCHMARKS_DIR to a valid path (default: ./benchmarks)."
+    exit 1
+fi
+
 # Check for help first, before any other processing
 case "${1:-}" in
     "help"|"--help"|"-h")
@@ -30,6 +42,7 @@ case "${1:-}" in
         echo "  --quick     Run quick benchmarks with reduced parameters"
         echo "  --super-quick Run super quick benchmarks with single test per type"
         echo "  --single IMAGE  Run a single server (e.g. --single ws-erlang-yaws-27)"
+        echo "  --bench PATH    Benchmark root directory (default: ./benchmarks)"
         echo "  clean       Clean repository to fresh state"
         echo ""
         echo "Examples:"
@@ -37,12 +50,14 @@ case "${1:-}" in
         echo "  $0 static             # Run all static containers"
         echo "  $0 dynamic dy-erlang-pure-27   # Run specific container(s)"
         echo "  $0 --single ws-erlang-yaws-27   # Run single server (type auto-detected)"
+        echo "  $0 --bench ./benchmarks_old static   # Run from custom benchmark root"
         echo "  $0 --quick static     # Quick static benchmarks"
         echo ""
         echo "Port Assignment:"
         echo "  - Fixed host port: ${HOST_PORT:-8001}"
         echo "  - Container port determined from Dockerfile EXPOSE directive"
         echo "  - Default container port: 80"
+        echo "  - Benchmark root: ${BENCHMARKS_DIR}"
         exit 0
         ;;
     "concurrency")
@@ -119,7 +134,7 @@ print_status() {
 # Find container dir by image name (benchmarks/type/language/framework/container-name)
 find_container_dir() {
     local image_name="$1"
-    find ./benchmarks -type d -name "$image_name" -exec test -f {}/Dockerfile \; -print 2>/dev/null | head -1
+    find "$BENCHMARKS_DIR" -type d -name "$image_name" -exec test -f {}/Dockerfile \; -print 2>/dev/null | head -1
 }
 
 # Function to get container port mapping based on Dockerfile EXPOSE directive
@@ -144,13 +159,15 @@ function discover_containers() {
     local discovered=()
     local base=""
     case $container_type in
-        "static")  base="./benchmarks/static" ;;
-        "dynamic") base="./benchmarks/dynamic" ;;
-        "websocket") base="./benchmarks/websocket" ;;
+        "static")  base="$BENCHMARKS_DIR/static" ;;
+        "dynamic") base="$BENCHMARKS_DIR/dynamic" ;;
+        "websocket") base="$BENCHMARKS_DIR/websocket" ;;
     esac
-    [ -n "$base" ] && for d in $(find "$base" -type d -exec test -f {}/Dockerfile \; -print 2>/dev/null); do
-        [ -n "$d" ] && discovered+=("$(basename "$d")")
-    done
+    if [ -n "$base" ]; then
+        while IFS= read -r d; do
+            [ -n "$d" ] && discovered+=("$(basename "$d")")
+        done < <(find "$base" -type d -exec test -f {}/Dockerfile \; -print 2>/dev/null)
+    fi
     echo "${discovered[@]}"
 }
 
@@ -173,16 +190,76 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 QUICK_BENCH=0
 SUPER_QUICK_BENCH=0
 args=()
-for arg in "$@"; do
+while [[ $# -gt 0 ]]; do
+    arg="$1"
     if [[ "$arg" == "--quick" ]]; then
         QUICK_BENCH=1
+        shift
     elif [[ "$arg" == "--super-quick" ]]; then
         SUPER_QUICK_BENCH=1
+        shift
+    elif [[ "$arg" == "--bench" ]]; then
+        if [[ -z "${2:-}" ]]; then
+            echo -e "${RED}[ERROR]${NC} --bench requires a path argument"
+            exit 1
+        fi
+        BENCHMARKS_DIR="$2"
+        if [[ "$BENCHMARKS_DIR" != /* ]]; then
+            BENCHMARKS_DIR="$REPO_ROOT/$BENCHMARKS_DIR"
+        fi
+        if [ ! -d "$BENCHMARKS_DIR" ]; then
+            echo -e "${RED}[ERROR]${NC} Benchmarks directory not found: $BENCHMARKS_DIR"
+            exit 1
+        fi
+        shift 2
     else
         args+=("$arg")
+        shift
     fi
 done
 set -- "${args[@]}"
+
+# Help/short-info check after option parsing (supports e.g. --bench PATH --help)
+case "${1:-}" in
+    "help"|"--help"|"-h")
+        echo "Usage: $0 [TYPE] [IMAGES...] [OPTIONS]"
+        echo ""
+        echo "Types:"
+        echo "  static      Run static container benchmarks"
+        echo "  dynamic     Run dynamic container benchmarks"
+        echo "  websocket   Run WebSocket benchmarks"
+        echo ""
+        echo "Options:"
+        echo "  --quick     Run quick benchmarks with reduced parameters"
+        echo "  --super-quick Run super quick benchmarks with single test per type"
+        echo "  --single IMAGE  Run a single server (e.g. --single ws-erlang-yaws-27)"
+        echo "  --bench PATH    Benchmark root directory (default: ./benchmarks)"
+        echo "  clean       Clean repository to fresh state"
+        echo ""
+        echo "Examples:"
+        echo "  $0                    # Run all benchmarks"
+        echo "  $0 static             # Run all static containers"
+        echo "  $0 dynamic dy-erlang-pure-27   # Run specific container(s)"
+        echo "  $0 --single ws-erlang-yaws-27   # Run single server (type auto-detected)"
+        echo "  $0 --bench ./benchmarks_old static   # Run from custom benchmark root"
+        echo "  $0 --quick static     # Quick static benchmarks"
+        echo ""
+        echo "Port Assignment:"
+        echo "  - Fixed host port: ${HOST_PORT:-8001}"
+        echo "  - Container port determined from Dockerfile EXPOSE directive"
+        echo "  - Default container port: 80"
+        echo "  - Benchmark root: ${BENCHMARKS_DIR}"
+        exit 0
+        ;;
+    "concurrency")
+        echo "Run Concurrency: test increasing client counts with fixed payload size."
+        exit 0
+        ;;
+    "payload")
+        echo "Run Payload: test increasing payload sizes with fixed client count."
+        exit 0
+        ;;
+esac
 
 RUN_ALL=1
 TARGET_TYPE=""
@@ -200,7 +277,7 @@ if [[ $# -gt 0 ]]; then
         SINGLE_IMAGE="$2"
         SINGLE_DIR=$(find_container_dir "$SINGLE_IMAGE")
         if [[ -z "$SINGLE_DIR" ]]; then
-            echo -e "${RED}[ERROR]${NC} Container '$SINGLE_IMAGE' not found under benchmarks/"
+            echo -e "${RED}[ERROR]${NC} Container '$SINGLE_IMAGE' not found under $BENCHMARKS_DIR"
             echo "Use the Docker image name (e.g. ws-erlang-yaws-27, dy-erlang-pure-27, st-erlang-cowboy-27)"
             exit 1
         fi

@@ -24,9 +24,9 @@ function clean_benchmark_docker_images() {
     image_names=()
     for type_dir in ./benchmarks/*/; do
         [ -d "$type_dir" ] || continue
-        for d in $(find_container_dirs "$type_dir"); do
+        while IFS= read -r d; do
             [ -n "$d" ] && image_names+=("$(basename "$d")")
-        done
+        done < <(find_container_dirs "$type_dir")
     done
 
     # Remove containers using discovered image names
@@ -46,14 +46,14 @@ function clean_benchmark_docker_images() {
 # Build Docker images for a benchmark type (static, dynamic, websocket, or any benchmarks/* subdir)
 function process_container_folder() {
     local folder="$1"
-    for d in $(find_container_dirs "$folder"); do
+    while IFS= read -r d; do
         [ -n "$d" ] || continue
         local name=$(basename "$d")
         echo "Building Docker image for $d/Dockerfile as $name"
         if ! docker build -t "$name" "$d"; then
             build_failures+=("$name")
         fi
-    done
+    done < <(find_container_dirs "$folder")
 }
 
 # Track build failures

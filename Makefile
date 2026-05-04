@@ -6,6 +6,7 @@
 # --- Configuration ---
 VENV_NAME ?= srv
 VENV_PATH = $(VENV_NAME)/bin/activate
+BENCH_DIR ?= benchmarks
 
 .PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-env clean-nuclear build run setup graph validate check-health build-test-run run-single clean-all clean-build-run clean-all-build-run test
 
@@ -125,13 +126,13 @@ run: check-env ## Run all benchmarks (static, dynamic, websocket)
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	bash scripts/run_benchmarks.sh
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/run_benchmarks.sh
 
 run-single: check-env ## Run a single server (e.g. make run-single SERVER=dy-erlang-pure-27)
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	bash scripts/run_benchmarks.sh --single $(SERVER)
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/run_benchmarks.sh --single $(SERVER)
 
 # Pattern rule: make run-static, run-dynamic, run-websocket, run-quick, run-grpc, etc.
 # Adding benchmarks/<type>/ + measure script gives you make run-<type> automatically.
@@ -139,7 +140,7 @@ run-%: check-env
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	bash scripts/run_benchmarks.sh --$*
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/run_benchmarks.sh --$*
 
 check-health: check-env ## Health check only: run health check on all already-built containers (no build). Log in logs/test_*.log.
 	@for v in ./*/bin/activate; do \
@@ -262,6 +263,10 @@ help:  ## Show this help message
 	@printf "  %-22s %s\n" "run-single" "Run a single server (e.g. SERVER=dy-erlang-pure-27)"
 	@printf "  %-22s %s\n" "run-static/dynamic/websocket" "Run a specific type only"
 	@printf "  %-22s %s\n" "run-<type>" "New types (e.g. gRPC): add benchmarks/<type>/ and measure script → make run-<type> works"
+	@printf "\n"
+	@printf "${CYAN}Benchmark Path Override:${NC}\n"
+	@printf "  %-22s %s\n" "BENCH_DIR=path" "Override benchmark root (default: benchmarks)"
+	@printf "  %-22s %s\n" "example" "make run BENCH_DIR=benchmarks_old"
 	@printf "\n"
 	@printf "${YELLOW}Validation & Health:${NC}\n"
 	@printf "  %-22s %s\n" "check-tools" "Check for required tools (Python, pip, Docker, scaphandre)"
