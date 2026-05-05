@@ -90,9 +90,9 @@ fi
 # Print summary only for actions that actually happened
 if [ "$did_build" -eq 1 ]; then
     if [ ${#build_failures[@]} -eq 0 ]; then
-        echo "\n[BUILD SUMMARY] All images built successfully."
+        printf "\n[BUILD SUMMARY] All images built successfully.\n"
     else
-        echo "\n[BUILD SUMMARY] The following images failed to build:"
+        printf "\n[BUILD SUMMARY] The following images failed to build:\n"
         for img in "${build_failures[@]}"; do
             echo "  - $img"
         done
@@ -100,5 +100,5 @@ if [ "$did_build" -eq 1 ]; then
 fi
 
 if [ "$did_clean" -eq 1 ]; then
-    echo "\n[CLEAN SUMMARY] Benchmark Docker images/containers cleanup completed."
+    printf "\n[CLEAN SUMMARY] Benchmark Docker images/containers cleanup completed.\n"
 fi
