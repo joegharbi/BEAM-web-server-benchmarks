@@ -17,7 +17,7 @@ COPY src ./src
 RUN gleam deps download && gleam build
 
 # Stage 2: minimal runtime — Alpine + same base deps as other Gleam containers (no build tools)
-FROM alpine:3.20
+FROM alpine:3.23
 
 RUN apk add --no-cache \
     openssl \
