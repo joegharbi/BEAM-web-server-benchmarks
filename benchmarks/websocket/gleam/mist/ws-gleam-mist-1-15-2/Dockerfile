@@ -1,5 +1,5 @@
 # Minimal Gleam base: same two-stage pattern as other Gleam benchmarks; websocket echo on /ws
-# Stage 1: build on language image (Docker Hub + explicit Gleam install)
+# Stage 1: build on language image
 FROM erlang:28-alpine AS builder
 
 WORKDIR /app
@@ -16,8 +16,8 @@ COPY src ./src
 
 RUN gleam deps download && gleam build
 
-# Stage 2: minimal runtime — Alpine + same base deps as other Gleam containers
-FROM alpine:3.20
+# Stage 2: minimal runtime on matching Alpine major/minor
+FROM alpine:3.23
 
 RUN apk add --no-cache \
     openssl \
