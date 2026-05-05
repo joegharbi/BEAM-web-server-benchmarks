@@ -5,7 +5,7 @@ FROM erlang:26 AS builder
 # Set working directory
 WORKDIR /app
 
-# Create a simple Erlang HTTP server to serve index.html
+# Create a simple Erlang HTTP server with HTML embedded in code (pure variant)
 RUN echo '-module(hello).' > /app/hello.erl && \
     echo '-export([main/1]).' >> /app/hello.erl && \
     echo 'main(_Args) ->' >> /app/hello.erl && \
@@ -22,8 +22,10 @@ RUN echo '-module(hello).' > /app/hello.erl && \
     echo '            accept_loop(Sock)' >> /app/hello.erl && \
     echo '    end.' >> /app/hello.erl && \
     echo 'handle(Conn) ->' >> /app/hello.erl && \
-    echo '    {ok, Html} = file:read_file("/var/www/html/index.html"),' >> /app/hello.erl && \
-    echo '    Response = <<<<"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n">>/binary, Html/binary>>,' >> /app/hello.erl && \
+    echo '    {{Y,Mo,D},{H,Mi,S}} = calendar:local_time(),' >> /app/hello.erl && \
+    echo '    TimeBin = iolist_to_binary(io_lib:format("~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B", [Y,Mo,D,H,Mi,S])),' >> /app/hello.erl && \
+    echo '    Html = <<"<!DOCTYPE html><html><head><title>Energy Test</title></head><body><h1>Hello, Energy Test!</h1><p>Current time: ", TimeBin/binary, "</p></body></html>">>,' >> /app/hello.erl && \
+    echo '    Response = <<<<"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n">>/binary, Html/binary>>,' >> /app/hello.erl && \
     echo '    gen_tcp:send(Conn, Response),' >> /app/hello.erl && \
     echo '    gen_tcp:close(Conn).' >> /app/hello.erl
 
@@ -48,11 +50,6 @@ ENV ERLANG_HOME="/usr/local/lib/erlang"
 
 # Set working directory
 WORKDIR /app
-
-# Create the document root directory
-RUN mkdir -p /var/www/html
-
-COPY index.html /var/www/html/index.html
 
 # Copy the compiled beam file from builder stage
 COPY --from=builder /app/hello.beam /app/hello.beam

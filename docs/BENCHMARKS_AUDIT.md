@@ -12,9 +12,9 @@ This document summarizes the **BEAM benchmark set** in this repository. This rep
 
 See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for base-image and build-pattern details.
 
-## Current layout (58 containers)
+## Current layout (62 containers)
 
-### Static (25)
+### Static (26)
 
 | Language | Framework/Variant | Container(s) | Notes |
 |----------|-------------------|--------------|--------|
@@ -27,9 +27,10 @@ See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for bas
 | Elixir  | phoenix | `st-elixir-phoenix-1-8`, `st-elixir-phoenix-1-8-5` | Includes latest Phoenix lane |
 | Elixir  | pure    | `st-elixir-pure-1-16`, `st-elixir-pure-1-19-5` | Includes latest Elixir lane |
 | Gleam   | index   | `st-gleam-index-1-0`, `st-gleam-index-1-15-2` | Serves index HTML file |
+| Gleam   | pure    | `st-gleam-pure-1-15-2` | HTML in code |
 | Gleam   | mist    | `st-gleam-mist-1-0`, `st-gleam-mist-1-15-2` | Includes latest Gleam/Mist lane |
 
-### Dynamic (25)
+### Dynamic (26)
 
 | Language | Framework/Variant | Container(s) | Notes |
 |----------|-------------------|--------------|--------|
@@ -42,31 +43,32 @@ See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for bas
 | Elixir  | phoenix | `dy-elixir-phoenix-1-8`, `dy-elixir-phoenix-1-8-5` | Includes latest Phoenix lane |
 | Elixir  | pure    | `dy-elixir-pure-1-16`, `dy-elixir-pure-1-19-5` | Includes latest Elixir lane |
 | Gleam   | index   | `dy-gleam-index-1-0`, `dy-gleam-index-1-15-2` | ✓ |
+| Gleam   | pure    | `dy-gleam-pure-1-15-2` | HTML in code |
 | Gleam   | mist    | `dy-gleam-mist-1-0`, `dy-gleam-mist-1-15-2` | Includes latest Gleam/Mist lane |
 
-### WebSocket (8)
+### WebSocket (10)
 
 | Language | Framework/Variant | Container(s) | Notes |
 |----------|-------------------|--------------|--------|
 | Erlang  | cowboy | `ws-erlang-cowboy-27`, `ws-erlang-cowboy-28-4-3` | Includes latest OTP lane |
 | Erlang  | yaws   | `ws-erlang-yaws-27`, `ws-erlang-yaws-28-4-3` | Includes latest OTP lane |
 | Elixir  | cowboy | `ws-elixir-cowboy-1-16`, `ws-elixir-cowboy-1-19-5` | Includes latest Elixir lane |
-| Elixir  | phoenix | `ws-elixir-phoenix-1-8`, `ws-elixir-phoenix-1-8-5` | Includes latest Phoenix lane |
-| **Gleam** | — | **None** | **Missing** (could be added later if Mist/gramps WebSocket support is used) |
+| Elixir  | bandit | `ws-elixir-bandit-1-8-5` | Bandit + WebSockAdapter echo on `/ws` |
+| Gleam   | mist | `ws-gleam-mist-1-0`, `ws-gleam-mist-1-15-2` | WebSocket echo on `/ws` |
 
 ## Consistency check
 
-- All 58 directories with a `Dockerfile` have **EXPOSE 80**.
+- All 62 directories with a `Dockerfile` have **EXPOSE 80**.
 - Folder names match the image names used by scripts (auto-discovery).
 - Static and dynamic cover **Erlang, Elixir, Gleam** with the intended frameworks/variants; index and pure variants exist where documented.
-- WebSocket covers **Erlang** and **Elixir** only; **Gleam WebSocket is missing** (not required for scripts to run).
+- WebSocket covers **Erlang**, **Elixir**, and **Gleam** with `/ws` echo support.
 
 ## Results and graph naming convention
 
 Results use **container names only** (no benchmark paths in filenames or graphs).
 
 - **Folder**: `results/<timestamp>/` with subdirs `static/`, `dynamic/`, `websocket/`.
-- **File names**: One CSV per container, named by **image name** (e.g. `st-erlang-cowboy-27.csv`, `dy-elixir-pure-1-16.csv`, `ws-elixir-phoenix-1-8.csv`).
+- **File names**: One CSV per container, named by **image name** (e.g. `st-erlang-cowboy-27.csv`, `dy-elixir-pure-1-16.csv`, `ws-elixir-bandit-1-8-5.csv`).
 - **CSV column**: First column is **"Container Name"** with that same value.
 - **Graphs**: The GUI graph generator uses **"Container Name"** from the CSV (or the filename without `.csv`) as the series label in the legend.
 
@@ -87,7 +89,7 @@ From repo root:
    make setup    # create srv/ venv and install dependencies (uses srv/bin/python3 -m pip)
    ```
    If `make setup` fails with "Failed to create venv", install python3-venv and run again. If you have an existing broken `srv/` (e.g. no pip), run `make clean-env && make setup`.
-2. **Build**: Build all 58 images (already done if you see `[BUILD SUMMARY] All images built successfully`):
+2. **Build**: Build all 62 images (already done if you see `[BUILD SUMMARY] All images built successfully`):
    ```bash
    make build
    ```

@@ -18,6 +18,7 @@ logger = logging.getLogger()
 
 results_counter = Counter()
 runtime_data = {}
+results_lock = threading.Lock()
 
 def get_binary_path(binary_name):
     result = subprocess.run(["which", binary_name], capture_output=True, text=True, check=True)
@@ -48,14 +49,17 @@ def send_request(url, request_num, verbose=False):
         response = requests.get(url, timeout=5)
         if verbose:
             logger.debug(f'{url} "GET / HTTP/1.1" {response.status_code} {len(response.content)}')
-        if 200 <= response.status_code < 300:
-            results_counter['success'] += 1
-        else:
-            results_counter['failure'] += 1
+        with results_lock:
+            if 200 <= response.status_code < 300:
+                results_counter['success'] += 1
+            else:
+                results_counter['failure'] += 1
     except requests.exceptions.RequestException:
-        results_counter['failure'] += 1
+        with results_lock:
+            results_counter['failure'] += 1
     finally:
-        results_counter['total'] += 1
+        with results_lock:
+            results_counter['total'] += 1
 
 def cleanup_existing_container(container_name, docker_path):
     logger.info(f"Cleaning up any existing container named '{container_name}'...")
@@ -177,17 +181,15 @@ def collect_resources_docker_stats(container_name, stop_event, docker_path, inte
             mem_usage.append(0.0)
         time.sleep(interval)
         sample_count += 1
-    # Only consider non-zero samples for averages
-    non_zero_cpu = [x for x in cpu_usage if x > 0.0]
-    non_zero_mem = [x for x in mem_usage if x > 0.0]
-    cpu_avg = sum(non_zero_cpu) / len(non_zero_cpu) if non_zero_cpu else 0.0
+    cpu_avg = sum(cpu_usage) / len(cpu_usage) if cpu_usage else 0.0
     cpu_peak = max(cpu_usage) if cpu_usage else 0.0
-    cpu_total = sum(cpu_usage) if cpu_usage else 0.0
-    mem_avg = sum(non_zero_mem) / len(non_zero_mem) if non_zero_mem else 0.0
+    cpu_total = sum(cpu_usage) * interval if cpu_usage else 0.0  # cumulative CPU (%*s)
+    mem_avg = sum(mem_usage) / len(mem_usage) if mem_usage else 0.0
     mem_peak = max(mem_usage) if mem_usage else 0.0
-    mem_total = sum(mem_usage) if mem_usage else 0.0
+    mem_total = sum(mem_usage) * interval if mem_usage else 0.0  # cumulative memory (MB*s)
     return {'avg': cpu_avg, 'peak': cpu_peak, 'total': cpu_total}, \
            {'avg': mem_avg, 'peak': mem_peak, 'total': mem_total}
+
 
 def _pid_in_container(pid, container_id):
     """Check if pid belongs to container via /proc/pid/cgroup (fallback when Scaphandre reports container=null)."""
@@ -244,6 +246,7 @@ def parse_json_and_compute_energy(file_name, container_name, runtime, container_
     if number_samples == 0:
         logger.warning(f"No energy samples found for container '{container_name}' in {file_name}")
         return 0.0, 0.0, 0
+
     avg_power_watts = (total_power_microwatts / number_samples) * 1e-6
     total_energy_joules = avg_power_watts * runtime
     return total_energy_joules, avg_power_watts, number_samples

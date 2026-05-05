@@ -38,7 +38,7 @@ Step-by-step: `make setup` → `make build` → `make check-health` → `make ru
 Benchmark root can be overridden (default remains `benchmarks/`):
 
 ```bash
-make run BENCH_DIR=benchmarks_old
+make run BENCHMARKS_DIR=benchmarks
 ```
 
 ## Directory Structure

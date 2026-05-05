@@ -18,9 +18,5 @@ defmodule ElixirIndexDynamic.MixProject do
     ]
   end
 
-  defp deps do
-    [
-      {:plug_cowboy, "~> 2.7"}
-    ]
-  end
+  defp deps, do: []
 end

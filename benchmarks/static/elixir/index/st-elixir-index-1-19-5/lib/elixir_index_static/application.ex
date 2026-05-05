@@ -6,8 +6,7 @@ defmodule ElixirIndexStatic.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      {Plug.Cowboy, scheme: :http, plug: ElixirIndexStatic.Router,
-       options: [port: 80, transport_options: [num_acceptors: 8, max_connections: 100_000]]}
+      {Task, fn -> ElixirIndexStatic.Server.start(80) end}
     ]
 
     opts = [strategy: :one_for_one, name: ElixirIndexStatic.Supervisor]
