@@ -1,9 +1,7 @@
 import gleam/bytes_tree
 import gleam/erlang/process
 import gleam/http/request
-import gleam/http/request.{type Request}
 import gleam/http/response
-import gleam/http/response.{type Response}
 import gleam/option.{None}
 import mist.{type Connection, type ResponseData}
 
@@ -11,7 +9,7 @@ const index_html =
   "<!DOCTYPE html><html><head><title>WebSocket Gleam Mist</title></head><body><h1>WebSocket Gleam Mist Server</h1><p>Connect to /ws for WebSocket echo.</p></body></html>"
 
 pub fn main() {
-  let handler = fn(req: Request(Connection)) -> Response(ResponseData) {
+  let handler = fn(req: request.Request(Connection)) -> response.Response(ResponseData) {
     case request.path_segments(req) {
       ["ws"] ->
         mist.websocket(

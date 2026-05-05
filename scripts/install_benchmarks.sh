@@ -58,15 +58,19 @@ function process_container_folder() {
 
 # Track build failures
 build_failures=()
+did_clean=0
+did_build=0
 
 if [[ $# -gt 0 ]]; then
     for arg in "$@"; do
         case "$arg" in
             clean)
                 clean_benchmark_docker_images
+                did_clean=1
                 ;;
             *)
                 if [ -d "./benchmarks/$arg" ]; then
+                    did_build=1
                     process_container_folder "./benchmarks/$arg"
                 else
                     echo "Unknown type: $arg (no benchmarks/$arg/). Skipping."
@@ -76,18 +80,25 @@ if [[ $# -gt 0 ]]; then
     done
 else
     # Default: discover and build all types under benchmarks/
+    did_build=1
     for type_dir in ./benchmarks/*/; do
         [ -d "$type_dir" ] || continue
         process_container_folder "$type_dir"
     done
 fi
 
-# Print build summary
-if [ ${#build_failures[@]} -eq 0 ]; then
-    echo "\n[BUILD SUMMARY] All images built successfully."
-else
-    echo "\n[BUILD SUMMARY] The following images failed to build:"
-    for img in "${build_failures[@]}"; do
-        echo "  - $img"
-    done
+# Print summary only for actions that actually happened
+if [ "$did_build" -eq 1 ]; then
+    if [ ${#build_failures[@]} -eq 0 ]; then
+        echo "\n[BUILD SUMMARY] All images built successfully."
+    else
+        echo "\n[BUILD SUMMARY] The following images failed to build:"
+        for img in "${build_failures[@]}"; do
+            echo "  - $img"
+        done
+    fi
+fi
+
+if [ "$did_clean" -eq 1 ]; then
+    echo "\n[CLEAN SUMMARY] Benchmark Docker images/containers cleanup completed."
 fi
