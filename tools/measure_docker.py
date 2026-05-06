@@ -253,16 +253,13 @@ def parse_json_and_compute_energy(file_name, container_name, runtime, container_
 
 def save_results_to_csv(filename, results, total_energy, average_power, runtime, requests_per_second, total_samples, 
                        cpu_metrics, mem_metrics, num_cores, container_name, measurement_type, extra_fields=None):
-    if filename is None:
-        os.makedirs("results_docker", exist_ok=True)
-        filename = os.path.join("results_docker", f"{container_name}.csv")
-    
-    headers = ["Container Name", "Type", "Num CPUs", "Total Requests", "Successful Requests", "Failed Requests", "Execution Time (s)", "Requests/s",
+    extra_fields = extra_fields or {}
+    base_headers = ["Container Name", "Type", "Num CPUs", "Total Requests", "Successful Requests", "Failed Requests", "Execution Time (s)", "Requests/s",
                "Total Energy (J)", "Avg Power (W)", "Samples", "Avg CPU (%)", "Peak CPU (%)", "Total CPU (%*s)",
                "Avg Mem (MB)", "Peak Mem (MB)", "Total Mem (MB*s)"]
-    # Ensure num_cores is an int and not None
+    headers = base_headers + list(extra_fields.keys())
     num_cores_csv = int(num_cores) if num_cores is not None else 1
-    data = [[
+    new_row = [
         str(container_name),
         str(measurement_type),
         int(num_cores_csv),
@@ -280,20 +277,53 @@ def save_results_to_csv(filename, results, total_energy, average_power, runtime,
         float(mem_metrics['avg']),
         float(mem_metrics['peak']),
         float(mem_metrics['total'])
-    ]]
-    if extra_fields:
-        headers += list(extra_fields.keys())
-        for i, row in enumerate(data):
-            data[i] += list(extra_fields.values())
-    with open(filename, mode='a', newline='') as file:
-        writer = csv.writer(file)
-        if not os.path.isfile(filename) or os.stat(filename).st_size == 0:
-            writer.writerow(headers)
-        writer.writerows(data)
+    ] + list(extra_fields.values())
 
-def print_summary(results, total_energy, average_power, runtime, requests_per_second, cpu_metrics, mem_metrics, num_cores, output_json, output_csv, container_name):
+    if filename is None:
+        os.makedirs("results_docker", exist_ok=True)
+        filename = os.path.join("results_docker", f"{container_name}.csv")
+
+    if not os.path.isfile(filename) or os.stat(filename).st_size == 0:
+        with open(filename, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(headers)
+            writer.writerow(new_row)
+        return
+
+    with open(filename, mode='r', newline='') as file:
+        existing = list(csv.reader(file))
+    if not existing:
+        with open(filename, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(headers)
+            writer.writerow(new_row)
+        return
+
+    existing_header = existing[0]
+    if existing_header == headers:
+        with open(filename, mode='a', newline='') as file:
+            csv.writer(file).writerow(new_row)
+        return
+
+    # Older CSVs without new columns: rewrite with canonical header and padded rows.
+    migrated = []
+    for row in existing[1:]:
+        row_dict = {}
+        for i, key in enumerate(existing_header):
+            if i < len(row):
+                row_dict[key] = row[i]
+        migrated.append([row_dict.get(k, '') for k in headers])
+    migrated.append(new_row)
+    with open(filename, mode='w', newline='') as file:
+        w = csv.writer(file)
+        w.writerow(headers)
+        w.writerows(migrated)
+
+def print_summary(results, total_energy, average_power, runtime, requests_per_second, cpu_metrics, mem_metrics, num_cores, output_json, output_csv, container_name, http_max_workers_label=None):
     logger.info("=== Measurement Summary ===")
     logger.info(f"Container: {container_name}")
+    if http_max_workers_label is not None:
+        logger.info("HTTP max workers: %s", http_max_workers_label)
     logger.info(f"Total Requests: {results['total']}, Successful: {results['success']}, Failed: {results['failure']}")
     logger.info(f"Execution Time: {runtime:.2f} s, Requests/s: {requests_per_second:.2f}")
     logger.info(f"Energy: Total {total_energy:.2f} J, Avg Power {average_power:.2f} W")
@@ -309,7 +339,7 @@ def main():
     parser.add_argument('--port_mapping', type=str, default='8001:80', help="Port mapping (default: 8001:80)")
     parser.add_argument('--network', type=str, default='bridge', choices=['bridge', 'host'], help="Network mode (default: bridge)")
     parser.add_argument('--num_requests', type=int, default=500, help="Number of requests to send (default: 500)")
-    parser.add_argument('--max_workers', type=int, default=None, help="Max workers for ThreadPoolExecutor (default: None, uses system default)")
+    parser.add_argument('--max_workers', type=int, default=None, help="Max workers for ThreadPoolExecutor (default: None; CSV records System default when unset)")
     parser.add_argument('--output_csv', type=str, default=None, help="Output CSV file path (default: results_docker/<container_name>.csv)")
     parser.add_argument('--output_json', type=str, default=None, help="Output JSON file path (default: output/<timestamp>.json)")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging")
@@ -405,10 +435,13 @@ def main():
     )
     stop_server_container(container_name, docker_path)
     measurement_type = getattr(args, 'measurement_type', None) or "unknown"
+    http_workers_label = "System default" if args.max_workers is None else str(int(args.max_workers))
     save_results_to_csv(args.output_csv, results_counter, total_energy, average_power, runtime, requests_per_second, 
-                       int(total_samples), resource_results['cpu'], resource_results['mem'], num_cores, args.server_image, measurement_type)
+                       int(total_samples), resource_results['cpu'], resource_results['mem'], num_cores, args.server_image, measurement_type,
+                       extra_fields={"HTTP Max Workers": http_workers_label})
     print_summary(results_counter, total_energy, average_power, runtime, requests_per_second, 
-                  resource_results['cpu'], resource_results['mem'], num_cores, output_json, args.output_csv, container_name)
+                  resource_results['cpu'], resource_results['mem'], num_cores, output_json, args.output_csv, container_name,
+                  http_max_workers_label=http_workers_label)
 
 if __name__ == "__main__":
     main()

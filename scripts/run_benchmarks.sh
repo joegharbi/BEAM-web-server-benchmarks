@@ -44,7 +44,7 @@ case "${1:-}" in
         echo "  --single IMAGE  Run a single server (e.g. --single ws-erlang-yaws-27)"
         echo "  --bench PATH    Benchmark root directory (default: ./benchmarks)"
         echo "Environment:"
-        echo "  HTTP_MAX_WORKERS  Max HTTP client workers for measure_docker.py (default: unset/system default)"
+        echo "  HTTP_MAX_WORKERS  Max HTTP client workers for measure_docker.py (default: unset; CSV: System default)"
         echo "                    Applies to HTTP (static/dynamic) only; WebSocket is unaffected."
         echo "  clean       Clean repository to fresh state"
         echo ""
@@ -85,7 +85,7 @@ quick_http_requests=(1000 5000 10000)
 # Super-quick: single request count
 super_quick_http_requests=(1000)
 # Optional HTTP client worker pool size for reproducible HTTP runs.
-# If unset, measure_docker.py uses its own system default behavior (None).
+# If unset, measure_docker.py uses ThreadPoolExecutor default (None); CSV stores "System default".
 # Example override: HTTP_MAX_WORKERS=100 make run
 HTTP_MAX_WORKERS="${HTTP_MAX_WORKERS:-}"
 
@@ -280,7 +280,7 @@ case "${1:-}" in
         echo "  --single IMAGE  Run a single server (e.g. --single ws-erlang-yaws-27)"
         echo "  --bench PATH    Benchmark root directory (default: ./benchmarks)"
         echo "Environment:"
-        echo "  HTTP_MAX_WORKERS  Max HTTP client workers for measure_docker.py (default: unset/system default)"
+        echo "  HTTP_MAX_WORKERS  Max HTTP client workers for measure_docker.py (default: unset; CSV: System default)"
         echo "                    Applies to HTTP (static/dynamic) only; WebSocket is unaffected."
         echo "  clean       Clean repository to fresh state"
         echo ""
@@ -673,6 +673,11 @@ main() {
     start_sudo_keepalive
     print_status "INFO" "Starting benchmarks at $(date)"
     print_status "INFO" "Results will be saved to: $RESULTS_DIR"
+    if [ -n "$HTTP_MAX_WORKERS" ]; then
+        print_status "INFO" "HTTP client max workers: $HTTP_MAX_WORKERS (column \"HTTP Max Workers\" in static/dynamic CSVs)"
+    else
+        print_status "INFO" "HTTP client max workers: System default (column \"HTTP Max Workers\" in static/dynamic CSVs)"
+    fi
     printf "\n"
     if [[ $RUN_ALL -eq 1 ]]; then
         print_status "INFO" "Running all benchmarks..."

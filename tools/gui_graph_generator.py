@@ -269,6 +269,39 @@ def detect_csv_type(header):
         return "http"
     return "unknown"
 
+# HTTP CSV column from measure_docker.py (static/dynamic); WebSocket CSVs omit this.
+HTTP_MAX_WORKERS_CSV_COL = "HTTP Max Workers"
+
+
+def _normalize_http_max_workers_display(value):
+    """Unify legacy/alternate tokens with the canonical title-case label."""
+    s = (value or "").strip()
+    key = s.lower().replace(" ", "_")
+    if key == "system_default" or s.lower() == "system default":
+        return "System default"
+    return s
+
+
+def http_max_workers_plot_suffix(selected_files, file_types, headers_map, rows_map):
+    """Short title suffix when plotting HTTP CSVs that record client ThreadPoolExecutor size."""
+    vals = []
+    for f in selected_files:
+        if file_types.get(f) != "http":
+            continue
+        header = headers_map.get(f) or []
+        if HTTP_MAX_WORKERS_CSV_COL not in header:
+            continue
+        for r in rows_map.get(f) or []:
+            v = r.get(HTTP_MAX_WORKERS_CSV_COL)
+            if v is not None and str(v).strip():
+                vals.append(_normalize_http_max_workers_display(str(v).strip()))
+    if not vals:
+        return ""
+    uniq = sorted(set(vals), key=lambda x: (x != "System default", x.lower()))
+    if len(uniq) == 1:
+        return f" \u2014 HTTP max workers: {uniq[0]}"
+    return f" \u2014 HTTP max workers: mixed ({'; '.join(uniq)})"
+
 # WebSocket CSV: test subtypes and x-axis column names (from measure_websocket.py + run_benchmarks.sh)
 WS_SUBTYPE_CONCURRENCY = "concurrency"
 WS_SUBTYPE_PAYLOAD = "payload"
@@ -1022,7 +1055,10 @@ class BenchmarkGrapher(QMainWindow):
             x_axis_label = XAXIS_DISPLAY_NAMES.get(x_col, x_col) if x_col else "Test parameter"
         else:
             x_axis_label = "Test parameter"
-        self.ax.set_title(f"{metric} vs. {x_axis_label}")
+        hw_suffix = http_max_workers_plot_suffix(
+            selected_files, self.file_types, self.headers, self.rows
+        )
+        self.ax.set_title(f"{metric} vs. {x_axis_label}{hw_suffix}")
         self.ax.set_xlabel(x_axis_label)
         self.ax.set_ylabel(metric)
         self.ax.legend(loc='best', framealpha=0.85)

@@ -266,7 +266,7 @@ help:  ## Show this help message
 	@printf "\n"
 	@printf "${CYAN}Benchmark Path Override:${NC}\n"
 	@printf "  %-22s %s\n" "BENCH_DIR=path" "Override benchmark root (default: benchmarks)"
-	@printf "  %-22s %s\n" "HTTP_MAX_WORKERS=N" "Set HTTP worker count for static/dynamic runs (default: unset/system default)"
+	@printf "  %-22s %s\n" "HTTP_MAX_WORKERS=N" "Set HTTP worker count for static/dynamic runs (default: unset; CSV: System default)"
 	@printf "  %-22s %s\n" "example" "make run BENCH_DIR=benchmarks"
 	@printf "  %-22s %s\n" "example" "make run HTTP_MAX_WORKERS=100  # HTTP only; WebSocket unaffected"
 	@printf "\n"
