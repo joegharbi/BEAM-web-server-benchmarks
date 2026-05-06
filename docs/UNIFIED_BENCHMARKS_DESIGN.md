@@ -60,7 +60,7 @@ When there is only one base for a stack, we can omit the suffix and document it 
 | st-elixir-pure-1-16-bw          | Static, Elixir, pure, 1.16, trixie-slim    | trixie-slim |
 | st-gleam-mist-1-0-alpine        | Static, Gleam, Mist, 1.0                     | Alpine      |
 | ws-erlang-cowboy-27             | WebSocket, Erlang, Cowboy, 27                | trixie-slim |
-| ws-elixir-phoenix-1-8-bw       | WebSocket, Elixir, Phoenix, 1.8, trixie-slim | trixie-slim |
+| ws-elixir-bandit-1-8-5         | WebSocket, Elixir, Bandit, 1.8.5, trixie-slim | trixie-slim |
 
 So on the graph:
 

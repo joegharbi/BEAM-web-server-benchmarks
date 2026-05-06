@@ -50,7 +50,7 @@ case "${1:-}" in
         echo "  $0 static             # Run all static containers"
         echo "  $0 dynamic dy-erlang-pure-27   # Run specific container(s)"
         echo "  $0 --single ws-erlang-yaws-27   # Run single server (type auto-detected)"
-        echo "  $0 --bench ./benchmarks_old static   # Run from custom benchmark root"
+        echo "  $0 --bench ./benchmarks static   # Run from custom benchmark root"
         echo "  $0 --quick static     # Quick static benchmarks"
         echo ""
         echo "Port Assignment:"
@@ -241,7 +241,7 @@ case "${1:-}" in
         echo "  $0 static             # Run all static containers"
         echo "  $0 dynamic dy-erlang-pure-27   # Run specific container(s)"
         echo "  $0 --single ws-erlang-yaws-27   # Run single server (type auto-detected)"
-        echo "  $0 --bench ./benchmarks_old static   # Run from custom benchmark root"
+        echo "  $0 --bench ./benchmarks static   # Run from custom benchmark root"
         echo "  $0 --quick static     # Quick static benchmarks"
         echo ""
         echo "Port Assignment:"
@@ -597,7 +597,7 @@ EOF
         if [[ $total_idx -ge 0 ]] && [[ $fail_idx -ge 0 ]]; then
             total="${vals[$total_idx]}"
             fail="${vals[$fail_idx]}"
-            if [ "$total" = "$fail" ] && [ -n "$total" ]; then
+            if [ -n "$total" ] && [ "$total" -gt 0 ] && [ "$total" = "$fail" ]; then
                 container_name="${vals[0]}"
                 failed_containers+=("$container_name ($csv)")
             fi

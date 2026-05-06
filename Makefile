@@ -266,7 +266,7 @@ help:  ## Show this help message
 	@printf "\n"
 	@printf "${CYAN}Benchmark Path Override:${NC}\n"
 	@printf "  %-22s %s\n" "BENCH_DIR=path" "Override benchmark root (default: benchmarks)"
-	@printf "  %-22s %s\n" "example" "make run BENCH_DIR=benchmarks_old"
+	@printf "  %-22s %s\n" "example" "make run BENCH_DIR=benchmarks"
 	@printf "\n"
 	@printf "${YELLOW}Validation & Health:${NC}\n"
 	@printf "  %-22s %s\n" "check-tools" "Check for required tools (Python, pip, Docker, scaphandre)"
