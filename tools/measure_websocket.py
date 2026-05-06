@@ -242,6 +242,7 @@ def stop_server_container(container_name, docker_path):
 # =====================
 async def echo_burst_client(url, size_kb, bursts, interval, results, client_id, verbose=False):
     latencies = []
+    completed_bursts = 0
     try:
         async with websockets.connect(url, max_size=None, ping_interval=None) as ws:
             payload = os.urandom(size_kb * 1024)
@@ -250,20 +251,23 @@ async def echo_burst_client(url, size_kb, bursts, interval, results, client_id, 
                 await ws.send(payload)
                 resp = await ws.recv()
                 end = time.perf_counter()
+                latency = (end - start) * 1000
                 if resp == payload:
-                    latency = (end - start) * 1000
                     latencies.append(latency)
                     results['success'] += 1
                 else:
                     results['fail'] += 1
                 results['total'] += 1
+                completed_bursts += 1
                 if verbose:
                     logger.info(f"[Client {client_id}] Burst {b+1}/{bursts} latency: {latency:.2f} ms")
                 await asyncio.sleep(interval)
     except Exception as e:
         logger.warning(f"[Client {client_id}] WebSocket connection error: {e}")
-        results['fail'] += bursts
-        results['total'] += bursts
+        # Count only the unfinished bursts as failures to avoid over-counting.
+        remaining_bursts = max(0, bursts - completed_bursts)
+        results['fail'] += remaining_bursts
+        results['total'] += remaining_bursts
     results['latencies'].extend(latencies)
 
 async def echo_stream_client(url, size_kb, rate, duration, results, client_id, verbose=False):
@@ -277,8 +281,8 @@ async def echo_stream_client(url, size_kb, rate, duration, results, client_id, v
                 await ws.send(payload)
                 resp = await ws.recv()
                 end = time.perf_counter()
+                latency = (end - start) * 1000
                 if resp == payload:
-                    latency = (end - start) * 1000
                     latencies.append(latency)
                     results['success'] += 1
                 else:
@@ -289,6 +293,9 @@ async def echo_stream_client(url, size_kb, rate, duration, results, client_id, v
                 await asyncio.sleep(1.0 / rate)
     except Exception as e:
         logger.warning(f"[Client {client_id}] WebSocket stream error: {e}")
+        # Surface stream session failures in totals instead of silently dropping them.
+        results['fail'] += 1
+        results['total'] += 1
     results['latencies'].extend(latencies)
 
 # =====================
@@ -441,8 +448,8 @@ def main():
 
     headers = ["Container Name", "Test Type", "Num CPUs", "Total Messages", "Successful Messages", "Failed Messages", "Execution Time (s)", "Messages/s", "Throughput (MB/s)",
                "Avg Latency (ms)", "Min Latency (ms)", "Max Latency (ms)",
-               "Total Energy (J)", "Avg Power (W)", "Samples", "Avg CPU (%)", "Peak CPU (%)", "Total CPU (%)",
-               "Avg Mem (MB)", "Peak Mem (MB)", "Total Mem (MB)",
+               "Total Energy (J)", "Avg Power (W)", "Samples", "Avg CPU (%)", "Peak CPU (%)", "Total CPU (%*s)",
+               "Avg Mem (MB)", "Peak Mem (MB)", "Total Mem (MB*s)",
                "Pattern", "Num Clients", "Message Size (KB)", "Rate (msg/s)", "Bursts", "Interval (s)", "Duration (s)"]
     # Calculate latency statistics
     min_latency = min(all_latencies) if all_latencies else 0.0
@@ -490,8 +497,8 @@ def main():
     logger.info(f"Total Requests: {total_msgs}, Successful: {total_success}, Failed: {total_fail}")
     logger.info(f"Execution Time: {runtime:.2f} s, Messages/s: {requests_per_second:.2f}")
     logger.info(f"Energy: Total {total_energy:.2f} J, Avg Power {avg_power:.2f} W")
-    logger.info(f"CPU: Avg {resource_results['cpu'].get('avg', 0.0):.2f}%, Peak {resource_results['cpu'].get('peak', 0.0):.2f}%, Total {resource_results['cpu'].get('total', 0.0):.2f}%")
-    logger.info(f"Memory: Avg {resource_results['mem'].get('avg', 0.0):.2f} MB, Peak {resource_results['mem'].get('peak', 0.0):.2f} MB, Total {resource_results['mem'].get('total', 0.0):.2f} MB")
+    logger.info(f"CPU: Avg {resource_results['cpu'].get('avg', 0.0):.2f}%, Peak {resource_results['cpu'].get('peak', 0.0):.2f}%, Total {resource_results['cpu'].get('total', 0.0):.2f} %*s")
+    logger.info(f"Memory: Avg {resource_results['mem'].get('avg', 0.0):.2f} MB, Peak {resource_results['mem'].get('peak', 0.0):.2f} MB, Total {resource_results['mem'].get('total', 0.0):.2f} MB*s")
     logger.info(f"JSON: {output_json}, CSV: {output_csv}")
     logger.info("==========================")
 

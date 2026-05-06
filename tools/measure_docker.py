@@ -258,8 +258,8 @@ def save_results_to_csv(filename, results, total_energy, average_power, runtime,
         filename = os.path.join("results_docker", f"{container_name}.csv")
     
     headers = ["Container Name", "Type", "Num CPUs", "Total Requests", "Successful Requests", "Failed Requests", "Execution Time (s)", "Requests/s",
-               "Total Energy (J)", "Avg Power (W)", "Samples", "Avg CPU (%)", "Peak CPU (%)", "Total CPU (%)",
-               "Avg Mem (MB)", "Peak Mem (MB)", "Total Mem (MB)"]
+               "Total Energy (J)", "Avg Power (W)", "Samples", "Avg CPU (%)", "Peak CPU (%)", "Total CPU (%*s)",
+               "Avg Mem (MB)", "Peak Mem (MB)", "Total Mem (MB*s)"]
     # Ensure num_cores is an int and not None
     num_cores_csv = int(num_cores) if num_cores is not None else 1
     data = [[
@@ -297,8 +297,8 @@ def print_summary(results, total_energy, average_power, runtime, requests_per_se
     logger.info(f"Total Requests: {results['total']}, Successful: {results['success']}, Failed: {results['failure']}")
     logger.info(f"Execution Time: {runtime:.2f} s, Requests/s: {requests_per_second:.2f}")
     logger.info(f"Energy: Total {total_energy:.2f} J, Avg Power {average_power:.2f} W")
-    logger.info(f"CPU: Avg {cpu_metrics['avg']:.2f}%, Peak {cpu_metrics['peak']:.2f}%, Total {cpu_metrics['total']:.2f}%")
-    logger.info(f"Memory: Avg {mem_metrics['avg']:.2f} MB, Peak {mem_metrics['peak']:.2f} MB, Total {mem_metrics['total']:.2f} MB")
+    logger.info(f"CPU: Avg {cpu_metrics['avg']:.2f}%, Peak {cpu_metrics['peak']:.2f}%, Total {cpu_metrics['total']:.2f} %*s")
+    logger.info(f"Memory: Avg {mem_metrics['avg']:.2f} MB, Peak {mem_metrics['peak']:.2f} MB, Total {mem_metrics['total']:.2f} MB*s")
     logger.info(f"JSON: {output_json}, CSV: {output_csv or f'results_docker/{container_name}.csv'}")
     logger.info("==========================")
 
