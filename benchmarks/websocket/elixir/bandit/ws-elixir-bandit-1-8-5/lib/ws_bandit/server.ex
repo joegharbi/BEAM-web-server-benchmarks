@@ -25,7 +25,13 @@ defmodule WsBandit.Router do
 
   get "/ws" do
     conn
-    |> WebSockAdapter.upgrade(WsBandit.WebSocketHandler, %{}, timeout: 60_000)
+    |> WebSockAdapter.upgrade(
+      WsBandit.WebSocketHandler,
+      %{},
+      timeout: 60_000,
+      # Allow benchmark payload (64 MiB) plus websocket frame overhead.
+      max_frame_size: 128 * 1024 * 1024
+    )
     |> Plug.Conn.halt()
   end
 
