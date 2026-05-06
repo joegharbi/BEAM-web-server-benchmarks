@@ -43,6 +43,9 @@ case "${1:-}" in
         echo "  --super-quick Run super quick benchmarks with single test per type"
         echo "  --single IMAGE  Run a single server (e.g. --single ws-erlang-yaws-27)"
         echo "  --bench PATH    Benchmark root directory (default: ./benchmarks)"
+        echo "Environment:"
+        echo "  HTTP_MAX_WORKERS  Max HTTP client workers for measure_docker.py (default: unset/system default)"
+        echo "                    Applies to HTTP (static/dynamic) only; WebSocket is unaffected."
         echo "  clean       Clean repository to fresh state"
         echo ""
         echo "Examples:"
@@ -52,6 +55,7 @@ case "${1:-}" in
         echo "  $0 --single ws-erlang-yaws-27   # Run single server (type auto-detected)"
         echo "  $0 --bench ./benchmarks static   # Run from custom benchmark root"
         echo "  $0 --quick static     # Quick static benchmarks"
+        echo "  HTTP_MAX_WORKERS=100 $0 static   # Override HTTP worker count"
         echo ""
         echo "Port Assignment:"
         echo "  - Fixed host port: ${HOST_PORT:-8001}"
@@ -80,9 +84,10 @@ full_http_requests=(100 1000 5000 8000 10000 15000 20000 30000 40000 50000 60000
 quick_http_requests=(1000 5000 10000)
 # Super-quick: single request count
 super_quick_http_requests=(1000)
-# Fixed HTTP client worker pool size for reproducible HTTP runs.
-# Can be overridden per run, e.g.: HTTP_MAX_WORKERS=200 make run
-HTTP_MAX_WORKERS=${HTTP_MAX_WORKERS:-100}
+# Optional HTTP client worker pool size for reproducible HTTP runs.
+# If unset, measure_docker.py uses its own system default behavior (None).
+# Example override: HTTP_MAX_WORKERS=100 make run
+HTTP_MAX_WORKERS="${HTTP_MAX_WORKERS:-}"
 
 # Full test parameters for WebSocket benchmarks (balanced set)
 full_ws_burst_clients=(5 50 100)
@@ -242,6 +247,9 @@ case "${1:-}" in
         echo "  --super-quick Run super quick benchmarks with single test per type"
         echo "  --single IMAGE  Run a single server (e.g. --single ws-erlang-yaws-27)"
         echo "  --bench PATH    Benchmark root directory (default: ./benchmarks)"
+        echo "Environment:"
+        echo "  HTTP_MAX_WORKERS  Max HTTP client workers for measure_docker.py (default: unset/system default)"
+        echo "                    Applies to HTTP (static/dynamic) only; WebSocket is unaffected."
         echo "  clean       Clean repository to fresh state"
         echo ""
         echo "Examples:"
@@ -251,6 +259,7 @@ case "${1:-}" in
         echo "  $0 --single ws-erlang-yaws-27   # Run single server (type auto-detected)"
         echo "  $0 --bench ./benchmarks static   # Run from custom benchmark root"
         echo "  $0 --quick static     # Quick static benchmarks"
+        echo "  HTTP_MAX_WORKERS=100 $0 static   # Override HTTP worker count"
         echo ""
         echo "Port Assignment:"
         echo "  - Fixed host port: ${HOST_PORT:-8001}"
@@ -568,13 +577,17 @@ run_docker_tests() {
     for num_requests in "${test_counts[@]}"; do
         local csv_file="$RESULTS_DIR/$test_type/${image}.csv"
         echo "[$idx/$ntests] $test_type: $num_requests requests"
+        local worker_arg=()
+        if [ -n "$HTTP_MAX_WORKERS" ]; then
+            worker_arg=(--max_workers "$HTTP_MAX_WORKERS")
+        fi
         "$PYTHON_PATH" ./tools/measure_docker.py \
             --server_image "$image" \
             --port_mapping "$port_mapping" \
             --num_requests "$num_requests" \
             --output_csv "$csv_file" \
             --measurement_type "$test_type" \
-            --max_workers "$HTTP_MAX_WORKERS"
+            "${worker_arg[@]}"
         print_csv_summary "$csv_file"
         idx=$((idx+1))
     done
