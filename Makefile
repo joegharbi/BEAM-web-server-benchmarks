@@ -122,7 +122,7 @@ clean-port: ## Stop containers using a port (usage: make clean-port PORT=8001)
 		printf "${YELLOW}If a non-Docker process is using it, stop it manually or use a different port.${NC}\n"; \
 	fi
 
-run: check-env ## Run all benchmarks (static, dynamic, websocket)
+run: check-env ## Run all benchmarks (log: run plan, [PROGRESS] lines, tail -f logs/run_*.log)
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
@@ -267,6 +267,8 @@ help:  ## Show this help message
 	@printf "${CYAN}Benchmark Path Override:${NC}\n"
 	@printf "  %-22s %s\n" "BENCH_DIR=path" "Override benchmark root (default: benchmarks)"
 	@printf "  %-22s %s\n" "HTTP_MAX_WORKERS=N" "Set HTTP worker count for static/dynamic runs (default: unset; CSV: System default)"
+	@printf "  %-22s %s\n" "BENCH_MEASURE_QUIET=0" "Verbose measure_docker.py logs (default: compact [MEASURE] + heartbeats)"
+	@printf "  %-22s %s\n" "MEASURE_HEARTBEAT_SEC=N" "Seconds between quiet HTTP load progress updates (default: 15)"
 	@printf "  %-22s %s\n" "example" "make run BENCH_DIR=benchmarks"
 	@printf "  %-22s %s\n" "example" "make run HTTP_MAX_WORKERS=100  # HTTP only; WebSocket unaffected"
 	@printf "\n"

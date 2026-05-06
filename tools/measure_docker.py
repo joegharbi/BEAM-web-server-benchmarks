@@ -16,6 +16,36 @@ import psutil
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger()
 
+def is_measure_quiet():
+    """Match scripts/run_benchmarks.sh: full measure_docker logs only when BENCH_MEASURE_QUIET is exactly 0.
+
+    Default when unset is quiet (same as bash ``${BENCH_MEASURE_QUIET:-1}``). Any value other than ``0``
+    is treated as quiet so bash and Python stay aligned (e.g. typos do not flip to verbose).
+    """
+    v = (os.environ.get("BENCH_MEASURE_QUIET") or "1").strip()
+    return v != "0"
+
+# [MEASURE] uses magenta so it is distinct from bash [PROGRESS] (cyan).
+_M_MAGENTA = "\033[0;35m"
+_M_GREEN = "\033[0;32m"
+_M_NC = "\033[0m"
+
+
+def http_max_workers_label(args):
+    return "System default" if args.max_workers is None else str(int(args.max_workers))
+
+
+def measure_quiet_msg(body: str) -> None:
+    print(f"{_M_MAGENTA}[MEASURE]{_M_NC} {body}", flush=True)
+
+
+def measure_quiet_heartbeat_interval_sec():
+    try:
+        return max(10, int(os.environ.get("MEASURE_HEARTBEAT_SEC", "15")))
+    except ValueError:
+        return 15
+
+
 results_counter = Counter()
 runtime_data = {}
 results_lock = threading.Lock()
@@ -348,6 +378,8 @@ def main():
     args = parser.parse_args()
     if args.verbose:
         logger.setLevel(logging.DEBUG)
+    elif is_measure_quiet():
+        logger.setLevel(logging.WARNING)
 
     check_prerequisites()  # Exit with error before any measurement if anything is missing
     scaphandre_path = get_binary_path("scaphandre")
@@ -371,9 +403,11 @@ def main():
         exit(1)
 
     cleanup_existing_scaphandre()
+    if is_measure_quiet() and not args.verbose:
+        measure_quiet_msg(f"{container_name} | Docker start + HTTP readiness wait …")
     logger.info(f"Starting container '{container_name}'...")
     start_server_container(args.server_image, args.port_mapping, container_name, docker_path, args.network)
-    
+
     if not check_container_health(url):
         logger.error("Container health check failed (no HTTP 200 within wait time).")
         try:
@@ -388,10 +422,15 @@ def main():
         logger.error("To allow more boot time: MEASURE_STARTUP_WAIT=25 MEASURE_HEALTH_RETRIES=30 make run")
         stop_server_container(container_name, docker_path)
         return
-    
+
+    if is_measure_quiet() and not args.verbose:
+        measure_quiet_msg(
+            f"{container_name} | Scaphandre power sampling + HTTP load | "
+            f"{args.num_requests} GET → {url}"
+        )
     logger.info("Starting Scaphandre...")
     scaphandre_process = start_scaphandre(output_json, scaphandre_path)
-    
+
     logger.info(f"Sending {args.num_requests} requests to {url}...")
     time.sleep(2)
 
@@ -408,9 +447,32 @@ def main():
     logger.info("Sleeping 1s to let docker stats stabilize...")
     time.sleep(1)
 
+    hb_stop = threading.Event()
+    hb_thread = None
+    load_t0 = time.time()
+    if is_measure_quiet() and not args.verbose:
+        iv = measure_quiet_heartbeat_interval_sec()
+
+        def _heartbeat_worker():
+            while not hb_stop.wait(iv):
+                with results_lock:
+                    done = results_counter["total"]
+                measure_quiet_msg(
+                    f"{container_name} | HTTP requests {done}/{args.num_requests} "
+                    f"({int(time.time() - load_t0)}s elapsed)"
+                )
+
+        hb_thread = threading.Thread(target=_heartbeat_worker, daemon=True)
+        hb_thread.start()
+
     start_time = time.time()
-    with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
-        executor.map(lambda i: send_request(url, i, args.verbose), range(args.num_requests))
+    try:
+        with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+            executor.map(lambda i: send_request(url, i, args.verbose), range(args.num_requests))
+    finally:
+        if hb_thread is not None:
+            hb_stop.set()
+            hb_thread.join(timeout=3)
     runtime = time.time() - start_time
     runtime_data['runtime'] = runtime
 
@@ -419,7 +481,9 @@ def main():
     resource_thread.join()
 
     requests_per_second = results_counter['total'] / runtime if runtime > 0 else 0
-    
+
+    if is_measure_quiet() and not args.verbose:
+        measure_quiet_msg(f"{container_name} | stopping Scaphandre + appending CSV …")
     logger.info("Waiting for Scaphandre...")
     time.sleep(5)
     stop_scaphandre(scaphandre_process)
@@ -435,13 +499,26 @@ def main():
     )
     stop_server_container(container_name, docker_path)
     measurement_type = getattr(args, 'measurement_type', None) or "unknown"
-    http_workers_label = "System default" if args.max_workers is None else str(int(args.max_workers))
+    http_workers_label = http_max_workers_label(args)
     save_results_to_csv(args.output_csv, results_counter, total_energy, average_power, runtime, requests_per_second, 
                        int(total_samples), resource_results['cpu'], resource_results['mem'], num_cores, args.server_image, measurement_type,
                        extra_fields={"HTTP Max Workers": http_workers_label})
-    print_summary(results_counter, total_energy, average_power, runtime, requests_per_second, 
-                  resource_results['cpu'], resource_results['mem'], num_cores, output_json, args.output_csv, container_name,
-                  http_max_workers_label=http_workers_label)
+    csv_disp = args.output_csv or os.path.join("results_docker", f"{container_name}.csv")
+    if is_measure_quiet() and not args.verbose:
+        ok = results_counter["success"] == results_counter["total"]
+        cnt = (
+            f"{_M_GREEN}{results_counter['success']}/{results_counter['total']} ok{_M_NC}"
+            if ok
+            else f"{results_counter['success']}/{results_counter['total']}"
+        )
+        measure_quiet_msg(
+            f"{container_name} | {cnt} | {runtime:.1f}s | {requests_per_second:.0f} req/s | "
+            f"{csv_disp}"
+        )
+    else:
+        print_summary(results_counter, total_energy, average_power, runtime, requests_per_second, 
+                      resource_results['cpu'], resource_results['mem'], num_cores, output_json, args.output_csv, container_name,
+                      http_max_workers_label=http_workers_label)
 
 if __name__ == "__main__":
     main()

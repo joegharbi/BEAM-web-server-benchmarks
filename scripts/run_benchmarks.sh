@@ -44,8 +44,10 @@ case "${1:-}" in
         echo "  --single IMAGE  Run a single server (e.g. --single ws-erlang-yaws-27)"
         echo "  --bench PATH    Benchmark root directory (default: ./benchmarks)"
         echo "Environment:"
-        echo "  HTTP_MAX_WORKERS  Max HTTP client workers for measure_docker.py (default: unset; CSV: System default)"
-        echo "                    Applies to HTTP (static/dynamic) only; WebSocket is unaffected."
+        echo "  HTTP_MAX_WORKERS     Max HTTP client workers for measure_docker.py (default: unset; CSV: System default)"
+        echo "                       Applies to HTTP (static/dynamic) only; WebSocket is unaffected."
+        echo "  BENCH_MEASURE_QUIET  HTTP measure_docker logs: 1=compact + heartbeats (default), 0=verbose"
+        echo "  MEASURE_HEARTBEAT_SEC  Seconds between quiet-mode load progress lines (default: 15, min: 10)"
         echo "  clean       Clean repository to fresh state"
         echo ""
         echo "Examples:"
@@ -56,6 +58,7 @@ case "${1:-}" in
         echo "  $0 --bench ./benchmarks static   # Run from custom benchmark root"
         echo "  $0 --quick static     # Quick static benchmarks"
         echo "  HTTP_MAX_WORKERS=100 $0 static   # Override HTTP worker count"
+        echo "  BENCH_MEASURE_QUIET=0 $0 static # Verbose measure_docker.py (default is compact)"
         echo ""
         echo "Port Assignment:"
         echo "  - Fixed host port: ${HOST_PORT:-8001}"
@@ -88,6 +91,8 @@ super_quick_http_requests=(1000)
 # If unset, measure_docker.py uses ThreadPoolExecutor default (None); CSV stores "System default".
 # Example override: HTTP_MAX_WORKERS=100 make run
 HTTP_MAX_WORKERS="${HTTP_MAX_WORKERS:-}"
+# HTTP measurements: 1 = one-line measure_docker output (default); 0 = full logs.
+BENCH_MEASURE_QUIET="${BENCH_MEASURE_QUIET:-1}"
 
 # Full test parameters for WebSocket benchmarks (balanced set)
 full_ws_burst_clients=(5 50 100)
@@ -126,7 +131,18 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+
+# Long-run progress (grep-friendly): [PROGRESS] step/total | elapsed | ETA | phase | detail
+BENCH_RUN_T0=""
+BENCH_STEP=0
+BENCH_TOTAL_STEPS=0
+BENCH_PHASE=""
+# Resolved once in bench_init_run_plan; main() loops use these so step totals match execution.
+BENCH_PLAN_STATIC=()
+BENCH_PLAN_DYNAMIC=()
+BENCH_PLAN_WEBSOCKET=()
 
 print_status() {
     local status=$1
@@ -142,6 +158,188 @@ print_status() {
 print_section() {
     local title=$1
     printf "\n${BLUE}=== %s ===${NC}\n" "$title"
+}
+
+bench_http_steps_per_container() {
+    if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then echo 1
+    elif [[ $QUICK_BENCH -eq 1 ]]; then echo 3
+    else echo 13
+    fi
+}
+
+bench_ws_burst_stream_steps_per_container() {
+    if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then echo 2
+    else
+        local b s
+        b=$((${#full_ws_burst_clients[@]} * ${#full_ws_burst_sizes[@]} * ${#full_ws_burst_bursts[@]} * ${#full_ws_burst_intervals[@]}))
+        s=$((${#full_ws_stream_clients[@]} * ${#full_ws_stream_sizes[@]} * ${#full_ws_stream_rates[@]} * ${#full_ws_stream_durations[@]}))
+        echo $((b + s))
+    fi
+}
+
+bench_ws_concurrency_steps_per_container() {
+    if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then echo 1
+    else echo ${#concurrency_clients[@]}
+    fi
+}
+
+bench_ws_payload_steps_per_container() {
+    if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then echo 1
+    else echo ${#payload_sizes[@]}
+    fi
+}
+
+bench_elapsed_human() {
+    [ -n "$BENCH_RUN_T0" ] || { printf "?"; return; }
+    local sec=$(( $(date +%s) - BENCH_RUN_T0 ))
+    local h=$(( sec / 3600 ))
+    local m=$(( (sec % 3600) / 60 ))
+    local s=$(( sec % 60 ))
+    if [ "$h" -gt 0 ]; then printf "%dh%02dm" "$h" "$m"
+    elif [ "$m" -gt 0 ]; then printf "%dm%02ds" "$m" "$s"
+    else printf "%ds" "$s"
+    fi
+}
+
+# ETA from average time per completed step (after step >= 1)
+bench_eta_human() {
+    local step=$1
+    local total=$2
+    if [ -z "$BENCH_RUN_T0" ] || [ "$step" -lt 1 ] || [ "$total" -lt 1 ] || [ "$step" -ge "$total" ]; then
+        printf "%s" "—"
+        return
+    fi
+    local now elapsed eta
+    now=$(date +%s)
+    elapsed=$((now - BENCH_RUN_T0))
+    eta=$(( elapsed * (total - step) / step ))
+    local eh=$(( eta / 3600 ))
+    local em=$(( (eta % 3600) / 60 ))
+    if [ "$eh" -gt 0 ]; then printf "~%dh%02dm" "$eh" "$em"
+    elif [ "$em" -gt 0 ]; then printf "~%dm" "$em"
+    else printf "~%ds" "$eta"
+    fi
+}
+
+print_bench_progress() {
+    local detail=$1
+    BENCH_STEP=$((BENCH_STEP + 1))
+    local step=$BENCH_STEP
+    local total=$BENCH_TOTAL_STEPS
+    local pct=0
+    local rem=0
+    local eta="—"
+    if [ "$total" -gt 0 ]; then
+        pct=$(( 100 * step / total ))
+        rem=$(( total - step ))
+        eta=$(bench_eta_human "$step" "$total")
+    fi
+    printf "${CYAN}[PROGRESS]${NC} %d/%d (%d%%) | elapsed %s | ETA %s | remaining %d | %s | %s\n" \
+        "$step" "$total" "$pct" "$(bench_elapsed_human)" "$eta" "$rem" "${BENCH_PHASE:-?}" "$detail"
+}
+
+# Call once at start of main(): sets timers, step counter, total steps, prints plan + grep hints.
+bench_init_run_plan() {
+    BENCH_RUN_T0=$(date +%s)
+    BENCH_STEP=0
+    BENCH_PLAN_STATIC=()
+    BENCH_PLAN_DYNAMIC=()
+    BENCH_PLAN_WEBSOCKET=()
+    local H bs c p ns nd nw
+    H=$(bench_http_steps_per_container)
+    bs=$(bench_ws_burst_stream_steps_per_container)
+    c=$(bench_ws_concurrency_steps_per_container)
+    p=$(bench_ws_payload_steps_per_container)
+    ns=0
+    nd=0
+    nw=0
+
+    if [[ $RUN_ALL -eq 1 ]]; then
+        local sa da wa
+        sa=($(discover_containers static))
+        da=($(discover_containers dynamic))
+        wa=($(discover_containers websocket))
+        BENCH_PLAN_STATIC=("${sa[@]}")
+        BENCH_PLAN_DYNAMIC=("${da[@]}")
+        BENCH_PLAN_WEBSOCKET=("${wa[@]}")
+        ns=${#sa[@]}
+        nd=${#da[@]}
+        nw=${#wa[@]}
+        BENCH_TOTAL_STEPS=$(( ns * H + nd * H + nw * bs + nw * c + nw * p ))
+    else
+        case $TARGET_TYPE in
+            "static"|"--static")
+                local ta=("${TARGET_IMAGES[@]}")
+                [ ${#ta[@]} -eq 0 ] && ta=($(discover_containers static))
+                TARGET_IMAGES=("${ta[@]}")
+                BENCH_PLAN_STATIC=("${ta[@]}")
+                ns=${#ta[@]}
+                BENCH_TOTAL_STEPS=$(( ns * H ))
+                ;;
+            "dynamic"|"--dynamic")
+                local ta=("${TARGET_IMAGES[@]}")
+                [ ${#ta[@]} -eq 0 ] && ta=($(discover_containers dynamic))
+                TARGET_IMAGES=("${ta[@]}")
+                BENCH_PLAN_DYNAMIC=("${ta[@]}")
+                nd=${#ta[@]}
+                BENCH_TOTAL_STEPS=$(( nd * H ))
+                ;;
+            "websocket"|"--websocket")
+                local ta=("${TARGET_IMAGES[@]}")
+                [ ${#ta[@]} -eq 0 ] && ta=($(discover_containers websocket))
+                TARGET_IMAGES=("${ta[@]}")
+                BENCH_PLAN_WEBSOCKET=("${ta[@]}")
+                nw=${#ta[@]}
+                BENCH_TOTAL_STEPS=$(( nw * bs ))
+                ;;
+            "concurrency")
+                local ta=("${TARGET_IMAGES[@]}")
+                [ ${#ta[@]} -eq 0 ] && ta=($(discover_containers websocket))
+                TARGET_IMAGES=("${ta[@]}")
+                BENCH_PLAN_WEBSOCKET=("${ta[@]}")
+                nw=${#ta[@]}
+                BENCH_TOTAL_STEPS=$(( nw * c ))
+                ;;
+            "payload")
+                local ta=("${TARGET_IMAGES[@]}")
+                [ ${#ta[@]} -eq 0 ] && ta=($(discover_containers websocket))
+                TARGET_IMAGES=("${ta[@]}")
+                BENCH_PLAN_WEBSOCKET=("${ta[@]}")
+                nw=${#ta[@]}
+                BENCH_TOTAL_STEPS=$(( nw * p ))
+                ;;
+            *)
+                BENCH_TOTAL_STEPS=0
+                ;;
+        esac
+    fi
+
+    printf "\n${BLUE}──────────────── Run plan ─────────────────${NC}\n"
+    print_status "INFO" "Log file (full output): $LOG_FILE"
+    print_status "INFO" "Results directory: $RESULTS_DIR"
+    printf "${BLUE}[INFO]${NC} Total measurement steps (each step = one HTTP or WebSocket measurement): ${GREEN}%s${NC}\n" "$BENCH_TOTAL_STEPS"
+    if [[ $RUN_ALL -eq 1 ]]; then
+        sa=("${BENCH_PLAN_STATIC[@]}")
+        da=("${BENCH_PLAN_DYNAMIC[@]}")
+        wa=("${BENCH_PLAN_WEBSOCKET[@]}")
+        ns=${#sa[@]}
+        nd=${#da[@]}
+        nw=${#wa[@]}
+        printf "${BLUE}[INFO]${NC}   · Static HTTP:     %s containers × %s levels = %s\n" "$ns" "$H" "$((ns * H))"
+        printf "${BLUE}[INFO]${NC}   · Dynamic HTTP:    %s containers × %s levels = %s\n" "$nd" "$H" "$((nd * H))"
+        printf "${BLUE}[INFO]${NC}   · WebSocket grid:  %s × %s (burst+stream invocations) = %s\n" "$nw" "$bs" "$((nw * bs))"
+        printf "${BLUE}[INFO]${NC}   · WS concurrency:  %s × %s = %s\n" "$nw" "$c" "$((nw * c))"
+        printf "${BLUE}[INFO]${NC}   · WS payload:      %s × %s = %s\n" "$nw" "$p" "$((nw * p))"
+        if [[ $QUICK_BENCH -eq 1 ]] || [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
+            print_status "INFO" "Note: --quick / --super-quick only reduce HTTP request levels; WebSocket burst/stream grid uses full matrix unless --super-quick (then 1 burst + 1 stream per server)."
+        fi
+    fi
+    if [ "${BENCH_MEASURE_QUIET:-1}" != "0" ]; then
+        print_status "INFO" "HTTP measurement output is compact (BENCH_MEASURE_QUIET=1): magenta [MEASURE] lines + load heartbeats every ${MEASURE_HEARTBEAT_SEC:-15}s. BENCH_MEASURE_QUIET=0 or MEASURE_HEARTBEAT_SEC=3600 to reduce noise."
+    fi
+    printf "${BLUE}[INFO]${NC} While running: ${CYAN}tail -f %s${NC}\n" "$LOG_FILE"
+    printf "${BLUE}[INFO]${NC} Milestones only: ${CYAN}grep -F '[PROGRESS]' %s${NC}\n" "$LOG_FILE"
+    printf "${BLUE}────────────────────────────────────────────${NC}\n\n"
 }
 
 SUDO_KEEPALIVE_PID=""
@@ -280,8 +478,10 @@ case "${1:-}" in
         echo "  --single IMAGE  Run a single server (e.g. --single ws-erlang-yaws-27)"
         echo "  --bench PATH    Benchmark root directory (default: ./benchmarks)"
         echo "Environment:"
-        echo "  HTTP_MAX_WORKERS  Max HTTP client workers for measure_docker.py (default: unset; CSV: System default)"
-        echo "                    Applies to HTTP (static/dynamic) only; WebSocket is unaffected."
+        echo "  HTTP_MAX_WORKERS     Max HTTP client workers for measure_docker.py (default: unset; CSV: System default)"
+        echo "                       Applies to HTTP (static/dynamic) only; WebSocket is unaffected."
+        echo "  BENCH_MEASURE_QUIET  HTTP measure_docker logs: 1=compact + heartbeats (default), 0=verbose"
+        echo "  MEASURE_HEARTBEAT_SEC  Seconds between quiet-mode load progress lines (default: 15, min: 10)"
         echo "  clean       Clean repository to fresh state"
         echo ""
         echo "Examples:"
@@ -292,6 +492,7 @@ case "${1:-}" in
         echo "  $0 --bench ./benchmarks static   # Run from custom benchmark root"
         echo "  $0 --quick static     # Quick static benchmarks"
         echo "  HTTP_MAX_WORKERS=100 $0 static   # Override HTTP worker count"
+        echo "  BENCH_MEASURE_QUIET=0 $0 static # Verbose measure_docker.py (default is compact)"
         echo ""
         echo "Port Assignment:"
         echo "  - Fixed host port: ${HOST_PORT:-8001}"
@@ -382,6 +583,7 @@ run_websocket_tests() {
     fi
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
         print_section "WebSocket Burst Test (Super Quick)"
+        print_bench_progress "${image} | super-quick BURST | clients=${quick_ws_burst_clients[0]} size_kb=${quick_ws_burst_sizes[0]}"
         "$PYTHON_PATH" ./tools/measure_websocket.py \
             --server_image "$image" \
             --pattern burst \
@@ -394,6 +596,7 @@ run_websocket_tests() {
             --measurement_type "burst_${quick_ws_burst_clients[0]}_${quick_ws_burst_sizes[0]}_${quick_ws_burst_bursts[0]}_${quick_ws_burst_intervals[0]}"
         print_csv_summary "$RESULTS_DIR/websocket/${image}_burst.csv"
         print_section "WebSocket Stream Test (Super Quick)"
+        print_bench_progress "${image} | super-quick STREAM | clients=${quick_ws_stream_clients[0]} size_kb=${quick_ws_stream_sizes[0]}"
         "$PYTHON_PATH" ./tools/measure_websocket.py \
             --server_image "$image" \
             --pattern stream \
@@ -418,11 +621,14 @@ run_websocket_tests() {
         local port_mapping=$(get_container_port_mapping "$image" "$host_port")
         local container_port=$(echo $port_mapping | cut -d: -f2)
         local ws_url="ws://localhost:$host_port/ws"
+        local bn=0
+        local bt=$((${#burst_clients[@]} * ${#burst_sizes[@]} * ${#burst_bursts[@]} * ${#burst_intervals[@]}))
         for clients in "${burst_clients[@]}"; do
             for size_kb in "${burst_sizes[@]}"; do
                 for bursts in "${burst_bursts[@]}"; do
                     for interval in "${burst_intervals[@]}"; do
-                        echo "  Burst test: $clients clients, ${size_kb}KB, $bursts bursts, ${interval}s interval"
+                        bn=$((bn + 1))
+                        print_bench_progress "${image} | BURST ${bn}/${bt} | clients=$clients size_kb=$size_kb bursts=$bursts interval=${interval}s"
                         "$PYTHON_PATH" ./tools/measure_websocket.py \
                             --server_image "$image" \
                             --pattern burst \
@@ -437,11 +643,14 @@ run_websocket_tests() {
                 done
             done
         done
+        local sn=0
+        local st=$((${#stream_clients[@]} * ${#stream_sizes[@]} * ${#stream_rates[@]} * ${#stream_durations[@]}))
         for clients in "${stream_clients[@]}"; do
             for size_kb in "${stream_sizes[@]}"; do
                 for rate in "${stream_rates[@]}"; do
                     for duration in "${stream_durations[@]}"; do
-                        echo "  Stream test: $clients clients, ${size_kb}KB, ${rate}/s, ${duration}s"
+                        sn=$((sn + 1))
+                        print_bench_progress "${image} | STREAM ${sn}/${st} | clients=$clients size_kb=$size_kb rate=$rate duration=${duration}s"
                         "$PYTHON_PATH" ./tools/measure_websocket.py \
                             --server_image "$image" \
                             --pattern stream \
@@ -490,7 +699,11 @@ EOF
     if [[ "$total" =~ ^[0-9]+$ ]] && [[ "$fail" =~ ^[0-9]+$ ]] && [ "$total" -gt 0 ] && [ "$total" -eq "$fail" ]; then
         echo "  -> [WARNING] All failed ($fail/$total)"
     elif [[ "$total" =~ ^[0-9]+$ ]] && [[ "$fail" =~ ^[0-9]+$ ]] && [ "$total" -ge "$fail" ]; then
-        echo "  -> [SUCCESS] $((total-fail))/$total, Avg Latency: $latency ms, Throughput: $throughput MB/s"
+        if [ $latency_idx -lt 0 ] && [ $throughput_idx -lt 0 ]; then
+            echo "  -> ok $((total-fail))/$total requests (see CSV for energy/CPU/mem)"
+        else
+            echo "  -> [SUCCESS] $((total-fail))/$total, Avg Latency: $latency ms, Throughput: $throughput MB/s"
+        fi
     else
         echo "  -> [INFO] Total: $total, Failed: $fail, Avg Latency: $latency ms, Throughput: $throughput MB/s"
     fi
@@ -502,6 +715,7 @@ run_concurrency() {
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
         print_section "WebSocket Concurrency (Super Quick)"
         local csv_file="$RESULTS_DIR/websocket/${image}_concurrency.csv"
+        print_bench_progress "${image} | super-quick concurrency | clients=${quick_concurrency_clients[0]} size_kb=$quick_concurrency_size"
         "$PYTHON_PATH" ./tools/measure_websocket.py \
             --server_image "$image" \
             --pattern burst \
@@ -523,7 +737,7 @@ run_concurrency() {
         local idx=1
         for clients in "${concurrency_clients[@]}"; do
             local csv_file="$RESULTS_DIR/websocket/${image}_concurrency.csv"
-            echo "[$idx/$ntests] Concurrency: $clients clients, ${concurrency_size}KB payload"
+            print_bench_progress "${image} | concurrency ${idx}/${ntests} | clients=$clients size_kb=$concurrency_size"
             "$PYTHON_PATH" ./tools/measure_websocket.py \
                 --server_image "$image" \
                 --pattern burst \
@@ -548,6 +762,7 @@ run_payload() {
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
         print_section "WebSocket Payload (Super Quick)"
         local csv_file="$RESULTS_DIR/websocket/${image}_payload.csv"
+        print_bench_progress "${image} | super-quick payload | clients=$quick_payload_clients size_kb=${quick_payload_sizes[0]}"
         "$PYTHON_PATH" ./tools/measure_websocket.py \
             --server_image "$image" \
             --pattern burst \
@@ -569,7 +784,7 @@ run_payload() {
         local idx=1
         for size_kb in "${payload_sizes[@]}"; do
             local csv_file="$RESULTS_DIR/websocket/${image}_payload.csv"
-            echo "[$idx/$ntests] Payload: $payload_clients clients, ${size_kb}KB payload"
+            print_bench_progress "${image} | payload ${idx}/${ntests} | clients=$payload_clients size_kb=$size_kb"
             "$PYTHON_PATH" ./tools/measure_websocket.py \
                 --server_image "$image" \
                 --pattern burst \
@@ -593,7 +808,8 @@ run_docker_tests() {
     local image=$1
     local host_port=$2
     local test_type=$3
-    echo -e "${BLUE}Running $test_type tests for $image on port $host_port${NC}"
+    local cpart="${BENCH_CIDX:-?}/${BENCH_CTOTAL:-?}"
+    echo -e "${BLUE}Running $test_type tests for $image on port $host_port${NC} (${cpart})"
     local port_mapping=$(get_container_port_mapping "$image" "$host_port")
     local ntests=0
     local -a test_counts
@@ -608,7 +824,7 @@ run_docker_tests() {
     local idx=1
     for num_requests in "${test_counts[@]}"; do
         local csv_file="$RESULTS_DIR/$test_type/${image}.csv"
-        echo "[$idx/$ntests] $test_type: $num_requests requests"
+        print_bench_progress "${image} | level ${idx}/${ntests} | ${num_requests} requests"
         local worker_arg=()
         if [ -n "$HTTP_MAX_WORKERS" ]; then
             worker_arg=(--max_workers "$HTTP_MAX_WORKERS")
@@ -620,7 +836,9 @@ run_docker_tests() {
             --output_csv "$csv_file" \
             --measurement_type "$test_type" \
             "${worker_arg[@]}"
-        print_csv_summary "$csv_file"
+        if [ "${BENCH_MEASURE_QUIET:-1}" = "0" ]; then
+            print_csv_summary "$csv_file"
+        fi
         idx=$((idx+1))
     done
 }
@@ -662,7 +880,7 @@ EOF
     if [ ${#failed_containers[@]} -eq 0 ]; then
         printf "\n[RUN SUMMARY] All containers ran successfully (no 100%% failed requests).\n"
     else
-        printf "\n[RUN SUMMARY] The following containers had 100%% failed requests:\n"
+        printf "\n[RUN SUMMARY] Containers with 100%% failures:\n"
         for c in "${failed_containers[@]}"; do
             echo "  - $c"
         done
@@ -670,6 +888,9 @@ EOF
 }
 
 main() {
+    export BENCH_MEASURE_QUIET
+    # Optional: concurrency/payload modes set this so the shared footer SUCCESS line matches the suite.
+    BENCH_SUCCESS_TAIL=""
     start_sudo_keepalive
     print_status "INFO" "Starting benchmarks at $(date)"
     print_status "INFO" "Results will be saved to: $RESULTS_DIR"
@@ -678,12 +899,18 @@ main() {
     else
         print_status "INFO" "HTTP client max workers: System default (column \"HTTP Max Workers\" in static/dynamic CSVs)"
     fi
-    printf "\n"
+    bench_init_run_plan
+    local _si=0
     if [[ $RUN_ALL -eq 1 ]]; then
         print_status "INFO" "Running all benchmarks..."
         print_section "Static Container Tests"
-        local static_containers=($(discover_containers "static"))
+        local static_containers=("${BENCH_PLAN_STATIC[@]}")
+        BENCH_PHASE="static HTTP"
+        BENCH_CTOTAL=${#static_containers[@]}
+        _si=0
         for container in "${static_containers[@]}"; do
+            _si=$((_si + 1))
+            BENCH_CIDX=$_si
             if ! check_port_free "$HOST_PORT"; then
                 echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                 exit 1
@@ -699,8 +926,13 @@ main() {
             sleep 1
         done
         print_section "Dynamic Container Tests"
-        local dynamic_containers=($(discover_containers "dynamic"))
+        local dynamic_containers=("${BENCH_PLAN_DYNAMIC[@]}")
+        BENCH_PHASE="dynamic HTTP"
+        BENCH_CTOTAL=${#dynamic_containers[@]}
+        _si=0
         for container in "${dynamic_containers[@]}"; do
+            _si=$((_si + 1))
+            BENCH_CIDX=$_si
             if ! check_port_free "$HOST_PORT"; then
                 echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                 exit 1
@@ -716,8 +948,13 @@ main() {
             sleep 1
         done
         print_section "WebSocket Tests"
-        local websocket_containers=($(discover_containers "websocket"))
+        local websocket_containers=("${BENCH_PLAN_WEBSOCKET[@]}")
+        BENCH_PHASE="WebSocket burst/stream"
+        BENCH_CTOTAL=${#websocket_containers[@]}
+        _si=0
         for container in "${websocket_containers[@]}"; do
+            _si=$((_si + 1))
+            BENCH_CIDX=$_si
             if ! check_port_free "$HOST_PORT"; then
                 echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                 exit 1
@@ -733,7 +970,11 @@ main() {
             sleep 1
         done
         # Also run sweeps for all websocket servers
+        BENCH_CTOTAL=${#websocket_containers[@]}
+        _si=0
         for container in "${websocket_containers[@]}"; do
+            _si=$((_si + 1))
+            BENCH_CIDX=$_si
             if ! check_port_free "$HOST_PORT"; then
                 echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                 exit 1
@@ -745,17 +986,21 @@ main() {
                 docker rm "$container" > /dev/null 2>&1 || true
                 sleep 1
             fi
+            BENCH_PHASE="WebSocket concurrency"
             run_concurrency "$container" "$HOST_PORT"
+            BENCH_PHASE="WebSocket payload"
             run_payload "$container" "$HOST_PORT"
             sleep 1
         done
     else
         case $TARGET_TYPE in
             "static"|"--static")
-                if [ ${#TARGET_IMAGES[@]} -eq 0 ]; then
-                    TARGET_IMAGES=($(discover_containers "static"))
-                fi
-                for container in "${TARGET_IMAGES[@]}"; do
+                BENCH_PHASE="static HTTP"
+                BENCH_CTOTAL=${#BENCH_PLAN_STATIC[@]}
+                _si=0
+                for container in "${BENCH_PLAN_STATIC[@]}"; do
+                    _si=$((_si + 1))
+                    BENCH_CIDX=$_si
                     if ! check_port_free "$HOST_PORT"; then
                         echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                         exit 1
@@ -772,10 +1017,12 @@ main() {
                 done
                 ;;
             "dynamic"|"--dynamic")
-                if [ ${#TARGET_IMAGES[@]} -eq 0 ]; then
-                    TARGET_IMAGES=($(discover_containers "dynamic"))
-                fi
-                for container in "${TARGET_IMAGES[@]}"; do
+                BENCH_PHASE="dynamic HTTP"
+                BENCH_CTOTAL=${#BENCH_PLAN_DYNAMIC[@]}
+                _si=0
+                for container in "${BENCH_PLAN_DYNAMIC[@]}"; do
+                    _si=$((_si + 1))
+                    BENCH_CIDX=$_si
                     if ! check_port_free "$HOST_PORT"; then
                         echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                         exit 1
@@ -792,10 +1039,12 @@ main() {
                 done
                 ;;
             "websocket"|"--websocket")
-                if [ ${#TARGET_IMAGES[@]} -eq 0 ]; then
-                    TARGET_IMAGES=($(discover_containers "websocket"))
-                fi
-                for container in "${TARGET_IMAGES[@]}"; do
+                BENCH_PHASE="WebSocket burst/stream"
+                BENCH_CTOTAL=${#BENCH_PLAN_WEBSOCKET[@]}
+                _si=0
+                for container in "${BENCH_PLAN_WEBSOCKET[@]}"; do
+                    _si=$((_si + 1))
+                    BENCH_CIDX=$_si
                     if ! check_port_free "$HOST_PORT"; then
                         echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                         exit 1
@@ -813,10 +1062,12 @@ main() {
                 ;;
             "concurrency")
                 TARGET_TYPE="websocket"
-                if [ ${#TARGET_IMAGES[@]} -eq 0 ]; then
-                    TARGET_IMAGES=($(discover_containers "websocket"))
-                fi
-                for container in "${TARGET_IMAGES[@]}"; do
+                BENCH_PHASE="WebSocket concurrency"
+                BENCH_CTOTAL=${#BENCH_PLAN_WEBSOCKET[@]}
+                _si=0
+                for container in "${BENCH_PLAN_WEBSOCKET[@]}"; do
+                    _si=$((_si + 1))
+                    BENCH_CIDX=$_si
                     if ! check_port_free "$HOST_PORT"; then
                         echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                         exit 1
@@ -831,17 +1082,16 @@ main() {
                     run_concurrency "$container" "$HOST_PORT"
                     sleep 1
                 done
-                printf "\n"
-                print_status "SUCCESS" "Concurrency completed at $(date)"
-                print_status "INFO" "Results saved to: $RESULTS_DIR"
-                exit 0
+                BENCH_SUCCESS_TAIL="Concurrency completed"
                 ;;
             "payload")
                 TARGET_TYPE="websocket"
-                if [ ${#TARGET_IMAGES[@]} -eq 0 ]; then
-                    TARGET_IMAGES=($(discover_containers "websocket"))
-                fi
-                for container in "${TARGET_IMAGES[@]}"; do
+                BENCH_PHASE="WebSocket payload"
+                BENCH_CTOTAL=${#BENCH_PLAN_WEBSOCKET[@]}
+                _si=0
+                for container in "${BENCH_PLAN_WEBSOCKET[@]}"; do
+                    _si=$((_si + 1))
+                    BENCH_CIDX=$_si
                     if ! check_port_free "$HOST_PORT"; then
                         echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
                         exit 1
@@ -856,10 +1106,7 @@ main() {
                     run_payload "$container" "$HOST_PORT"
                     sleep 1
                 done
-                printf "\n"
-                print_status "SUCCESS" "Payload completed at $(date)"
-                print_status "INFO" "Results saved to: $RESULTS_DIR"
-                exit 0
+                BENCH_SUCCESS_TAIL="Payload completed"
                 ;;
             *)
                 echo "Unknown target type: $TARGET_TYPE"
@@ -869,7 +1116,14 @@ main() {
         esac
     fi
     printf "\n"
-    print_status "SUCCESS" "Benchmarks completed at $(date)"
+    if [ "${BENCH_TOTAL_STEPS:-0}" -gt 0 ]; then
+        print_status "INFO" "Measurement steps finished: ${BENCH_STEP}/${BENCH_TOTAL_STEPS} (total elapsed $(bench_elapsed_human))"
+    fi
+    if [ -n "$BENCH_SUCCESS_TAIL" ]; then
+        print_status "SUCCESS" "$BENCH_SUCCESS_TAIL at $(date)"
+    else
+        print_status "SUCCESS" "Benchmarks completed at $(date)"
+    fi
     print_status "INFO" "Results saved to: $RESULTS_DIR"
 }
 
