@@ -42,10 +42,10 @@ print_status() {
     local status=$1
     local message=$2
     case $status in
-        "INFO") echo -e "${BLUE}[INFO]${NC} $message" ;;
-        "SUCCESS") echo -e "${GREEN}[SUCCESS]${NC} $message" ;;
-        "WARNING") echo -e "${YELLOW}[WARNING]${NC} $message" ;;
-        "ERROR") echo -e "${RED}[ERROR]${NC} $message" ;;
+        "INFO") printf "${BLUE}[INFO]${NC} %s\n" "$message" ;;
+        "SUCCESS") printf "${GREEN}[SUCCESS]${NC} %s\n" "$message" ;;
+        "WARNING") printf "${YELLOW}[WARNING]${NC} %s\n" "$message" ;;
+        "ERROR") printf "${RED}[ERROR]${NC} %s\n" "$message" ;;
     esac
 }
 
@@ -313,7 +313,7 @@ main() {
         echo ""
         exit 1
     else
-        print_status "SUCCESS" "All containers are healthy! 🎉"
+        print_status "SUCCESS" "All containers are healthy."
         echo ""
     fi
 }

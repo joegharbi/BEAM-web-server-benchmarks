@@ -124,11 +124,16 @@ print_status() {
     local status=$1
     local message=$2
     case $status in
-        "INFO") echo -e "${BLUE}[INFO]${NC} $message" ;;
-        "SUCCESS") echo -e "${GREEN}[SUCCESS]${NC} $message" ;;
-        "WARNING") echo -e "${YELLOW}[WARNING]${NC} $message" ;;
-        "ERROR") echo -e "${RED}[ERROR]${NC} $message" ;;
+        "INFO") printf "${BLUE}[INFO]${NC} %s\n" "$message" ;;
+        "SUCCESS") printf "${GREEN}[SUCCESS]${NC} %s\n" "$message" ;;
+        "WARNING") printf "${YELLOW}[WARNING]${NC} %s\n" "$message" ;;
+        "ERROR") printf "${RED}[ERROR]${NC} %s\n" "$message" ;;
     esac
+}
+
+print_section() {
+    local title=$1
+    printf "\n${BLUE}=== %s ===${NC}\n" "$title"
 }
 
 # Find container dir by image name (benchmarks/type/language/framework/container-name)
@@ -305,18 +310,18 @@ check_port_free() {
         if ! ss -ltn | grep -q ":$port "; then
             return 0
         fi
-        echo "[INFO] Port $port is busy, waiting... ($i/10)"
+        print_status "INFO" "Port $port is busy, waiting... ($i/10)"
         sleep 1
     done
     # Port is still busy after waiting - show what's using it
-    echo -e "${RED}[ERROR]${NC} Port $port is still in use after waiting. Checking what's using it..."
-    echo ""
+    print_status "ERROR" "Port $port is still in use after waiting. Checking what's using it..."
+    printf "\n"
     echo "Processes using port $port:"
     ss -ltnp | grep ":$port " || echo "  (none found via ss)"
-    echo ""
+    printf "\n"
     echo "Docker containers using port $port:"
     docker ps --filter "publish=$port" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}" 2>/dev/null || echo "  (none found)"
-    echo ""
+    printf "\n"
     echo "To free the port, you can:"
     echo "  1. Stop benchmark containers: make clean-port PORT=$port"
     echo "  2. Or manually: docker ps --filter 'publish=$port' -q | xargs docker stop"
@@ -332,7 +337,7 @@ run_websocket_tests() {
         return 1
     fi
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
-        echo -e "${BLUE}--- WebSocket Burst Test (Super Quick) ---${NC}"
+        print_section "WebSocket Burst Test (Super Quick)"
         "$PYTHON_PATH" ./tools/measure_websocket.py \
             --server_image "$image" \
             --pattern burst \
@@ -344,7 +349,7 @@ run_websocket_tests() {
             --output_csv "$RESULTS_DIR/websocket/${image}_burst.csv" \
             --measurement_type "burst_${quick_ws_burst_clients[0]}_${quick_ws_burst_sizes[0]}_${quick_ws_burst_bursts[0]}_${quick_ws_burst_intervals[0]}"
         print_csv_summary "$RESULTS_DIR/websocket/${image}_burst.csv"
-        echo -e "${BLUE}--- WebSocket Stream Test (Super Quick) ---${NC}"
+        print_section "WebSocket Stream Test (Super Quick)"
         "$PYTHON_PATH" ./tools/measure_websocket.py \
             --server_image "$image" \
             --pattern stream \
@@ -438,10 +443,12 @@ EOF
     [ $fail_idx -ge 0 ] && fail="${vals[$fail_idx]}"
     [ $latency_idx -ge 0 ] && latency="${vals[$latency_idx]}"
     [ $throughput_idx -ge 0 ] && throughput="${vals[$throughput_idx]}"
-    if [ "$total" = "$fail" ] && [ -n "$total" ]; then
-        echo "  -> WARNING: All failed ($fail/$total)"
+    if [[ "$total" =~ ^[0-9]+$ ]] && [[ "$fail" =~ ^[0-9]+$ ]] && [ "$total" -gt 0 ] && [ "$total" -eq "$fail" ]; then
+        echo "  -> [WARNING] All failed ($fail/$total)"
+    elif [[ "$total" =~ ^[0-9]+$ ]] && [[ "$fail" =~ ^[0-9]+$ ]] && [ "$total" -ge "$fail" ]; then
+        echo "  -> [SUCCESS] $((total-fail))/$total, Avg Latency: $latency ms, Throughput: $throughput MB/s"
     else
-        echo "  -> Success: $((total-fail))/$total, Avg Latency: $latency ms, Throughput: $throughput MB/s"
+        echo "  -> [INFO] Total: $total, Failed: $fail, Avg Latency: $latency ms, Throughput: $throughput MB/s"
     fi
 }
 
@@ -449,7 +456,7 @@ run_concurrency() {
     local image=$1
     local host_port=$2
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
-        echo -e "${BLUE}--- WebSocket Concurrency (Super Quick) ---${NC}"
+        print_section "WebSocket Concurrency (Super Quick)"
         local csv_file="$RESULTS_DIR/websocket/${image}_concurrency.csv"
         "$PYTHON_PATH" ./tools/measure_websocket.py \
             --server_image "$image" \
@@ -462,10 +469,10 @@ run_concurrency() {
             --output_csv "$csv_file" \
             --measurement_type "concurrency_${quick_concurrency_clients[0]}_${quick_concurrency_size}"
         print_csv_summary "$csv_file"
-        echo -e "${BLUE}Concurrency completed for $image at $(date)${NC}"
-        echo "Results saved to: $csv_file"
+        print_status "SUCCESS" "Concurrency completed for $image at $(date)"
+        print_status "INFO" "Results saved to: $csv_file"
     else
-        echo -e "${BLUE}\n=== WebSocket Concurrency: $image ===${NC}"
+        print_section "WebSocket Concurrency: $image"
         local port_mapping=$(get_container_port_mapping "$image" "$host_port")
         local ws_url="ws://localhost:$host_port/ws"
         local ntests=${#concurrency_clients[@]}
@@ -486,8 +493,8 @@ run_concurrency() {
             print_csv_summary "$csv_file"
             idx=$((idx+1))
         done
-        echo -e "${BLUE}Concurrency completed for $image at $(date)${NC}"
-        echo "Results saved to: $RESULTS_DIR/websocket/${image}_concurrency.csv"
+        print_status "SUCCESS" "Concurrency completed for $image at $(date)"
+        print_status "INFO" "Results saved to: $RESULTS_DIR/websocket/${image}_concurrency.csv"
     fi
 }
 
@@ -495,7 +502,7 @@ run_payload() {
     local image=$1
     local host_port=$2
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
-        echo -e "${BLUE}--- WebSocket Payload (Super Quick) ---${NC}"
+        print_section "WebSocket Payload (Super Quick)"
         local csv_file="$RESULTS_DIR/websocket/${image}_payload.csv"
         "$PYTHON_PATH" ./tools/measure_websocket.py \
             --server_image "$image" \
@@ -508,10 +515,10 @@ run_payload() {
             --output_csv "$csv_file" \
             --measurement_type "payload_${quick_payload_clients}_${quick_payload_sizes[0]}"
         print_csv_summary "$csv_file"
-        echo -e "${BLUE}Payload completed for $image at $(date)${NC}"
-        echo "Results saved to: $csv_file"
+        print_status "SUCCESS" "Payload completed for $image at $(date)"
+        print_status "INFO" "Results saved to: $csv_file"
     else
-        echo -e "${BLUE}\n=== WebSocket Payload: $image ===${NC}"
+        print_section "WebSocket Payload: $image"
         local port_mapping=$(get_container_port_mapping "$image" "$host_port")
         local ws_url="ws://localhost:$host_port/ws"
         local ntests=${#payload_sizes[@]}
@@ -532,8 +539,8 @@ run_payload() {
             print_csv_summary "$csv_file"
             idx=$((idx+1))
         done
-        echo -e "${BLUE}Payload completed for $image at $(date)${NC}"
-        echo "Results saved to: $RESULTS_DIR/websocket/${image}_payload.csv"
+        print_status "SUCCESS" "Payload completed for $image at $(date)"
+        print_status "INFO" "Results saved to: $RESULTS_DIR/websocket/${image}_payload.csv"
     fi
 }
 
@@ -604,9 +611,9 @@ EOF
         fi
     done
     if [ ${#failed_containers[@]} -eq 0 ]; then
-        echo -e "\n[RUN SUMMARY] All containers ran successfully (no 100% failed requests)."
+        printf "\n[RUN SUMMARY] All containers ran successfully (no 100%% failed requests).\n"
     else
-        echo -e "\n[RUN SUMMARY] The following containers had 100% failed requests:"
+        printf "\n[RUN SUMMARY] The following containers had 100%% failed requests:\n"
         for c in "${failed_containers[@]}"; do
             echo "  - $c"
         done
@@ -614,12 +621,12 @@ EOF
 }
 
 main() {
-    echo "Starting benchmarks at $(date)"
-    echo "Results will be saved to: $RESULTS_DIR"
-    echo ""
+    print_status "INFO" "Starting benchmarks at $(date)"
+    print_status "INFO" "Results will be saved to: $RESULTS_DIR"
+    printf "\n"
     if [[ $RUN_ALL -eq 1 ]]; then
-        echo "Running all benchmarks..."
-        echo -e "${BLUE}=== Static Container Tests ===${NC}"
+        print_status "INFO" "Running all benchmarks..."
+        print_section "Static Container Tests"
         local static_containers=($(discover_containers "static"))
         for container in "${static_containers[@]}"; do
             if ! check_port_free "$HOST_PORT"; then
@@ -636,7 +643,7 @@ main() {
             run_docker_tests "$container" "$HOST_PORT" "static"
             sleep 1
         done
-        echo -e "${BLUE}=== Dynamic Container Tests ===${NC}"
+        print_section "Dynamic Container Tests"
         local dynamic_containers=($(discover_containers "dynamic"))
         for container in "${dynamic_containers[@]}"; do
             if ! check_port_free "$HOST_PORT"; then
@@ -653,7 +660,7 @@ main() {
             run_docker_tests "$container" "$HOST_PORT" "dynamic"
             sleep 1
         done
-        echo -e "${BLUE}=== WebSocket Tests ===${NC}"
+        print_section "WebSocket Tests"
         local websocket_containers=($(discover_containers "websocket"))
         for container in "${websocket_containers[@]}"; do
             if ! check_port_free "$HOST_PORT"; then
@@ -769,9 +776,9 @@ main() {
                     run_concurrency "$container" "$HOST_PORT"
                     sleep 1
                 done
-                echo ""
-                echo -e "${BLUE}Concurrency completed at $(date)${NC}"
-                echo "Results saved to: $RESULTS_DIR"
+                printf "\n"
+                print_status "SUCCESS" "Concurrency completed at $(date)"
+                print_status "INFO" "Results saved to: $RESULTS_DIR"
                 exit 0
                 ;;
             "payload")
@@ -794,9 +801,9 @@ main() {
                     run_payload "$container" "$HOST_PORT"
                     sleep 1
                 done
-                echo ""
-                echo -e "${BLUE}Payload completed at $(date)${NC}"
-                echo "Results saved to: $RESULTS_DIR"
+                printf "\n"
+                print_status "SUCCESS" "Payload completed at $(date)"
+                print_status "INFO" "Results saved to: $RESULTS_DIR"
                 exit 0
                 ;;
             *)
@@ -806,9 +813,9 @@ main() {
                 ;;
         esac
     fi
-    echo ""
-    echo -e "${BLUE}Benchmarks completed at $(date)${NC}"
-    echo "Results saved to: $RESULTS_DIR"
+    printf "\n"
+    print_status "SUCCESS" "Benchmarks completed at $(date)"
+    print_status "INFO" "Results saved to: $RESULTS_DIR"
 }
 
 main "$@"

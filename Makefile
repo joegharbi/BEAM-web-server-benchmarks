@@ -311,4 +311,4 @@ init:  ## One-step setup: venv, install, build, validate
 	@$(MAKE) setup
 	@$(MAKE) build
 	@$(MAKE) validate
-	@echo "[INFO] All setup complete! Your environment is ready to run benchmarks." 
+	@printf "${GREEN}[INFO] All setup complete! Your environment is ready to run benchmarks.${NC}\n"
