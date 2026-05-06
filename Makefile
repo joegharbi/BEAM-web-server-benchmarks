@@ -8,7 +8,7 @@ VENV_NAME ?= srv
 VENV_PATH = $(VENV_NAME)/bin/activate
 BENCH_DIR ?= benchmarks
 
-.PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-env clean-nuclear build run setup graph validate check-health build-test-run run-single clean-all clean-build-run clean-all-build-run test
+.PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-env clean-nuclear build run setup graph validate check-health build-test-run run-single run-single-super-quick clean-all clean-build-run clean-all-build-run test
 
 # --- Colors ---
 GREEN=\033[0;32m
@@ -133,6 +133,14 @@ run-single: check-env ## Run a single server (e.g. make run-single SERVER=dy-erl
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
 	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/run_benchmarks.sh --single $(SERVER)
+
+# Explicit rule (not run-%): one container, one HTTP/WebSocket level preset (--super-quick).
+run-single-super-quick: check-env ## Quick smoke test: one server, super-quick (requires SERVER=image)
+	@if [ -z "$(SERVER)" ]; then printf "${RED}ERROR:${NC} Set SERVER (Docker image name). Example: make run-single-super-quick SERVER=st-erlang-cowboy-27\n"; exit 1; fi
+	@for v in ./*/bin/activate; do \
+		if [ -f "$$v" ]; then . "$$v"; break; fi; \
+	done; \
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/run_benchmarks.sh --super-quick --single $(SERVER)
 
 # Pattern rule: make run-static, run-dynamic, run-websocket, run-quick, run-grpc, etc.
 # Adding benchmarks/<type>/ + measure script gives you make run-<type> automatically.
@@ -261,6 +269,7 @@ help:  ## Show this help message
 	@printf "  %-22s %s\n" "run-quick" "Quick test (3 request counts per container)"
 	@printf "  %-22s %s\n" "run-super-quick" "Super-quick test (1 request count per container)"
 	@printf "  %-22s %s\n" "run-single" "Run a single server (e.g. SERVER=dy-erlang-pure-27)"
+	@printf "  %-22s %s\n" "run-single-super-quick" "Single server, super-quick (SERVER=st-...)"
 	@printf "  %-22s %s\n" "run-static/dynamic/websocket" "Run a specific type only"
 	@printf "  %-22s %s\n" "run-<type>" "New types (e.g. gRPC): add benchmarks/<type>/ and measure script → make run-<type> works"
 	@printf "\n"
@@ -301,6 +310,7 @@ help:  ## Show this help message
 	@printf "  make run     # Run all benchmarks\n"
 	@printf "  make run-quick # Quick test (3 request counts)\n"
 	@printf "  make run-super-quick # Fastest validation (1 request count)\n"
+	@printf "  make run-single-super-quick SERVER=st-erlang-cowboy-27 HTTP_MAX_WORKERS=100\n"
 	@printf "\n"
 	@printf "${CYAN}Auto-Discovery:${NC}\n"
 	@printf "  - Add new servers: benchmarks/type/language/framework/container-name/ with Dockerfile\n"
