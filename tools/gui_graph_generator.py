@@ -912,6 +912,72 @@ class BenchmarkGrapher(QMainWindow):
                 self.summary_label.setText("")
             return
 
+        # WebSocket bar plot: group all series by shared x categories (e.g., Num Clients)
+        # so bars are aligned per category across servers.
+        if is_websocket and type_choice == WS_PLOT_BAR:
+            prepared = []
+            for idx, f in enumerate(selected_files):
+                header = self.headers[f]
+                rows = self.rows[f]
+                typ = self.file_types[f]
+                x, y, label = self.get_plot_data(header, rows, typ, metric, os.path.basename(f), filepath=f)
+                if x and y:
+                    prepared.append((idx, label, x, y))
+                    all_vals.extend(y)
+
+            if not prepared:
+                self.summary_label.setText("")
+                return
+
+            # Build one shared sorted x-axis from all series so bars are truly grouped.
+            x_unique = sorted(
+                {
+                    float(xv)
+                    for _, _, x_vals, _ in prepared
+                    for xv in x_vals
+                    if isinstance(xv, (int, float, np.integer, np.floating))
+                }
+            )
+            if not x_unique:
+                self.summary_label.setText("")
+                return
+
+            x_to_idx = {xv: i for i, xv in enumerate(x_unique)}
+            base = np.arange(len(x_unique), dtype=float)
+            # Keep websocket grouped bars compact and stable across series count.
+            group_width = 0.8
+            bar_width = group_width / n_series
+
+            for idx, label, x_vals, y_vals in prepared:
+                color = self.color_cycle[idx % len(self.color_cycle)]
+                offset = (idx - (n_series - 1) / 2) * bar_width
+                y_aligned = np.full(len(x_unique), np.nan, dtype=float)
+                for xv, yv in zip(x_vals, y_vals):
+                    if isinstance(xv, (int, float, np.integer, np.floating)):
+                        x_key = float(xv)
+                        if x_key in x_to_idx:
+                            y_aligned[x_to_idx[x_key]] = float(yv)
+                self.ax.bar(base + offset, y_aligned, width=bar_width, label=label, color=color, alpha=0.85)
+
+            self.ax.set_xticks(base)
+            self.ax.set_xticklabels(
+                [str(int(v)) if float(v).is_integer() else str(v) for v in x_unique]
+            )
+            self.ax.set_xlim(-0.5, len(x_unique) - 0.5)
+            self.ax.set_title(f"{metric} vs. Number of clients")
+            self.ax.set_xlabel("Number of clients")
+            self.ax.set_ylabel(metric)
+            self.ax.legend(loc='best', framealpha=0.85)
+            self.ax.grid(True)
+            self.canvas.draw()
+
+            if all_vals:
+                s = f"{metric}: min={min(all_vals):.2f}, max={max(all_vals):.2f}, avg={sum(all_vals)/len(all_vals):.2f}"
+                self.summary_label.setText(s)
+            else:
+                self.summary_label.setText("")
+            return
+
         for idx, f in enumerate(selected_files):
             header = self.headers[f]
             rows = self.rows[f]
