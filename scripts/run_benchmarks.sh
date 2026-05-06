@@ -80,6 +80,9 @@ full_http_requests=(100 1000 5000 8000 10000 15000 20000 30000 40000 50000 60000
 quick_http_requests=(1000 5000 10000)
 # Super-quick: single request count
 super_quick_http_requests=(1000)
+# Fixed HTTP client worker pool size for reproducible HTTP runs.
+# Can be overridden per run, e.g.: HTTP_MAX_WORKERS=200 make run
+HTTP_MAX_WORKERS=${HTTP_MAX_WORKERS:-100}
 
 # Full test parameters for WebSocket benchmarks (balanced set)
 full_ws_burst_clients=(5 50 100)
@@ -570,7 +573,8 @@ run_docker_tests() {
             --port_mapping "$port_mapping" \
             --num_requests "$num_requests" \
             --output_csv "$csv_file" \
-            --measurement_type "$test_type"
+            --measurement_type "$test_type" \
+            --max_workers "$HTTP_MAX_WORKERS"
         print_csv_summary "$csv_file"
         idx=$((idx+1))
     done
