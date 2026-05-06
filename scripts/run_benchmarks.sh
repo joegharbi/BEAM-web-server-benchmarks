@@ -144,6 +144,38 @@ print_section() {
     printf "\n${BLUE}=== %s ===${NC}\n" "$title"
 }
 
+SUDO_KEEPALIVE_PID=""
+
+cleanup_sudo_keepalive() {
+    if [ -n "$SUDO_KEEPALIVE_PID" ]; then
+        kill "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1 || true
+        wait "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+        SUDO_KEEPALIVE_PID=""
+    fi
+}
+
+start_sudo_keepalive() {
+    if ! command -v sudo >/dev/null 2>&1; then
+        print_status "WARNING" "sudo not found; scaphandre calls may fail."
+        return
+    fi
+
+    print_status "INFO" "Requesting sudo authentication once for long benchmark run..."
+    if ! sudo -v; then
+        print_status "ERROR" "Unable to authenticate sudo. Aborting."
+        exit 1
+    fi
+
+    (
+        while true; do
+            sudo -n true >/dev/null 2>&1 || exit 0
+            sleep 60
+        done
+    ) &
+    SUDO_KEEPALIVE_PID=$!
+    trap cleanup_sudo_keepalive EXIT INT TERM
+}
+
 # Find container dir by image name (benchmarks/type/language/framework/container-name)
 find_container_dir() {
     local image_name="$1"
@@ -638,6 +670,7 @@ EOF
 }
 
 main() {
+    start_sudo_keepalive
     print_status "INFO" "Starting benchmarks at $(date)"
     print_status "INFO" "Results will be saved to: $RESULTS_DIR"
     printf "\n"
