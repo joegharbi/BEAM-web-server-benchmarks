@@ -126,13 +126,13 @@ run: check-env ## Run all benchmarks (log: run plan, [PROGRESS] lines, tail -f l
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/run_benchmarks.sh
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh
 
 run-single: check-env ## Run a single server (e.g. make run-single SERVER=dy-erlang-pure-27)
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/run_benchmarks.sh --single $(SERVER)
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --single $(SERVER)
 
 # Explicit rule (not run-%): one container, one HTTP/WebSocket level preset (--super-quick).
 run-single-super-quick: check-env ## Quick smoke test: one server, super-quick (requires SERVER=image)
@@ -140,7 +140,7 @@ run-single-super-quick: check-env ## Quick smoke test: one server, super-quick (
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/run_benchmarks.sh --super-quick --single $(SERVER)
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --super-quick --single $(SERVER)
 
 # Pattern rule: make run-static, run-dynamic, run-websocket, run-quick, run-grpc, etc.
 # Adding benchmarks/<type>/ + measure script gives you make run-<type> automatically.
@@ -148,7 +148,7 @@ run-%: check-env
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/run_benchmarks.sh --$*
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --$*
 
 check-health: check-env ## Health check only: run health check on all already-built containers (no build). Log in logs/test_*.log.
 	@for v in ./*/bin/activate; do \
