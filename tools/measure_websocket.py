@@ -15,6 +15,27 @@ import websockets
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger()
 
+def is_measure_quiet():
+    """Match run_benchmarks.sh semantics: verbose only when BENCH_MEASURE_QUIET is exactly 0."""
+    v = (os.environ.get("BENCH_MEASURE_QUIET") or "1").strip()
+    return v != "0"
+
+# [MEASURE] uses magenta so it is distinct from bash [PROGRESS] (cyan).
+_M_MAGENTA = "\033[0;35m"
+_M_GREEN = "\033[0;32m"
+_M_NC = "\033[0m"
+
+
+def measure_quiet_msg(body: str) -> None:
+    print(f"{_M_MAGENTA}[MEASURE]{_M_NC} {body}", flush=True)
+
+
+def measure_quiet_heartbeat_interval_sec():
+    try:
+        return max(10, int(os.environ.get("MEASURE_HEARTBEAT_SEC", "60")))
+    except ValueError:
+        return 60
+
 # =====================
 # Argument Parsing
 # =====================
@@ -305,6 +326,8 @@ def main():
     args = parse_args()
     if args.verbose:
         logger.setLevel(logging.DEBUG)
+    elif is_measure_quiet():
+        logger.setLevel(logging.WARNING)
     check_prerequisites()  # Exit with error before any measurement if anything is missing
     scaphandre_path = get_binary_path("scaphandre")
     docker_path = get_binary_path("docker")
@@ -329,6 +352,8 @@ def main():
         exit(1)
 
     cleanup_existing_scaphandre()
+    if is_measure_quiet() and not args.verbose:
+        measure_quiet_msg(f"{container_name} | Docker start + WebSocket readiness wait …")
     logger.info(f"Starting container '{container_name}'...")
     start_server_container(args.server_image, args.port_mapping, container_name, docker_path, args.network)
     url = args.url
@@ -386,6 +411,15 @@ def main():
         stop_server_container(container_name, docker_path)
         exit(1)
 
+    if is_measure_quiet() and not args.verbose:
+        traffic_desc = f"{args.pattern} | clients={args.clients} size_kb={args.size_kb}"
+        if args.pattern == "burst":
+            traffic_desc += f" bursts={args.bursts} interval={args.interval}s"
+        else:
+            traffic_desc += f" rate={args.rate}/s duration={args.duration}s"
+        measure_quiet_msg(
+            f"{container_name} | Scaphandre power sampling + WebSocket load | {traffic_desc}"
+        )
     logger.info("Starting Scaphandre...")
     scaphandre_process = start_scaphandre(output_json, scaphandre_path)
     time.sleep(2)
@@ -416,14 +450,37 @@ def main():
             raise ValueError(f"Unsupported mode/pattern: {args.mode}/{args.pattern}")
     async def run_all():
         await asyncio.gather(*tasks)
+    hb_stop = threading.Event()
+    hb_thread = None
+    load_t0 = time.time()
+    if is_measure_quiet() and not args.verbose:
+        iv = measure_quiet_heartbeat_interval_sec()
+
+        def _heartbeat_worker():
+            while not hb_stop.wait(iv):
+                done = sum(int(r.get("total", 0)) for r in client_results)
+                measure_quiet_msg(
+                    f"{container_name} | WebSocket messages {done} ({int(time.time() - load_t0)}s elapsed)"
+                )
+
+        hb_thread = threading.Thread(target=_heartbeat_worker, daemon=True)
+        hb_thread.start()
+
     start_time = time.time()
-    asyncio.run(run_all())
+    try:
+        asyncio.run(run_all())
+    finally:
+        if hb_thread is not None:
+            hb_stop.set()
+            hb_thread.join(timeout=3)
     runtime = time.time() - start_time
 
     time.sleep(3)
     stop_event.set()
     resource_thread.join()
     
+    if is_measure_quiet() and not args.verbose:
+        measure_quiet_msg(f"{container_name} | stopping Scaphandre + appending CSV …")
     logger.info("Waiting for Scaphandre...")
     time.sleep(5)
     stop_scaphandre(scaphandre_process)
@@ -492,15 +549,26 @@ def main():
             writer.writerow(headers)
         writer.writerow(row)
 
-    logger.info("=== Measurement Summary ===")
-    logger.info(f"Container: {container_name}")
-    logger.info(f"Total Requests: {total_msgs}, Successful: {total_success}, Failed: {total_fail}")
-    logger.info(f"Execution Time: {runtime:.2f} s, Messages/s: {requests_per_second:.2f}")
-    logger.info(f"Energy: Total {total_energy:.2f} J, Avg Power {avg_power:.2f} W")
-    logger.info(f"CPU: Avg {resource_results['cpu'].get('avg', 0.0):.2f}%, Peak {resource_results['cpu'].get('peak', 0.0):.2f}%, Total {resource_results['cpu'].get('total', 0.0):.2f} %*s")
-    logger.info(f"Memory: Avg {resource_results['mem'].get('avg', 0.0):.2f} MB, Peak {resource_results['mem'].get('peak', 0.0):.2f} MB, Total {resource_results['mem'].get('total', 0.0):.2f} MB*s")
-    logger.info(f"JSON: {output_json}, CSV: {output_csv}")
-    logger.info("==========================")
+    if is_measure_quiet() and not args.verbose:
+        ok = total_success == total_msgs
+        cnt = (
+            f"{_M_GREEN}{total_success}/{total_msgs} ok{_M_NC}"
+            if ok
+            else f"{total_success}/{total_msgs}"
+        )
+        measure_quiet_msg(
+            f"{container_name} | {cnt} | {runtime:.1f}s | {requests_per_second:.0f} msg/s | {output_csv}"
+        )
+    else:
+        logger.info("=== Measurement Summary ===")
+        logger.info(f"Container: {container_name}")
+        logger.info(f"Total Requests: {total_msgs}, Successful: {total_success}, Failed: {total_fail}")
+        logger.info(f"Execution Time: {runtime:.2f} s, Messages/s: {requests_per_second:.2f}")
+        logger.info(f"Energy: Total {total_energy:.2f} J, Avg Power {avg_power:.2f} W")
+        logger.info(f"CPU: Avg {resource_results['cpu'].get('avg', 0.0):.2f}%, Peak {resource_results['cpu'].get('peak', 0.0):.2f}%, Total {resource_results['cpu'].get('total', 0.0):.2f} %*s")
+        logger.info(f"Memory: Avg {resource_results['mem'].get('avg', 0.0):.2f} MB, Peak {resource_results['mem'].get('peak', 0.0):.2f} MB, Total {resource_results['mem'].get('total', 0.0):.2f} MB*s")
+        logger.info(f"JSON: {output_json}, CSV: {output_csv}")
+        logger.info("==========================")
 
 if __name__ == "__main__":
     main() 

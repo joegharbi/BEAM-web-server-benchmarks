@@ -26,7 +26,7 @@ results/
 Container Name,Type,Num CPUs,Total Requests,Successful Requests,Failed Requests,Execution Time (s),Requests/s,Total Energy (J),Avg Power (W),Samples,Avg CPU (%),Peak CPU (%),Total CPU (%*s),Avg Mem (MB),Peak Mem (MB),Total Mem (MB*s),HTTP Max Workers
 ```
 
-**HTTP Max Workers:** Client-side `ThreadPoolExecutor` limit from `measure_docker.py` (`HTTP_MAX_WORKERS` / `--max_workers`), or the literal **System default** when unset (Python’s default pool size).
+**HTTP Max Workers:** Client-side `ThreadPoolExecutor` limit from `measure_docker.py` (`HTTP_MAX_WORKERS` / `--max_workers`). The benchmark runner defaults this to `100` for reproducibility, and you can override it per run.
 
 ### WebSocket
 

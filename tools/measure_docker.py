@@ -41,9 +41,9 @@ def measure_quiet_msg(body: str) -> None:
 
 def measure_quiet_heartbeat_interval_sec():
     try:
-        return max(10, int(os.environ.get("MEASURE_HEARTBEAT_SEC", "15")))
+        return max(10, int(os.environ.get("MEASURE_HEARTBEAT_SEC", "60")))
     except ValueError:
-        return 15
+        return 60
 
 
 results_counter = Counter()

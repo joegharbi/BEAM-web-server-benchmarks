@@ -44,10 +44,10 @@ case "${1:-}" in
         echo "  --single IMAGE  Run a single server (e.g. --single ws-erlang-yaws-27)"
         echo "  --bench PATH    Benchmark root directory (default: ./benchmarks)"
         echo "Environment:"
-        echo "  HTTP_MAX_WORKERS     Max HTTP client workers for measure_docker.py (default: unset; CSV: System default)"
+        echo "  HTTP_MAX_WORKERS     Max HTTP client workers for measure_docker.py (default: 100)"
         echo "                       Applies to HTTP (static/dynamic) only; WebSocket is unaffected."
         echo "  BENCH_MEASURE_QUIET  HTTP measure_docker logs: 1=compact + heartbeats (default), 0=verbose"
-        echo "  MEASURE_HEARTBEAT_SEC  Seconds between quiet-mode load progress lines (default: 15, min: 10)"
+        echo "  MEASURE_HEARTBEAT_SEC  Seconds between quiet-mode load progress lines (default: 60, min: 10)"
         echo "  clean       Clean repository to fresh state"
         echo ""
         echo "Examples:"
@@ -87,10 +87,10 @@ full_http_requests=(100 1000 5000 8000 10000 15000 20000 30000 40000 50000 60000
 quick_http_requests=(1000 5000 10000)
 # Super-quick: single request count
 super_quick_http_requests=(1000)
-# Optional HTTP client worker pool size for reproducible HTTP runs.
-# If unset, measure_docker.py uses ThreadPoolExecutor default (None); CSV stores "System default".
+# Default HTTP client worker pool size for reproducible HTTP runs.
+# Override with HTTP_MAX_WORKERS=N (for example 64 or 200).
 # Example override: HTTP_MAX_WORKERS=100 make run
-HTTP_MAX_WORKERS="${HTTP_MAX_WORKERS:-}"
+HTTP_MAX_WORKERS="${HTTP_MAX_WORKERS:-100}"
 # HTTP measurements: 1 = one-line measure_docker output (default); 0 = full logs.
 BENCH_MEASURE_QUIET="${BENCH_MEASURE_QUIET:-1}"
 
@@ -335,7 +335,7 @@ bench_init_run_plan() {
         fi
     fi
     if [ "${BENCH_MEASURE_QUIET:-1}" != "0" ]; then
-        print_status "INFO" "HTTP measurement output is compact (BENCH_MEASURE_QUIET=1): magenta [MEASURE] lines + load heartbeats every ${MEASURE_HEARTBEAT_SEC:-15}s. BENCH_MEASURE_QUIET=0 or MEASURE_HEARTBEAT_SEC=3600 to reduce noise."
+        print_status "INFO" "HTTP measurement output is compact (BENCH_MEASURE_QUIET=1): magenta [MEASURE] lines + load heartbeats every ${MEASURE_HEARTBEAT_SEC:-60}s. BENCH_MEASURE_QUIET=0 or MEASURE_HEARTBEAT_SEC=3600 to reduce noise."
     fi
     printf "${BLUE}[INFO]${NC} While running: ${CYAN}tail -f %s${NC}\n" "$LOG_FILE"
     printf "${BLUE}[INFO]${NC} Milestones only: ${CYAN}grep -F '[PROGRESS]' %s${NC}\n" "$LOG_FILE"
@@ -478,10 +478,10 @@ case "${1:-}" in
         echo "  --single IMAGE  Run a single server (e.g. --single ws-erlang-yaws-27)"
         echo "  --bench PATH    Benchmark root directory (default: ./benchmarks)"
         echo "Environment:"
-        echo "  HTTP_MAX_WORKERS     Max HTTP client workers for measure_docker.py (default: unset; CSV: System default)"
+        echo "  HTTP_MAX_WORKERS     Max HTTP client workers for measure_docker.py (default: 100)"
         echo "                       Applies to HTTP (static/dynamic) only; WebSocket is unaffected."
         echo "  BENCH_MEASURE_QUIET  HTTP measure_docker logs: 1=compact + heartbeats (default), 0=verbose"
-        echo "  MEASURE_HEARTBEAT_SEC  Seconds between quiet-mode load progress lines (default: 15, min: 10)"
+        echo "  MEASURE_HEARTBEAT_SEC  Seconds between quiet-mode load progress lines (default: 60, min: 10)"
         echo "  clean       Clean repository to fresh state"
         echo ""
         echo "Examples:"
@@ -894,11 +894,7 @@ main() {
     start_sudo_keepalive
     print_status "INFO" "Starting benchmarks at $(date)"
     print_status "INFO" "Results will be saved to: $RESULTS_DIR"
-    if [ -n "$HTTP_MAX_WORKERS" ]; then
-        print_status "INFO" "HTTP client max workers: $HTTP_MAX_WORKERS (column \"HTTP Max Workers\" in static/dynamic CSVs)"
-    else
-        print_status "INFO" "HTTP client max workers: System default (column \"HTTP Max Workers\" in static/dynamic CSVs)"
-    fi
+    print_status "INFO" "HTTP client max workers: $HTTP_MAX_WORKERS (column \"HTTP Max Workers\" in static/dynamic CSVs; override with HTTP_MAX_WORKERS=N)"
     bench_init_run_plan
     local _si=0
     if [[ $RUN_ALL -eq 1 ]]; then
