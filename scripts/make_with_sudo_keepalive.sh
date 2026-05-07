@@ -8,6 +8,13 @@ if [ "$#" -eq 0 ]; then
     exit 1
 fi
 
+# Nested call support: if a parent wrapper already authenticated and
+# keeps sudo alive for this flow, reuse it and avoid duplicate prompts.
+if [ "${BENCH_SUDO_AUTH_READY:-0}" = "1" ]; then
+    "$@"
+    exit $?
+fi
+
 if ! command -v sudo >/dev/null 2>&1; then
     "$@"
     exit $?
@@ -34,4 +41,5 @@ trap cleanup EXIT INT TERM
 ) &
 SUDO_KEEPALIVE_PID=$!
 
+export BENCH_SUDO_AUTH_READY=1
 "$@"

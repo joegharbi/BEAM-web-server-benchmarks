@@ -164,34 +164,40 @@ test: check-env install ## Build all images, then run health check on every cont
 	bash scripts/test_containers.sh
 
 build-test-run: check-env ## Build all containers, check health, and run all benchmarks
-	@printf "${YELLOW}=== Building all containers ===${NC}\n"
-	@$(MAKE) build
-	@printf "\n"
-	@printf "${YELLOW}=== Checking container health ===${NC}\n"
-	@$(MAKE) check-health
-	@printf "\n"
-	@printf "${YELLOW}=== Running all benchmarks ===${NC}\n"
-	@$(MAKE) run
+	@bash scripts/make_with_sudo_keepalive.sh bash -lc '\
+		set -e; \
+		printf "${YELLOW}=== Building all containers ===${NC}\n"; \
+		$(MAKE) build; \
+		printf "\n"; \
+		printf "${YELLOW}=== Checking container health ===${NC}\n"; \
+		$(MAKE) check-health; \
+		printf "\n"; \
+		printf "${YELLOW}=== Running all benchmarks ===${NC}\n"; \
+		$(MAKE) run'
 
 clean-build-run: check-env ## Clean results, build, and run (keeps srv/ and Docker cache)
-	@printf "${YELLOW}=== Cleaning results ===${NC}\n"
-	@$(MAKE) clean-results
-	@printf "\n"
-	@$(MAKE) build
-	@printf "\n"
-	@$(MAKE) run
+	@bash scripts/make_with_sudo_keepalive.sh bash -lc '\
+		set -e; \
+		printf "${YELLOW}=== Cleaning results ===${NC}\n"; \
+		$(MAKE) clean-results; \
+		printf "\n"; \
+		$(MAKE) build; \
+		printf "\n"; \
+		$(MAKE) run'
 
 # Fully clean (results + env + Docker), recreate env, build, and run.
 clean-all-build-run: ## Completely clean (results, srv, Docker), then setup, build, and run
-	@printf "${YELLOW}=== Full clean (results, venv, Docker) ===${NC}\n"
-	@$(MAKE) clean-all
-	@printf "\n"
-	@printf "${YELLOW}=== Recreating environment (srv) ===${NC}\n"
-	@$(MAKE) setup
-	@printf "\n"
-	@$(MAKE) build
-	@printf "\n"
-	@$(MAKE) run
+	@bash scripts/make_with_sudo_keepalive.sh bash -lc '\
+		set -e; \
+		printf "${YELLOW}=== Full clean (results, venv, Docker) ===${NC}\n"; \
+		$(MAKE) clean-all; \
+		printf "\n"; \
+		printf "${YELLOW}=== Recreating environment (srv) ===${NC}\n"; \
+		$(MAKE) setup; \
+		printf "\n"; \
+		$(MAKE) build; \
+		printf "\n"; \
+		$(MAKE) run'
 
 graph:  ## Launch the GUI graph generator (uses PyQt5 from requirements.txt)
 	@$(MAKE) check-env
