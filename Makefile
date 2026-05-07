@@ -136,7 +136,7 @@ run-single: check-env ## Run a single server (e.g. make run-single SERVER=dy-erl
 
 # Explicit rule (not run-%): one container, one HTTP/WebSocket level preset (--super-quick).
 run-single-super-quick: check-env ## Quick smoke test: one server, super-quick (requires SERVER=image)
-	@if [ -z "$(SERVER)" ]; then printf "${RED}ERROR:${NC} Set SERVER (Docker image name). Example: make run-single-super-quick SERVER=st-erlang-cowboy-27\n"; exit 1; fi
+	@if [ -z "$(SERVER)" ]; then printf "${RED}ERROR:${NC} Set SERVER (Docker image name). Example: make run-single-super-quick SERVER=dy-erlang-pure-27\n"; exit 1; fi
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
@@ -273,13 +273,18 @@ help:  ## Show this help message
 	@printf "  %-22s %s\n" "run-static/dynamic/websocket" "Run a specific type only"
 	@printf "  %-22s %s\n" "run-<type>" "New types (e.g. gRPC): add benchmarks/<type>/ and measure script → make run-<type> works"
 	@printf "\n"
-	@printf "${CYAN}Benchmark Path Override:${NC}\n"
+	@printf "${CYAN}Benchmark Environment:${NC}\n"
 	@printf "  %-22s %s\n" "BENCH_DIR=path" "Override benchmark root (default: benchmarks)"
-	@printf "  %-22s %s\n" "HTTP_MAX_WORKERS=N" "Set HTTP worker count for static/dynamic runs (default: 100)"
-	@printf "  %-22s %s\n" "BENCH_MEASURE_QUIET=0" "Verbose measure_docker.py logs (default: compact [MEASURE] + heartbeats)"
+	@printf "  %-22s %s\n" "HTTP_MAX_WORKERS=N" "Set HTTP worker count for static/dynamic runs (default: 100; use 'system' for Python default)"
+	@printf "  %-22s %s\n" "BENCH_MEASURE_QUIET=1|0" "logs: 1=compact [MEASURE]+heartbeats (default), 0=verbose"
 	@printf "  %-22s %s\n" "MEASURE_HEARTBEAT_SEC=N" "Seconds between quiet HTTP load progress updates (default: 60)"
+	@printf "\n"
+	@printf "${CYAN}Examples:${NC}\n"
 	@printf "  %-22s %s\n" "example" "make run BENCH_DIR=benchmarks"
-	@printf "  %-22s %s\n" "example" "make run HTTP_MAX_WORKERS=100  # HTTP only; WebSocket unaffected"
+	@printf "  %-22s %s\n" "example" "make run HTTP_MAX_WORKERS=70  # default is 100; HTTP only"
+	@printf "  %-22s %s\n" "example" "make run HTTP_MAX_WORKERS=system  # override to Python default (None)"
+	@printf "  %-22s %s\n" "example" "make run BENCH_MEASURE_QUIET=0  # verbose logs"
+	@printf "  %-22s %s\n" "example" "make run BENCH_MEASURE_QUIET=1 MEASURE_HEARTBEAT_SEC=60  # compact mode for both"
 	@printf "\n"
 	@printf "${YELLOW}Validation & Health:${NC}\n"
 	@printf "  %-22s %s\n" "check-tools" "Check for required tools (Python, pip, Docker, scaphandre)"
@@ -310,12 +315,12 @@ help:  ## Show this help message
 	@printf "  make run     # Run all benchmarks\n"
 	@printf "  make run-quick # Quick test (3 request counts)\n"
 	@printf "  make run-super-quick # Fastest validation (1 request count)\n"
-	@printf "  make run-single-super-quick SERVER=st-erlang-cowboy-27 HTTP_MAX_WORKERS=100\n"
+	@printf "  make run-single-super-quick SERVER=dy-erlang-cowboy-28-4-3 HTTP_MAX_WORKERS=70\n"
 	@printf "\n"
 	@printf "${CYAN}Auto-Discovery:${NC}\n"
 	@printf "  - Add new servers: benchmarks/type/language/framework/container-name/ with Dockerfile\n"
 	@printf "  - Framework automatically detects, builds, tests, and benchmarks all containers\n"
-	@printf "  - Use unified naming (e.g. st-erlang-cowboy-27) for clear CSV/graph labels; see docs/MINIMAL_BASES_AND_UNIFICATION.md\n"
+	@printf "  - Use unified naming (e.g. dy-erlang-cowboy-28-4-3) for clear CSV/graph labels; see docs/MINIMAL_BASES_AND_UNIFICATION.md\n"
 	@printf "  - Port assignment based on Dockerfile EXPOSE directive\n"
 	@printf "\n"
 	@printf "${CYAN}Advanced:${NC}\n"

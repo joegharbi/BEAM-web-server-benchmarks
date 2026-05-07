@@ -45,8 +45,9 @@ case "${1:-}" in
         echo "  --bench PATH    Benchmark root directory (default: ./benchmarks)"
         echo "Environment:"
         echo "  HTTP_MAX_WORKERS     Max HTTP client workers for measure_docker.py (default: 100)"
+        echo "                       Set to 'system' to use Python ThreadPoolExecutor default (CSV: System default)."
         echo "                       Applies to HTTP (static/dynamic) only; WebSocket is unaffected."
-        echo "  BENCH_MEASURE_QUIET  HTTP measure_docker logs: 1=compact + heartbeats (default), 0=verbose"
+        echo "  BENCH_MEASURE_QUIET  logs: 1=compact [MEASURE]+heartbeats (default), 0=verbose"
         echo "  MEASURE_HEARTBEAT_SEC  Seconds between quiet-mode load progress lines (default: 60, min: 10)"
         echo "  clean       Clean repository to fresh state"
         echo ""
@@ -58,7 +59,9 @@ case "${1:-}" in
         echo "  $0 --bench ./benchmarks static   # Run from custom benchmark root"
         echo "  $0 --quick static     # Quick static benchmarks"
         echo "  HTTP_MAX_WORKERS=100 $0 static   # Override HTTP worker count"
-        echo "  BENCH_MEASURE_QUIET=0 $0 static # Verbose measure_docker.py (default is compact)"
+        echo "  HTTP_MAX_WORKERS=system $0 static   # Use ThreadPoolExecutor default"
+        echo "  BENCH_MEASURE_QUIET=0 $0 static # Verbose logs"
+        echo "  BENCH_MEASURE_QUIET=1 MEASURE_HEARTBEAT_SEC=60 $0 static # Compact mode for both + heartbeat interval"
         echo ""
         echo "Port Assignment:"
         echo "  - Fixed host port: ${HOST_PORT:-8001}"
@@ -88,9 +91,19 @@ quick_http_requests=(1000 5000 10000)
 # Super-quick: single request count
 super_quick_http_requests=(1000)
 # Default HTTP client worker pool size for reproducible HTTP runs.
-# Override with HTTP_MAX_WORKERS=N (for example 64 or 200).
-# Example override: HTTP_MAX_WORKERS=100 make run
+# Override with HTTP_MAX_WORKERS=N (for example 64 or 200),
+# or HTTP_MAX_WORKERS=system to use ThreadPoolExecutor default (None).
 HTTP_MAX_WORKERS="${HTTP_MAX_WORKERS:-100}"
+HTTP_MAX_WORKERS_RAW="$HTTP_MAX_WORKERS"
+case "${HTTP_MAX_WORKERS_RAW,,}" in
+    system|none|default|system_default)
+        HTTP_MAX_WORKERS=""
+        ;;
+esac
+if [ -n "$HTTP_MAX_WORKERS" ] && ! [[ "$HTTP_MAX_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[ERROR] HTTP_MAX_WORKERS must be a positive integer or 'system'. Got: $HTTP_MAX_WORKERS_RAW"
+    exit 1
+fi
 # HTTP measurements: 1 = one-line measure_docker output (default); 0 = full logs.
 BENCH_MEASURE_QUIET="${BENCH_MEASURE_QUIET:-1}"
 
@@ -335,7 +348,7 @@ bench_init_run_plan() {
         fi
     fi
     if [ "${BENCH_MEASURE_QUIET:-1}" != "0" ]; then
-        print_status "INFO" "HTTP measurement output is compact (BENCH_MEASURE_QUIET=1): magenta [MEASURE] lines + load heartbeats every ${MEASURE_HEARTBEAT_SEC:-60}s. BENCH_MEASURE_QUIET=0 or MEASURE_HEARTBEAT_SEC=3600 to reduce noise."
+        print_status "INFO" "Measurement output is compact (BENCH_MEASURE_QUIET=1): magenta [MEASURE] lines + load heartbeats every ${MEASURE_HEARTBEAT_SEC:-60}s for HTTP+WebSocket. BENCH_MEASURE_QUIET=0 or MEASURE_HEARTBEAT_SEC=3600 to reduce noise."
     fi
     printf "${BLUE}[INFO]${NC} While running: ${CYAN}tail -f %s${NC}\n" "$LOG_FILE"
     printf "${BLUE}[INFO]${NC} Milestones only: ${CYAN}grep -F '[PROGRESS]' %s${NC}\n" "$LOG_FILE"
@@ -479,8 +492,9 @@ case "${1:-}" in
         echo "  --bench PATH    Benchmark root directory (default: ./benchmarks)"
         echo "Environment:"
         echo "  HTTP_MAX_WORKERS     Max HTTP client workers for measure_docker.py (default: 100)"
+        echo "                       Set to 'system' to use Python ThreadPoolExecutor default (CSV: System default)."
         echo "                       Applies to HTTP (static/dynamic) only; WebSocket is unaffected."
-        echo "  BENCH_MEASURE_QUIET  HTTP measure_docker logs: 1=compact + heartbeats (default), 0=verbose"
+        echo "  BENCH_MEASURE_QUIET  logs: 1=compact [MEASURE]+heartbeats (default), 0=verbose"
         echo "  MEASURE_HEARTBEAT_SEC  Seconds between quiet-mode load progress lines (default: 60, min: 10)"
         echo "  clean       Clean repository to fresh state"
         echo ""
@@ -492,7 +506,9 @@ case "${1:-}" in
         echo "  $0 --bench ./benchmarks static   # Run from custom benchmark root"
         echo "  $0 --quick static     # Quick static benchmarks"
         echo "  HTTP_MAX_WORKERS=100 $0 static   # Override HTTP worker count"
-        echo "  BENCH_MEASURE_QUIET=0 $0 static # Verbose measure_docker.py (default is compact)"
+        echo "  HTTP_MAX_WORKERS=system $0 static   # Use ThreadPoolExecutor default"
+        echo "  BENCH_MEASURE_QUIET=0 $0 static # Verbose logs"
+        echo "  BENCH_MEASURE_QUIET=1 MEASURE_HEARTBEAT_SEC=60 $0 static # Compact mode for both + heartbeat interval"
         echo ""
         echo "Port Assignment:"
         echo "  - Fixed host port: ${HOST_PORT:-8001}"
@@ -894,7 +910,11 @@ main() {
     start_sudo_keepalive
     print_status "INFO" "Starting benchmarks at $(date)"
     print_status "INFO" "Results will be saved to: $RESULTS_DIR"
-    print_status "INFO" "HTTP client max workers: $HTTP_MAX_WORKERS (column \"HTTP Max Workers\" in static/dynamic CSVs; override with HTTP_MAX_WORKERS=N)"
+    if [ -n "$HTTP_MAX_WORKERS" ]; then
+        print_status "INFO" "HTTP client max workers: $HTTP_MAX_WORKERS (column \"HTTP Max Workers\" in static/dynamic CSVs; override with HTTP_MAX_WORKERS=N or HTTP_MAX_WORKERS=system)"
+    else
+        print_status "INFO" "HTTP client max workers: System default (column \"HTTP Max Workers\" in static/dynamic CSVs; set HTTP_MAX_WORKERS=100 for reproducible runs)"
+    fi
     bench_init_run_plan
     local _si=0
     if [[ $RUN_ALL -eq 1 ]]; then
