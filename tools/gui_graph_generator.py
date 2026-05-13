@@ -1992,7 +1992,6 @@ class BenchmarkGrapher(QMainWindow):
         for section in getattr(self, "batch_plot_sections", {}).values():
             vis = enabled and section["box"].isVisible()
             section["list"].setEnabled(vis)
-            section["none_btn"].setEnabled(vis)
             section["all_btn"].setEnabled(vis)
             section["clear_btn"].setEnabled(vis)
         path_mode = enabled and self._current_export_destination_mode() == EXPORT_DEST_PATH
@@ -2079,14 +2078,6 @@ class BenchmarkGrapher(QMainWindow):
         box = QGroupBox()
         layout = QVBoxLayout(box)
         layout.setContentsMargins(8, 10, 8, 8)
-        none_btn = self._create_action_button(
-            "None",
-            lambda _checked=False, cat=category: self._set_checkable_list_state(
-                self.batch_plot_sections[cat]["list"], False, self._update_export_preview
-            ),
-            min_w=48,
-            role="ghost",
-        )
         all_btn = self._create_action_button(
             "All",
             lambda _checked=False, cat=category: self._set_checkable_list_state(
@@ -2103,14 +2094,13 @@ class BenchmarkGrapher(QMainWindow):
             min_w=52,
             role="ghost",
         )
-        layout.addLayout(self._build_batch_section_header(category, none_btn, all_btn, clear_btn))
+        layout.addLayout(self._build_batch_section_header(category, all_btn, clear_btn))
         list_widget = self._make_batch_list_widget(4, self._update_export_preview)
         layout.addWidget(list_widget)
         self.batch_plot_sections_layout.addWidget(box)
         section = {
             "box": box,
             "list": list_widget,
-            "none_btn": none_btn,
             "all_btn": all_btn,
             "clear_btn": clear_btn,
         }
@@ -2517,7 +2507,6 @@ class BenchmarkGrapher(QMainWindow):
                 visible = bool(source_files) and bool(plot_options)
                 section["box"].setVisible(visible)
                 section["list"].setEnabled(visible)
-                section["none_btn"].setEnabled(visible)
                 section["all_btn"].setEnabled(visible)
                 section["clear_btn"].setEnabled(visible)
                 if visible:
@@ -2528,7 +2517,6 @@ class BenchmarkGrapher(QMainWindow):
                     continue
                 section["box"].setVisible(False)
                 section["list"].setEnabled(False)
-                section["none_btn"].setEnabled(False)
                 section["all_btn"].setEnabled(False)
                 section["clear_btn"].setEnabled(False)
 
