@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QProgressDialog, QHeaderView,
     QScrollArea,
+    QLineEdit,
 )
 from PyQt5.QtCore import Qt, QPoint, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QKeySequence, QColor, QPalette
@@ -526,11 +527,14 @@ WS_PLOT_BAR = "Bar"
 WS_PLOT_STYLE_OPTIONS = [WS_PLOT_MULTILINE, WS_PLOT_HEATMAP, WS_PLOT_BAR]
 BENCHMARK_TYPE_PLACEHOLDER = "Benchmark type"
 METRIC_PLACEHOLDER = "Metric"
+PLOT_TYPE_PLACEHOLDER = "Plot type"
+HOME_PLOT_TYPE_OPTIONS = list(WS_PLOT_STYLE_OPTIONS)
 WS_TYPE_PLACEHOLDER = "WebSocket type"
 EXPORT_MODE_CURRENT = "Current graph"
 EXPORT_MODE_BATCH = "Batch export"
+EXPORT_DEST_GRAPHS = "graphs/ (default)"
+EXPORT_DEST_PATH = "Use path below"
 EXPORT_DEST_ASK = "Ask every time"
-EXPORT_DEST_AUTO = "Default graphs/ folder"
 EXPORT_SOURCE_CHECKED = "Checked files"
 EXPORT_SOURCE_ALL = "All imported files"
 EXPORT_PREVIEW_LIMIT = 12
@@ -676,6 +680,7 @@ class BenchmarkGrapher(QMainWindow):
         self._axes_leave_cid = None
         self._plot_style_presets = self._build_plot_style_presets()
         self.last_plotted_request = None
+        self._batch_refreshing = False
         self.init_ui()
 
     def init_ui(self):
@@ -786,8 +791,9 @@ class BenchmarkGrapher(QMainWindow):
         pr = QHBoxLayout()
         pr.setSpacing(GAP)
         pr.addWidget(QLabel("Type:"))
-        self.plot_type_selector = MenuSelectorWidget(placeholder="Auto", parent=self)
-        self.plot_type_selector.set_options(["Auto", "Bar", "Line"])
+        self.plot_type_selector = MenuSelectorWidget(placeholder=PLOT_TYPE_PLACEHOLDER, parent=self)
+        self.plot_type_selector.set_options(HOME_PLOT_TYPE_OPTIONS)
+        self.plot_type_selector.set_current(PLOT_TYPE_PLACEHOLDER)
         self.plot_type_selector.setEnabled(False)
         self.plot_type_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self._on_plot_controls_changed))
         pr.addWidget(self.plot_type_selector)
@@ -838,12 +844,23 @@ class BenchmarkGrapher(QMainWindow):
         mode_row.addWidget(self.export_source_selector, 1)
         mode_row.addWidget(QLabel("Destination:"))
         self.export_destination_selector = QComboBox()
-        self.export_destination_selector.addItems([EXPORT_DEST_AUTO, EXPORT_DEST_ASK])
-        self.export_destination_selector.setCurrentText(EXPORT_DEST_AUTO)
+        self.export_destination_selector.addItems([EXPORT_DEST_GRAPHS, EXPORT_DEST_PATH, EXPORT_DEST_ASK])
+        self.export_destination_selector.setCurrentText(EXPORT_DEST_GRAPHS)
         self.export_destination_selector.setMinimumWidth(150)
-        self.export_destination_selector.currentTextChanged.connect(self._update_export_preview)
+        self.export_destination_selector.currentTextChanged.connect(self._on_export_destination_changed)
         mode_row.addWidget(self.export_destination_selector, 1)
         export_settings_layout.addLayout(mode_row)
+
+        dest_path_row = QHBoxLayout()
+        dest_path_row.setSpacing(GAP)
+        dest_path_row.addWidget(QLabel("Folder path:"))
+        self.export_custom_path_edit = QLineEdit()
+        self.export_custom_path_edit.setPlaceholderText("Absolute folder path (used when destination is “Use path below”)")
+        self.export_custom_path_edit.textChanged.connect(self._update_export_preview)
+        dest_path_row.addWidget(self.export_custom_path_edit, 1)
+        self.export_custom_path_browse_btn = _btn("Browse…", self._browse_export_custom_path, min_w=88, role="secondary")
+        dest_path_row.addWidget(self.export_custom_path_browse_btn)
+        export_settings_layout.addLayout(dest_path_row)
 
         self.export_hint_label = QLabel("")
         self.export_hint_label.setWordWrap(True)
@@ -896,7 +913,7 @@ class BenchmarkGrapher(QMainWindow):
         self.export_title_mode_selector.currentTextChanged.connect(self._update_export_preview)
         export_title_row.addWidget(self.export_title_mode_selector, 1)
         export_title_hint = QLabel(
-            "Use a compact in-graph title, omit titles entirely, or save the title as a sidecar .txt file next to each exported graph."
+            "Sidecar mode saves a .title.txt next to the image; both are placed in a subfolder named after the image file."
         )
         export_title_hint.setWordWrap(True)
         export_title_hint.setStyleSheet(
@@ -914,12 +931,18 @@ class BenchmarkGrapher(QMainWindow):
         size_mode_row.setSpacing(GAP)
         size_mode_row.addWidget(QLabel("Mode:"))
         self.export_size_mode_selector = QComboBox()
+        self.export_size_mode_selector.blockSignals(True)
         self.export_size_mode_selector.addItems([EXPORT_SIZE_MODE_CANVAS, EXPORT_SIZE_MODE_PRESET, EXPORT_SIZE_MODE_CUSTOM])
+        self.export_size_mode_selector.setCurrentText(EXPORT_SIZE_MODE_PRESET)
+        self.export_size_mode_selector.blockSignals(False)
         self.export_size_mode_selector.currentTextChanged.connect(self._on_export_size_mode_changed)
         size_mode_row.addWidget(self.export_size_mode_selector, 1)
         size_mode_row.addWidget(QLabel("Preset:"))
         self.export_size_preset_selector = QComboBox()
+        self.export_size_preset_selector.blockSignals(True)
         self.export_size_preset_selector.addItems([label for label, _ in EXPORT_SIZE_PRESET_CHOICES])
+        self.export_size_preset_selector.setCurrentText("Paper full-width")
+        self.export_size_preset_selector.blockSignals(False)
         self.export_size_preset_selector.currentTextChanged.connect(self._update_export_preview)
         size_mode_row.addWidget(self.export_size_preset_selector, 1)
         export_size_layout.addLayout(size_mode_row)
@@ -964,8 +987,6 @@ class BenchmarkGrapher(QMainWindow):
         )
         export_size_layout.addWidget(export_size_hint_label)
         export_tab_layout.addWidget(export_size_group)
-
-        self._batch_refreshing = False
 
         def _make_batch_list(max_rows, change_handler):
             w = CheckableFileListWidget(self)
@@ -1216,6 +1237,8 @@ class BenchmarkGrapher(QMainWindow):
         self.app_tabs.currentChanged.connect(lambda _idx: QTimer.singleShot(0, self._update_export_preview))
         main_layout.addWidget(self.app_tabs, 1)
         central.setStyleSheet(_app_stylesheet())
+
+        self._on_export_destination_changed()
 
         QShortcut(QKeySequence("Ctrl+A"), self).activated.connect(self.select_all_files)
         QShortcut(QKeySequence(Qt.Key_Return), self).activated.connect(self.plot_selected)
@@ -1587,6 +1610,10 @@ class BenchmarkGrapher(QMainWindow):
             if series_count >= 8:
                 tuned["line_width"] = round(tuned["line_width"] * 1.05, 2)
             tuned["marker_edge_width"] = round(max(0.85, style["marker_edge_width"] * 1.06), 2)
+            if series_count >= 14:
+                tuned["marker_open_cycle"] = 4
+            elif series_count >= 9:
+                tuned["marker_open_cycle"] = max(int(tuned.get("marker_open_cycle", 2)), 3)
         elif plot_kind == "bar" and series_count >= 8:
             tuned["bar_linewidth"] = round(max(0.5, style["bar_linewidth"] * 0.92), 2)
             tuned["legend_fontsize"] = round(max(6.2, style["legend_fontsize"] * 0.94), 2)
@@ -1734,10 +1761,10 @@ class BenchmarkGrapher(QMainWindow):
         return titles["full"]
 
     def _on_plot_style_changed(self):
-        if self._graph_has_data() and self.last_plotted_request:
+        if self._graph_has_data() and self.last_plotted_request and self._live_plot_ready():
             request = dict(self.last_plotted_request)
             metric = self.metric_selector.currentText() or request.get("metric", METRIC_PLACEHOLDER)
-            plot_type = self.plot_type_selector.currentText() or request.get("plot_type", "Auto")
+            plot_type = self.plot_type_selector.currentText() or request.get("plot_type", WS_PLOT_MULTILINE)
             plotted = self._render_plot(
                 request.get("files", []),
                 metric,
@@ -1753,18 +1780,18 @@ class BenchmarkGrapher(QMainWindow):
         cat = self.category_selector.currentText()
         visible_files = [f for f in self.files if self.file_categories.get(f) == cat] if cat not in (None, "", BENCHMARK_TYPE_PLACEHOLDER, "All") else list(self.files)
         category_plot_types = self._valid_plot_types_for_category(cat, source_files=visible_files)
-        is_websocket_category = category_plot_types == list(WS_PLOT_STYLE_OPTIONS)
+        is_websocket_category = cat == "WebSocket"
         if getattr(self, "ws_type_row", None):
             self.ws_type_row.setVisible(is_websocket_category)
             if not is_websocket_category and getattr(self, "ws_type_selector", None):
                 self.ws_type_selector.set_current(WS_TYPE_PLACEHOLDER)
         if getattr(self, "plot_type_selector", None):
-            if is_websocket_category:
-                self.plot_type_selector.set_options(category_plot_types)
-                self.plot_type_selector.set_current(WS_PLOT_MULTILINE)
+            prev_pt = self.plot_type_selector.currentText()
+            self.plot_type_selector.set_options(category_plot_types)
+            if prev_pt in category_plot_types:
+                self.plot_type_selector.set_current(prev_pt)
             else:
-                self.plot_type_selector.set_options(category_plot_types)
-                self.plot_type_selector.set_current("Line")
+                self.plot_type_selector.set_current(PLOT_TYPE_PLACEHOLDER)
         self.update_file_listbox_display()
         self.update_metric_options()
         self._refresh_export_controls()
@@ -1772,6 +1799,7 @@ class BenchmarkGrapher(QMainWindow):
 
     def _on_plot_controls_changed(self):
         self.plot_selected()
+        self.plot_btn.setEnabled(len(self.files) > 0 and self._live_plot_ready())
         self._refresh_export_controls()
         self._update_export_preview()
 
@@ -1889,14 +1917,24 @@ class BenchmarkGrapher(QMainWindow):
             self.ws_type_row.setVisible(False)
         if getattr(self, "ws_type_selector", None):
             self.ws_type_selector.set_current(WS_TYPE_PLACEHOLDER)
+        while self.batch_plot_sections_layout.count():
+            item = self.batch_plot_sections_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self.batch_plot_sections.clear()
         if getattr(self, "plot_type_selector", None):
-            self.plot_type_selector.set_options(["Auto", "Line", "Bar"])
-            self.plot_type_selector.set_current("Auto")
+            self.plot_type_selector.set_options(HOME_PLOT_TYPE_OPTIONS)
+            self.plot_type_selector.set_current(PLOT_TYPE_PLACEHOLDER)
         self.metric_selector.set_options([])
         self.metric_selector.set_current(METRIC_PLACEHOLDER)
         self.export_source_selector.setCurrentText(EXPORT_SOURCE_ALL)
-        self.export_destination_selector.setCurrentText(EXPORT_DEST_AUTO)
-        self.export_size_mode_selector.setCurrentText(EXPORT_SIZE_MODE_CANVAS)
+        self.export_destination_selector.setCurrentText(EXPORT_DEST_GRAPHS)
+        if getattr(self, "export_custom_path_edit", None):
+            self.export_custom_path_edit.clear()
+        self.export_size_mode_selector.setCurrentText(EXPORT_SIZE_MODE_PRESET)
+        self.export_size_preset_selector.setCurrentText("Paper full-width")
+        self._on_export_destination_changed()
         self._set_data_controls_enabled(False)
         self._clear_plot_artists()
         self.canvas.draw()
@@ -1920,13 +1958,13 @@ class BenchmarkGrapher(QMainWindow):
         self.metric_selector.setEnabled(enabled)
         self.plot_style_selector.setEnabled(True)
         self.plot_type_selector.setEnabled(enabled)
-        self.plot_btn.setEnabled(enabled)
+        self.plot_btn.setEnabled(enabled and self._live_plot_ready())
         self.export_import_files_btn.setEnabled(True)
         self.export_import_folder_btn.setEnabled(True)
         self.export_clear_btn.setEnabled(enabled)
         self.export_mode_selector.setEnabled(True)
         self.export_source_selector.setEnabled(True)
-        self.export_destination_selector.setEnabled(True)
+        self.export_destination_selector.setEnabled(enabled)
         self.export_format_png.setEnabled(True)
         self.export_format_pdf.setEnabled(True)
         self.export_format_svg.setEnabled(True)
@@ -1952,9 +1990,16 @@ class BenchmarkGrapher(QMainWindow):
         self.batch_ws_type_list.setEnabled(enabled and self.batch_ws_box.isVisible())
         self.batch_metric_list.setEnabled(enabled)
         for section in getattr(self, "batch_plot_sections", {}).values():
-            section["list"].setEnabled(enabled and section["box"].isVisible())
-            section["all_btn"].setEnabled(enabled and section["box"].isVisible())
-            section["clear_btn"].setEnabled(enabled and section["box"].isVisible())
+            vis = enabled and section["box"].isVisible()
+            section["list"].setEnabled(vis)
+            section["none_btn"].setEnabled(vis)
+            section["all_btn"].setEnabled(vis)
+            section["clear_btn"].setEnabled(vis)
+        path_mode = enabled and self._current_export_destination_mode() == EXPORT_DEST_PATH
+        if getattr(self, "export_custom_path_edit", None):
+            self.export_custom_path_edit.setEnabled(path_mode)
+        if getattr(self, "export_custom_path_browse_btn", None):
+            self.export_custom_path_browse_btn.setEnabled(path_mode)
         self.export_run_btn.setEnabled(enabled and self.export_run_btn.isEnabled())
         self._update_export_size_controls()
 
@@ -2034,7 +2079,15 @@ class BenchmarkGrapher(QMainWindow):
         box = QGroupBox()
         layout = QVBoxLayout(box)
         layout.setContentsMargins(8, 10, 8, 8)
-        select_all_btn = self._create_action_button(
+        none_btn = self._create_action_button(
+            "None",
+            lambda _checked=False, cat=category: self._set_checkable_list_state(
+                self.batch_plot_sections[cat]["list"], False, self._update_export_preview
+            ),
+            min_w=48,
+            role="ghost",
+        )
+        all_btn = self._create_action_button(
             "All",
             lambda _checked=False, cat=category: self._set_checkable_list_state(
                 self.batch_plot_sections[cat]["list"], True, self._update_export_preview
@@ -2050,14 +2103,15 @@ class BenchmarkGrapher(QMainWindow):
             min_w=52,
             role="ghost",
         )
-        layout.addLayout(self._build_batch_section_header(category, select_all_btn, clear_btn))
+        layout.addLayout(self._build_batch_section_header(category, none_btn, all_btn, clear_btn))
         list_widget = self._make_batch_list_widget(4, self._update_export_preview)
         layout.addWidget(list_widget)
         self.batch_plot_sections_layout.addWidget(box)
         section = {
             "box": box,
             "list": list_widget,
-            "all_btn": select_all_btn,
+            "none_btn": none_btn,
+            "all_btn": all_btn,
             "clear_btn": clear_btn,
         }
         self.batch_plot_sections[category] = section
@@ -2067,7 +2121,38 @@ class BenchmarkGrapher(QMainWindow):
         return self.export_mode_selector.currentText() or EXPORT_MODE_BATCH
 
     def _current_export_destination_mode(self):
-        return self.export_destination_selector.currentText() or EXPORT_DEST_AUTO
+        return self.export_destination_selector.currentText() or EXPORT_DEST_GRAPHS
+
+    def _on_export_destination_changed(self, *_args):
+        use_path = self._current_export_destination_mode() == EXPORT_DEST_PATH
+        if getattr(self, "export_custom_path_edit", None):
+            self.export_custom_path_edit.setEnabled(use_path)
+        if getattr(self, "export_custom_path_browse_btn", None):
+            self.export_custom_path_browse_btn.setEnabled(use_path)
+        self._update_export_preview()
+
+    def _browse_export_custom_path(self):
+        start = self.export_custom_path_edit.text().strip() or os.path.abspath("graphs")
+        picked = QFileDialog.getExistingDirectory(self, "Select export folder", start)
+        if picked:
+            self.export_custom_path_edit.setText(picked)
+
+    def _export_root_directory(self):
+        if self._current_export_destination_mode() == EXPORT_DEST_PATH:
+            raw = self.export_custom_path_edit.text().strip() if getattr(self, "export_custom_path_edit", None) else ""
+            if raw:
+                return os.path.abspath(os.path.expanduser(raw))
+        return os.path.abspath("graphs")
+
+    def _sidecar_bundle_image_path(self, filepath):
+        if not self._title_mode_writes_sidecar():
+            return filepath
+        parent = os.path.dirname(filepath) or "."
+        fname = os.path.basename(filepath)
+        stem, _ext = os.path.splitext(fname)
+        if not stem:
+            return filepath
+        return os.path.join(parent, stem, fname)
 
     def _current_export_source_mode(self):
         return self.export_source_selector.currentText() or EXPORT_SOURCE_ALL
@@ -2097,18 +2182,22 @@ class BenchmarkGrapher(QMainWindow):
         self._update_export_preview()
 
     def _current_export_size_mode(self):
-        return self.export_size_mode_selector.currentText() or EXPORT_SIZE_MODE_CANVAS
+        return self.export_size_mode_selector.currentText() or EXPORT_SIZE_MODE_PRESET
 
     def _selected_export_size_preset(self):
-        return self.export_size_preset_selector.currentText() or EXPORT_SIZE_PRESET_CHOICES[0][0]
+        current = self.export_size_preset_selector.currentText()
+        preset_map = dict(EXPORT_SIZE_PRESET_CHOICES)
+        if current in preset_map:
+            return current
+        return "Paper full-width"
 
     def _selected_export_size_preset_inches(self):
         preset_map = dict(EXPORT_SIZE_PRESET_CHOICES)
-        return preset_map.get(self._selected_export_size_preset(), EXPORT_SIZE_PRESET_CHOICES[0][1])
+        return preset_map.get(self._selected_export_size_preset(), (7.00, 4.30))
 
     def _on_export_size_mode_changed(self, *_args):
         mode = self._current_export_size_mode()
-        if mode == EXPORT_SIZE_MODE_CUSTOM:
+        if mode == EXPORT_SIZE_MODE_CUSTOM and getattr(self, "export_width_override", None):
             if self.export_width_override.value() <= 0.0 and self.export_height_override.value() <= 0.0:
                 canvas_w, canvas_h = self._current_canvas_size_inches()
                 self.export_width_override.blockSignals(True)
@@ -2121,6 +2210,8 @@ class BenchmarkGrapher(QMainWindow):
         self._update_export_preview()
 
     def _update_export_size_controls(self):
+        if not getattr(self, "export_width_override", None):
+            return
         enabled = bool(self.files)
         mode = self._current_export_size_mode()
         png_enabled = self.export_format_png.isChecked()
@@ -2137,11 +2228,17 @@ class BenchmarkGrapher(QMainWindow):
         if getattr(self, "canvas", None) is None:
             return 0, 0
         width, height = self.canvas.get_width_height()
-        return max(int(width), 1), max(int(height), 1)
+        return max(int(width), 0), max(int(height), 0)
 
     def _current_canvas_size_inches(self):
+        fig = getattr(self, "fig", None)
+        if fig is None:
+            return 8.0, 5.0
         width_px, height_px = self._current_canvas_size_px()
-        dpi = max(float(self.fig.get_dpi()), 1.0)
+        dpi = max(float(fig.get_dpi()), 1.0)
+        if width_px <= 0 or height_px <= 0:
+            w_in, h_in = fig.get_size_inches()
+            return max(float(w_in), 0.1), max(float(h_in), 0.1)
         return max(width_px / dpi, 0.1), max(height_px / dpi, 0.1)
 
     def _resolved_export_size_plan(self):
@@ -2195,6 +2292,14 @@ class BenchmarkGrapher(QMainWindow):
 
     def _resolved_export_size_text(self):
         canvas_px = self._current_canvas_size_px()
+        if canvas_px[0] <= 0 or canvas_px[1] <= 0:
+            fig = getattr(self, "fig", None)
+            if fig is not None:
+                dpi = max(float(fig.get_dpi()), 1.0)
+                w_in, h_in = fig.get_size_inches()
+                canvas_px = (max(int(round(w_in * dpi)), 1), max(int(round(h_in * dpi)), 1))
+            else:
+                canvas_px = (1, 1)
         size_plan = self._resolved_export_size_plan()
         default_inches = size_plan["canvas_inches"]
         width_in, height_in = size_plan["size_inches"]
@@ -2309,11 +2414,7 @@ class BenchmarkGrapher(QMainWindow):
         return sorted(metrics)
 
     def _default_batch_metrics(self, categories=None, ws_types=None, source_files=None):
-        options = self._available_batch_metrics(categories=categories, ws_types=ws_types, source_files=source_files)
-        current_metric = self.metric_selector.currentText()
-        if current_metric in options and current_metric != METRIC_PLACEHOLDER:
-            return [current_metric]
-        return options[:1]
+        return []
 
     def _effective_batch_metrics(self, categories=None, ws_types=None, source_files=None):
         selected = self._checked_list_values(self.batch_metric_list)
@@ -2322,29 +2423,15 @@ class BenchmarkGrapher(QMainWindow):
         return self._default_batch_metrics(categories=categories, ws_types=ws_types, source_files=source_files)
 
     def _available_batch_plot_types_for_category(self, category, source_files=None):
-        files = self._filter_batch_files(
-            source_files if source_files is not None else self._batch_source_files(),
-            category,
-            None,
-        )
-        file_types = {self.file_types.get(f) for f in files if self.file_types.get(f)}
-        if file_types == {"websocket"}:
-            return list(WS_PLOT_STYLE_OPTIONS)
-        return ["Line", "Bar", "Auto"]
-
-    def _default_batch_plot_types_for_category(self, category, source_files=None):
-        options = self._available_batch_plot_types_for_category(category, source_files=source_files)
-        if options == list(WS_PLOT_STYLE_OPTIONS):
-            return [WS_PLOT_BAR]
-        return ["Line"] if "Line" in options else options[:1]
+        if category == "WebSocket":
+            return list(HOME_PLOT_TYPE_OPTIONS)
+        return [p for p in HOME_PLOT_TYPE_OPTIONS if p != WS_PLOT_HEATMAP]
 
     def _effective_batch_plot_types_for_category(self, category, source_files=None):
         section = self.batch_plot_sections.get(category)
-        if section:
-            selected = self._checked_list_values(section["list"])
-            if selected or section["list"].count() > 0:
-                return selected
-        return self._default_batch_plot_types_for_category(category, source_files=source_files)
+        if not section:
+            return []
+        return self._checked_list_values(section["list"])
 
     def _on_export_mode_changed(self, *_args):
         self._refresh_export_controls()
@@ -2412,9 +2499,7 @@ class BenchmarkGrapher(QMainWindow):
             )
             metric_checked = set(self._checked_list_values(self.batch_metric_list)) & set(metric_options)
             if not metric_checked and metric_options and self.batch_metric_list.count() == 0:
-                metric_checked = set(
-                    self._default_batch_metrics(categories=effective_categories, ws_types=effective_ws, source_files=source_files)
-                )
+                metric_checked = set()
             self._set_checkable_list_items(self.batch_metric_list, metric_options, metric_checked)
             self.batch_metric_list.setEnabled(bool(source_files))
             self.batch_metric_select_all_btn.setEnabled(bool(source_files) and bool(metric_options))
@@ -2427,11 +2512,12 @@ class BenchmarkGrapher(QMainWindow):
                 plot_options = self._available_batch_plot_types_for_category(category, source_files=source_files)
                 checked = set(self._checked_list_values(section["list"])) & set(plot_options)
                 if not checked and plot_options and section["list"].count() == 0:
-                    checked = set(self._default_batch_plot_types_for_category(category, source_files=source_files))
+                    checked = set()
                 self._set_checkable_list_items(section["list"], plot_options, checked)
                 visible = bool(source_files) and bool(plot_options)
                 section["box"].setVisible(visible)
                 section["list"].setEnabled(visible)
+                section["none_btn"].setEnabled(visible)
                 section["all_btn"].setEnabled(visible)
                 section["clear_btn"].setEnabled(visible)
                 if visible:
@@ -2442,6 +2528,7 @@ class BenchmarkGrapher(QMainWindow):
                     continue
                 section["box"].setVisible(False)
                 section["list"].setEnabled(False)
+                section["none_btn"].setEnabled(False)
                 section["all_btn"].setEnabled(False)
                 section["clear_btn"].setEnabled(False)
 
@@ -2466,12 +2553,13 @@ class BenchmarkGrapher(QMainWindow):
 
     def _current_export_target_preview(self, request, fmt):
         default_path = self._default_save_path(ext=fmt)
+        image_path = self._sidecar_bundle_image_path(default_path) if self._title_mode_writes_sidecar() else default_path
         if self._title_mode_writes_sidecar():
-            sidecar_preview = self._title_sidecar_path(default_path, fmt)
-            if self._current_export_destination_mode() == EXPORT_DEST_AUTO:
-                return f"{default_path} (+ {os.path.basename(sidecar_preview)})"
-            return f"{default_path} (+ {os.path.basename(sidecar_preview)}; file dialog confirms final name)"
-        if self._current_export_destination_mode() == EXPORT_DEST_AUTO:
+            sidecar_preview = self._title_sidecar_path(image_path, fmt)
+            if self._current_export_destination_mode() != EXPORT_DEST_ASK:
+                return f"{image_path} (+ {os.path.basename(sidecar_preview)})"
+            return f"{image_path} (+ {os.path.basename(sidecar_preview)}; file dialog confirms final name)"
+        if self._current_export_destination_mode() != EXPORT_DEST_ASK:
             return default_path
         return f"{default_path} (file dialog confirms final name)"
 
@@ -2480,8 +2568,6 @@ class BenchmarkGrapher(QMainWindow):
         folder = os.path.join(batch_dir, category_slug)
         if request["category"] == "WebSocket" and request["ws_type"] not in (None, "", WS_TYPE_ALL):
             folder = os.path.join(folder, self._slugify(request["ws_type"]))
-        if ensure_dirs:
-            os.makedirs(folder, exist_ok=True)
         name_parts = [self._slugify(request["metric"])]
         if request["category"] == "WebSocket" and request["ws_type"] not in (None, "", WS_TYPE_ALL):
             name_parts.append(self._slugify(request["ws_type"]))
@@ -2489,10 +2575,16 @@ class BenchmarkGrapher(QMainWindow):
         name_parts.append(f"{len(request['files'])}bench")
         if fmt == ".png":
             name_parts.append(self._png_export_suffix().lstrip("-"))
-        return os.path.join(folder, "-".join([p for p in name_parts if p]) + fmt)
+        path = os.path.join(folder, "-".join([p for p in name_parts if p]) + fmt)
+        path = self._sidecar_bundle_image_path(path)
+        if ensure_dirs:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+        return path
 
     def _batch_export_target_preview(self, request, fmt):
-        root = os.path.join(os.path.abspath("graphs"), "batch-<timestamp>")
+        root = os.path.join(self._export_root_directory(), "batch-<timestamp>")
         target = self._batch_export_path(root, request, fmt, ensure_dirs=False)
         if self._title_mode_writes_sidecar():
             sidecar_preview = self._title_sidecar_path(target, fmt)
@@ -2526,27 +2618,41 @@ class BenchmarkGrapher(QMainWindow):
             return plan
         if mode == EXPORT_MODE_CURRENT:
             request = self._build_current_export_request()
-            if request["files"]:
-                plan["requests"] = [request]
-                plan["sample_target"] = self._current_export_target_preview(request, formats[0])
             if not request["files"]:
                 plan["message"] = "Current graph export needs at least one checked visible file."
                 return plan
-            if not self._graph_has_data():
-                plan["message"] = "Current graph export is ready after you plot something."
+            if request.get("metric") in (None, "", METRIC_PLACEHOLDER):
+                plan["message"] = "Select a metric before exporting."
                 return plan
+            pt = request.get("plot_type")
+            if pt in (None, "", PLOT_TYPE_PLACEHOLDER) or pt not in HOME_PLOT_TYPE_OPTIONS:
+                plan["message"] = "Select a plot type (Multi-line, Heatmap, or Bar) before exporting."
+                return plan
+            plan["requests"] = [request]
+            plan["sample_target"] = self._current_export_target_preview(request, formats[0])
             plan["stats"] = {"candidate_count": 1, "valid_count": 1, "output_count": len(formats) + sidecar_count}
             plan["ready"] = True
             plan["message"] = "Current graph export is ready."
             return plan
+        source_files = self._batch_source_files()
+        categories = self._effective_batch_categories(source_files)
+        ws_types = self._effective_batch_ws_types(categories, source_files)
+        metrics = self._effective_batch_metrics(categories, ws_types, source_files)
+        if not self._batch_source_files():
+            plan["message"] = "Batch export needs at least one source file in the selected data source."
+            return plan
+        if not metrics:
+            plan["message"] = "Select one or more metrics in the Batch Builder."
+            return plan
+        for cat in categories:
+            if not self._effective_batch_plot_types_for_category(cat, source_files=source_files):
+                plan["message"] = f"Select at least one plot type for “{cat}” (Multi-line, Heatmap, and/or Bar)."
+                return plan
         requests, stats = self._build_batch_requests()
         plan["requests"] = requests
         plan["stats"] = stats
         if requests:
             plan["sample_target"] = self._batch_export_target_preview(requests[0], formats[0])
-        if not self._batch_source_files():
-            plan["message"] = "Batch export needs at least one source file in the selected data source."
-            return plan
         if stats["valid_count"] == 0:
             plan["message"] = "No valid batch combinations. Adjust overrides or current plot context."
             return plan
@@ -2611,8 +2717,18 @@ class BenchmarkGrapher(QMainWindow):
         self.metric_selector.set_options(metrics)
         if old in metrics:
             self.metric_selector.set_current(old)
-        elif metrics:
-            self.metric_selector.set_current(metrics[0])
+        else:
+            self.metric_selector.set_current(METRIC_PLACEHOLDER)
+
+    def _live_plot_ready(self):
+        if not self.files:
+            return False
+        if self.metric_selector.currentText() in (None, "", METRIC_PLACEHOLDER):
+            return False
+        pt = self.plot_type_selector.currentText()
+        if pt in (None, "", PLOT_TYPE_PLACEHOLDER) or pt not in HOME_PLOT_TYPE_OPTIONS:
+            return False
+        return True
 
     def get_selected_files(self):
         visible = self.get_visible_files()
@@ -2960,28 +3076,32 @@ class BenchmarkGrapher(QMainWindow):
             return False
         if not selected_files:
             return False
+        if type_choice in (None, "", PLOT_TYPE_PLACEHOLDER) or type_choice not in HOME_PLOT_TYPE_OPTIONS:
+            return False
+        is_websocket = selected_files and all(self.file_types.get(f) == "websocket" for f in selected_files)
+        if type_choice == WS_PLOT_HEATMAP and not is_websocket:
+            return False
         self._clear_plot_artists()
 
         all_vals = []
         n_series = max(1, len(selected_files))
-        is_websocket = selected_files and all(self.file_types.get(f) == "websocket" for f in selected_files)
-        plot_kind = "bar" if ((is_websocket and type_choice == WS_PLOT_BAR) or (not is_websocket and type_choice == "Bar")) else "line"
+        plot_kind = "bar" if type_choice == WS_PLOT_BAR else "line"
         style = self._tuned_plot_style_for_series_count(
             self._scaled_plot_style(self._current_plot_style()),
             n_series,
             plot_kind=plot_kind,
         )
 
-        if is_websocket and type_choice == WS_PLOT_HEATMAP:
+        if type_choice == WS_PLOT_HEATMAP:
             self._plot_websocket_heatmap(selected_files, metric, title_mode=title_mode)
             self.canvas.draw()
-            if getattr(self, "_heatmap_vals", None):
-                v = self._heatmap_vals
-                s = f"{metric}: min={min(v):.2f}, max={max(v):.2f}, avg={sum(v)/len(v):.2f}"
+            vals = getattr(self, "_heatmap_vals", None) or []
+            if vals:
+                s = f"{metric}: min={min(vals):.2f}, max={max(vals):.2f}, avg={sum(vals)/len(vals):.2f}"
                 self.summary_label.setText(s)
-            else:
-                self.summary_label.setText("")
-            return True
+                return True
+            self.summary_label.setText("")
+            return False
 
         # WebSocket bar plot: group all series by shared x categories (e.g., Num Clients)
         # so bars are aligned per category across servers.
@@ -3084,10 +3204,7 @@ class BenchmarkGrapher(QMainWindow):
             x, y, label = self.get_plot_data(header, rows, typ, metric, os.path.basename(f), filepath=f)
             if x and y:
                 series_style = self._series_style_for_index(idx, style)
-                if is_websocket:
-                    use_bar = (type_choice == WS_PLOT_BAR)
-                else:
-                    use_bar = (type_choice == "Bar")
+                use_bar = type_choice == WS_PLOT_BAR
                 if use_bar:
                     n_points = len(x)
                     if isinstance(x[0], (int, float, np.integer, np.floating)):
@@ -3136,6 +3253,7 @@ class BenchmarkGrapher(QMainWindow):
                                 zorder=1,
                             )
                 else:
+                    lw = style["line_width"] * (1.0 + 0.026 * (idx % 6))
                     line, = self.ax.plot(
                         x,
                         y,
@@ -3143,7 +3261,7 @@ class BenchmarkGrapher(QMainWindow):
                         color=series_style["color"],
                         marker=series_style["marker"],
                         linestyle=series_style["linestyle"],
-                        linewidth=style["line_width"],
+                        linewidth=lw,
                         markersize=style["marker_size"],
                         markerfacecolor=series_style["markerfacecolor"],
                         markeredgecolor=series_style["markeredgecolor"],
@@ -3151,7 +3269,7 @@ class BenchmarkGrapher(QMainWindow):
                         fillstyle=series_style["fillstyle"],
                         zorder=2 + idx,
                     )
-                    line._base_linewidth = style["line_width"]
+                    line._base_linewidth = lw
                     line._base_markersize = style["marker_size"]
                     line._base_alpha = 1.0
                     line._base_zorder = 2 + idx
@@ -3184,6 +3302,13 @@ class BenchmarkGrapher(QMainWindow):
         return True
 
     def plot_selected(self):
+        if not self._live_plot_ready():
+            self.last_plotted_request = None
+            self._clear_plot_artists()
+            self.canvas.draw()
+            self.summary_label.setText("")
+            self._update_export_preview()
+            return
         selected_files = self.get_selected_files()
         metric = self.metric_selector.currentText()
         type_choice = self.plot_type_selector.currentText()
@@ -3268,9 +3393,11 @@ class BenchmarkGrapher(QMainWindow):
             acronym = WS_TYPE_SAVE_ACRONYM.get(ws_type, "all")
             subtype_part = f"-{acronym}"
         name = f"{slug}{subtype_part}-{n}bench-{ts}"
-        base = os.path.abspath("graphs")
+        root = self._export_root_directory()
         if cat and cat_lower not in ("all", "", BENCHMARK_TYPE_PLACEHOLDER.lower().replace(" ", "")):
-            base = os.path.join(base, cat_lower)
+            base = os.path.join(root, cat_lower)
+        else:
+            base = root
         os.makedirs(base, exist_ok=True)
         return os.path.join(base, name)
 
@@ -3375,6 +3502,9 @@ class BenchmarkGrapher(QMainWindow):
             original_geometry = self._capture_figure_geometry()
             self.fig.set_size_inches(*size_inches, forward=False)
         try:
+            parent = os.path.dirname(os.path.abspath(filepath))
+            if parent:
+                os.makedirs(parent, exist_ok=True)
             if fmt == ".png":
                 ok = self._save_png(filepath, compressed=self.compress_png_checkbox.isChecked())
                 if ok is False:
@@ -3389,10 +3519,13 @@ class BenchmarkGrapher(QMainWindow):
     def _render_request_for_export(self, request, size_inches):
         if size_inches is not None:
             self.fig.set_size_inches(*size_inches, forward=False)
+        plot_type = request.get("plot_type")
+        if plot_type not in HOME_PLOT_TYPE_OPTIONS:
+            return False
         plotted = self._render_plot(
             request.get("files", []),
             request.get("metric", METRIC_PLACEHOLDER),
-            request.get("plot_type", "Auto"),
+            plot_type,
             enable_interactivity=False,
             title_mode=self._current_export_title_mode(),
         )
@@ -3444,7 +3577,7 @@ class BenchmarkGrapher(QMainWindow):
             base = list(self.files)
         else:
             base = [f for f in self.files if self.file_categories.get(f, "Unknown") == filter_cat]
-        if self._valid_plot_types_for_category(filter_cat, source_files=base) != list(WS_PLOT_STYLE_OPTIONS):
+        if filter_cat != "WebSocket":
             return base
         ws_type = self.ws_type_selector.currentText() if getattr(self, "ws_type_selector", None) else WS_TYPE_PLACEHOLDER
         if not ws_type or ws_type in (WS_TYPE_PLACEHOLDER, WS_TYPE_ALL):
@@ -3488,22 +3621,19 @@ class BenchmarkGrapher(QMainWindow):
         return [f for f in files if self.file_ws_subtypes.get(f) == wanted]
 
     def _valid_plot_types_for_category(self, category, source_files=None):
-        files = source_files if source_files is not None else [
-            f for f in self.files
-            if category in (None, "", BENCHMARK_TYPE_PLACEHOLDER, "All") or self.file_categories.get(f) == category
-        ]
-        file_types = {self.file_types.get(f) for f in files if self.file_types.get(f)}
-        if file_types == {"websocket"}:
-            return list(WS_PLOT_STYLE_OPTIONS)
-        return ["Auto", "Line", "Bar"]
+        if category == "WebSocket":
+            return list(HOME_PLOT_TYPE_OPTIONS)
+        files = source_files or []
+        if category in (None, "", BENCHMARK_TYPE_PLACEHOLDER, "All") and files and all(
+            self.file_types.get(f) == "websocket" for f in files
+        ):
+            return list(HOME_PLOT_TYPE_OPTIONS)
+        return [p for p in HOME_PLOT_TYPE_OPTIONS if p != WS_PLOT_HEATMAP]
 
     def _current_request_ws_type(self, category, source_files=None):
-        files = source_files if source_files is not None else self.get_visible_files()
-        return (
-            self.ws_type_selector.currentText()
-            if self._valid_plot_types_for_category(category, source_files=files) == list(WS_PLOT_STYLE_OPTIONS)
-            else None
-        )
+        if category != "WebSocket":
+            return None
+        return self.ws_type_selector.currentText()
 
     def _build_current_export_request(self):
         category = self.category_selector.currentText()
@@ -3516,7 +3646,7 @@ class BenchmarkGrapher(QMainWindow):
             "plot_style": self._current_plot_style_mode(),
             "files": list(self.get_selected_files()),
         }
-        if self.last_plotted_request and self._graph_has_data():
+        if self.last_plotted_request and self._live_plot_ready():
             cached = dict(self.last_plotted_request)
             if (
                 cached.get("category") == live_request["category"]
@@ -3544,7 +3674,7 @@ class BenchmarkGrapher(QMainWindow):
         for category in categories:
             plot_candidates = [
                 p for p in self._effective_batch_plot_types_for_category(category, source_files=source_files)
-                if p in self._valid_plot_types_for_category(category, source_files=source_files)
+                if p in HOME_PLOT_TYPE_OPTIONS
             ]
             if category == "WebSocket":
                 subtype_candidates = ws_types
@@ -3580,6 +3710,8 @@ class BenchmarkGrapher(QMainWindow):
     def _update_export_preview(self, *_args):
         if self._batch_refreshing:
             return
+        if not getattr(self, "export_plan_summary_label", None):
+            return
         self._update_export_size_controls()
         size_default_label, size_resolved_label = self._resolved_export_size_text()
         self.export_size_source_label.setText(f"{size_default_label}\n{size_resolved_label}")
@@ -3595,11 +3727,13 @@ class BenchmarkGrapher(QMainWindow):
         self._populate_export_plan_tree(plan)
         self.export_run_btn.setEnabled(plan["ready"])
         if plan["ready"]:
-            destination_label = (
-                "dialog-confirmed destination"
-                if self._current_export_destination_mode() == EXPORT_DEST_ASK
-                else "automatic graphs/ destination"
-            )
+            dest_mode = self._current_export_destination_mode()
+            if dest_mode == EXPORT_DEST_ASK:
+                destination_label = "dialog-confirmed destination"
+            elif dest_mode == EXPORT_DEST_PATH:
+                destination_label = f"custom folder ({self._export_root_directory()})"
+            else:
+                destination_label = "graphs/ (next to the working directory)"
             self.export_status_label.setText(
                 f"{plan['message']} Destination: {destination_label}. {size_resolved_label}"
             )
@@ -3628,7 +3762,7 @@ class BenchmarkGrapher(QMainWindow):
         self._on_filter_changed()
         self.ws_type_selector.set_current(snapshot.get("ws_type", WS_TYPE_PLACEHOLDER))
         self._on_filter_changed()
-        self.plot_type_selector.set_current(snapshot.get("plot_type", "Auto"))
+        self.plot_type_selector.set_current(snapshot.get("plot_type", PLOT_TYPE_PLACEHOLDER))
         self.metric_selector.set_current(snapshot.get("metric", METRIC_PLACEHOLDER))
         self.update_file_listbox_display()
         self._update_file_count_label()
@@ -3636,10 +3770,13 @@ class BenchmarkGrapher(QMainWindow):
         if snapshot.get("had_graph"):
             request = snapshot.get("last_plotted_request") or {}
             if request:
+                pt = request.get("plot_type", PLOT_TYPE_PLACEHOLDER)
+                if pt not in HOME_PLOT_TYPE_OPTIONS:
+                    pt = PLOT_TYPE_PLACEHOLDER
                 plotted = self._render_plot(
                     request.get("files", []),
                     request.get("metric", METRIC_PLACEHOLDER),
-                    request.get("plot_type", "Auto"),
+                    pt,
                     enable_interactivity=True,
                 )
                 self.last_plotted_request = dict(request) if plotted else None
@@ -3657,7 +3794,7 @@ class BenchmarkGrapher(QMainWindow):
 
     def _batch_export_directory(self, root_dir=None):
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        base = root_dir or os.path.abspath("graphs")
+        base = root_dir if root_dir is not None else self._export_root_directory()
         path = os.path.join(base, f"batch-{ts}")
         os.makedirs(path, exist_ok=True)
         return path
@@ -3682,13 +3819,19 @@ class BenchmarkGrapher(QMainWindow):
             base_stem = stem
         else:
             base_stem = filepath
-        return [(self._path_for_export_format(base_stem, fmt), fmt) for fmt in formats]
+        paths = [(self._path_for_export_format(base_stem, fmt), fmt) for fmt in formats]
+        if self._title_mode_writes_sidecar():
+            paths = [(self._sidecar_bundle_image_path(p), fmt) for p, fmt in paths]
+        return paths
 
     def _choose_current_export_targets(self, formats):
         default_path = self._default_save_path(ext=formats[0])
-        if self._current_export_destination_mode() == EXPORT_DEST_AUTO:
+        if self._current_export_destination_mode() != EXPORT_DEST_ASK:
             stem, _ = os.path.splitext(default_path)
-            return [(self._path_for_export_format(stem, fmt), fmt) for fmt in formats]
+            paths = [(self._path_for_export_format(stem, fmt), fmt) for fmt in formats]
+            if self._title_mode_writes_sidecar():
+                paths = [(self._sidecar_bundle_image_path(p), fmt) for p, fmt in paths]
+            return paths
         filepath, _ = QFileDialog.getSaveFileName(
             self,
             "Save graph" if len(formats) == 1 else "Choose base name for export files",
@@ -3698,13 +3841,13 @@ class BenchmarkGrapher(QMainWindow):
         return self._paths_from_user_choice(filepath, formats)
 
     def _choose_batch_export_directory(self):
-        if self._current_export_destination_mode() == EXPORT_DEST_AUTO:
-            return self._batch_export_directory()
-        start_dir = os.path.abspath("graphs")
-        root_dir = QFileDialog.getExistingDirectory(self, "Select folder for batch export", start_dir)
-        if not root_dir:
-            return None
-        return self._batch_export_directory(root_dir)
+        if self._current_export_destination_mode() == EXPORT_DEST_ASK:
+            start_dir = self._export_root_directory()
+            root_dir = QFileDialog.getExistingDirectory(self, "Select folder for batch export", start_dir)
+            if not root_dir:
+                return None
+            return self._batch_export_directory(root_dir)
+        return self._batch_export_directory()
 
     def run_export(self):
         if self._current_export_mode() == EXPORT_MODE_BATCH:
@@ -3714,14 +3857,8 @@ class BenchmarkGrapher(QMainWindow):
 
     def export_graph(self):
         plan = self._build_export_plan()
-        if not plan["formats"]:
-            QMessageBox.warning(self, "No format", "Select at least one export format.")
-            return
-        if not self._graph_has_data():
-            QMessageBox.warning(self, "No graph", "No graph to export. Please plot something first.")
-            return
-        if not plan["requests"]:
-            QMessageBox.warning(self, "No files", "Current graph export needs at least one checked visible file.")
+        if not plan.get("ready"):
+            QMessageBox.warning(self, "Export not ready", plan.get("message") or "Adjust export settings before exporting.")
             return
         targets = self._choose_current_export_targets(plan["formats"])
         if not targets:
@@ -3756,15 +3893,12 @@ class BenchmarkGrapher(QMainWindow):
 
     def batch_export_graphs(self):
         plan = self._build_export_plan()
+        if not plan.get("ready"):
+            QMessageBox.warning(self, "Export not ready", plan.get("message") or "Adjust batch export settings before exporting.")
+            return
         requests = plan["requests"]
         stats = plan["stats"]
         formats = plan["formats"]
-        if not formats:
-            QMessageBox.warning(self, "No format", "Select at least one export format for batch export.")
-            return
-        if not requests:
-            QMessageBox.warning(self, "No combinations", "No valid batch graph combinations are selected.")
-            return
 
         snapshot = self._snapshot_ui_state()
         batch_dir = self._choose_batch_export_directory()
