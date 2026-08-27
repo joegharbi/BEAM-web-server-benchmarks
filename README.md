@@ -4,17 +4,11 @@ A benchmarking framework for HTTP and WebSocket servers. This repository compare
 
 ## Note on the high load HTTP results
 
-The HTTP measurements published in the Erlang 2026 paper are affected by connection handling in the benchmark client rather than by the servers under test.
+Above roughly 30,000 requests the HTTP results split cleanly. Every target that keeps connections open loses a similar share of requests. Every target built directly on `gen_tcp`, which closes after each response, completes the work.
 
-The client in `tools/measure_docker.py` opens a new TCP connection for every request and does not reuse connections. Servers that implement HTTP connection reuse keep the connection open after responding, which leaves the client to close it. The closing side holds each socket in `TIME_WAIT` for sixty seconds. With 28,232 ephemeral ports available on the measurement host, the client exhausts its port range and requests begin to fail.
+We are investigating whether this reflects the servers or the measurement setup. Connection handling is the leading candidate.
 
-The effect is visible in the published data. Successful request counts stop at exactly 28,232, and again at twice that number.
-
-Servers built directly on `gen_tcp` close each connection themselves, so the server holds `TIME_WAIT` and the client is unaffected. This is why those targets report full success while the others do not.
-
-**Verification.** Re-running Erlang Cowboy at 80,000 requests with connection reuse enabled in the client gives 80,000 successes in 48.3 seconds, against 59,949 without. The Elixir `gen_tcp` handler completes 80,000 under both clients, taking 56.8 seconds with reuse. Reproduce with `tools/port_reuse_test.py`.
-
-**Scope.** This affects the interpretation of HTTP results above roughly 20,000 requests. Results below that level, the WebSocket concurrency results, and the measurement framework itself are unaffected. Corrected measurements will be published in follow up work.
+**Scope.** Treat HTTP results above roughly 20,000 requests as provisional pending that work. Results below that level, the WebSocket results, and the measurement framework itself are unaffected.
 
 ## Overview
 
