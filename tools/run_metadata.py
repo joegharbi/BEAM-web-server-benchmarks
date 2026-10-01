@@ -69,6 +69,12 @@ def scaphandre_version():
     return out.split()[-1] if out else ""
 
 
+def scaphandre_package_version():
+    """Version of the installed Debian package. Needed because Scaphandre 1.0.3 still
+    reports "1.0.2" with --version (its source was released with the old version number)."""
+    return _run(["dpkg-query", "-W", "-f=${Version}", "scaphandre"])
+
+
 def cpu_model():
     for line in (_read("/proc/cpuinfo") or "").splitlines():
         if line.startswith("model name"):
@@ -100,6 +106,7 @@ def software_and_machine():
     return {
         "framework_version": framework_version(),
         "scaphandre_version": scaphandre_version(),
+        "scaphandre_package_version": scaphandre_package_version(),
         "docker_version": _run(["docker", "version", "--format", "{{.Server.Version}}"]),
         "python_version": platform.python_version(),
         "os": os_name(),
@@ -138,6 +145,43 @@ def ac_power():
             online = _read(os.path.join(os.path.dirname(p), "online"))
             return {"1": "yes", "0": "no"}.get(online, "")
     return ""
+
+
+def battery():
+    """Battery charge and state (e.g. Charging, Full, Not charging), or "" without a battery."""
+    for p in glob.glob("/sys/class/power_supply/*/type"):
+        if _read(p) == "Battery":
+            d = os.path.dirname(p)
+            cap = _read(os.path.join(d, "capacity")) or ""
+            return {"percent": int(cap) if cap.isdigit() else "", "status": _read(os.path.join(d, "status")) or ""}
+    return ""
+
+
+def _brightness_percent(pattern):
+    for d in sorted(glob.glob(pattern)):
+        b, m = _read(os.path.join(d, "brightness")), _read(os.path.join(d, "max_brightness"))
+        if b and m and b.isdigit() and m.isdigit() and int(m) > 0:
+            return round(100 * int(b) / int(m))
+    return ""
+
+
+def screen_brightness_percent():
+    return _brightness_percent("/sys/class/backlight/*")
+
+
+def keyboard_backlight_percent():
+    return _brightness_percent("/sys/class/leds/*kbd_backlight*")
+
+
+def radios():
+    """Wi-Fi and Bluetooth radios: "on", or "off" when blocked (airplane mode, switch)."""
+    state = {}
+    for r in sorted(glob.glob("/sys/class/rfkill/rfkill*")):
+        kind = {"wlan": "wifi", "bluetooth": "bluetooth"}.get(_read(os.path.join(r, "type")))
+        if kind:
+            on = _read(os.path.join(r, "soft")) == "0" and _read(os.path.join(r, "hard")) == "0"
+            state[kind] = "on" if on or state.get(kind) == "on" else "off"
+    return state
 
 
 def cpu_package_temp_c():
@@ -209,6 +253,11 @@ def machine_state():
         "turbo": turbo_state(),
         "cpu_max_freq_mhz": cpu_max_freq_mhz(),
         "ac_power": ac_power(),
+        "battery": battery(),
+        "screen_brightness_percent": screen_brightness_percent(),
+        "keyboard_backlight_percent": keyboard_backlight_percent(),
+        "wifi": radios().get("wifi", ""),
+        "bluetooth": radios().get("bluetooth", ""),
         "cpu_package_temp_c": cpu_package_temp_c(),
         "load1": load1(),
     }

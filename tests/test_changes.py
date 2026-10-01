@@ -387,14 +387,25 @@ class ReadinessGate(unittest.TestCase):
     def setUp(self):
         import readiness, run_metadata
         self.r, self.m = readiness, run_metadata
-        self.orig = (run_metadata.cpu_package_temp_c, run_metadata.cpu_times, run_metadata.throttle_counters)
+        self.orig = (run_metadata.cpu_package_temp_c, run_metadata.cpu_times, run_metadata.throttle_counters,
+                     run_metadata.ac_power)
         self.jiffies = [0, 0]           # busy, total; advanced by fake_times
         self.busy_pct = 0
         run_metadata.cpu_times = self.fake_times
         run_metadata.throttle_counters = lambda: (0, 0)
+        run_metadata.ac_power = lambda: "yes"
 
     def tearDown(self):
-        self.m.cpu_package_temp_c, self.m.cpu_times, self.m.throttle_counters = self.orig
+        (self.m.cpu_package_temp_c, self.m.cpu_times, self.m.throttle_counters,
+         self.m.ac_power) = self.orig
+
+    def test_not_ready_on_battery(self):
+        prev = {"busy": 0, "total": 0, "throttle": 0, "temp": 40}
+        self.m.cpu_package_temp_c = lambda: 40.0
+        self.m.ac_power = lambda: "no"
+        self.assertIn("on battery (connect the charger)", self.r.check_once(prev, self.args())[1])
+        self.m.ac_power = lambda: ""                         # no battery at all (desktop, server): not checked
+        self.assertEqual(self.r.check_once(prev, self.args())[1], [])
 
     def fake_times(self):
         self.jiffies[0] += self.busy_pct
@@ -879,6 +890,23 @@ exec "$@"
         with open(calls) as fh:
             self.assertIn("restore", fh.read())
         self.assertIn("make resume RESUME=results/", text)
+        self.assertIn("Sleep and lid-close suspend are blocked", text)
+        r = subprocess.run(["systemd-inhibit", "--list", "--no-pager"], capture_output=True, text=True)
+        self.assertNotIn("web-server benchmarks", r.stdout)             # released again after the stop
+
+
+class LaptopState(unittest.TestCase):
+    """What can change the laptop's power draw is recorded at the start and end of a measurement."""
+    def test_machine_state_records_power_screen_and_radios(self):
+        import run_metadata
+        state = run_metadata.machine_state()
+        for key in ("ac_power", "battery", "screen_brightness_percent", "keyboard_backlight_percent",
+                    "wifi", "bluetooth"):
+            self.assertIn(key, state)
+
+    def test_scaphandre_package_version_is_recorded(self):
+        import run_metadata
+        self.assertIn("scaphandre_package_version", run_metadata.software_and_machine())
 
 
 class RunPlanCount(unittest.TestCase):

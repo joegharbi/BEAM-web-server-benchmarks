@@ -7,6 +7,7 @@ Checks, every CHECK_EVERY seconds:
   * CPU busy     - whole-machine CPU use over the last interval <= CPU reference + CPU margin
                    (reference = the resting CPU use measured at the start, or a fixed value)
   * throttling   - the CPU throttle counters did not increase during the last interval
+  * charger      - a laptop must run on its charger (always checked; skipped without a battery)
 The machine is ready when every enabled check passes CONSECUTIVE times in a row and
 at least MIN_WAIT seconds have passed. If it is still not ready after MAX_WAIT
 seconds, ON_TIMEOUT decides: keep waiting, stop, or measure anyway (and say why).
@@ -73,6 +74,8 @@ def check_once(prev, args):
             fails.append(f"CPU busy {pct:.1f}% > {limit:g}%")
     if args.no_throttling and events != "" and prev["throttle"] != "" and events > prev["throttle"]:
         fails.append(f"throttling ({events - prev['throttle']} new events)")
+    if run_metadata.ac_power() == "no":
+        fails.append("on battery (connect the charger)")
     return now, fails
 
 

@@ -1110,10 +1110,29 @@ bench_restore_environment() {
         || print_status "WARNING" "Restore failed; run: sudo python3 tools/prepare_environment.py restore --state $BENCH_ENV_STATE"
 }
 
+# Keep the machine awake (no sleep, also not when the laptop lid is closed) while measuring
+bench_block_sleep() {
+    if ! command -v systemd-inhibit >/dev/null 2>&1; then
+        print_status "WARNING" "systemd-inhibit not found; make sure the machine does not go to sleep while measuring"
+        return 0
+    fi
+    systemd-inhibit --what=sleep:handle-lid-switch --mode=block --who="web-server benchmarks" \
+        --why="energy measurement running" sleep infinity &
+    BENCH_INHIBIT_PID=$!
+    print_status "INFO" "Sleep and lid-close suspend are blocked until the measurement ends"
+}
+
+bench_unblock_sleep() {
+    [ -n "${BENCH_INHIBIT_PID:-}" ] || return 0
+    kill "$BENCH_INHIBIT_PID" >/dev/null 2>&1 || true
+    BENCH_INHIBIT_PID=""
+}
+
 bench_on_exit() {
     # A closed terminal must not stop the restore (a write to it would end the script)
     trap '' PIPE
     bench_restore_environment
+    bench_unblock_sleep
     if [ "${BENCH_INTERRUPTED:-0}" = "1" ]; then
         print_status "WARNING" "Stopped (Ctrl-C). Finished measurements are kept in $RESULTS_DIR"
         if [ -n "${CONFIG_FILE:-}" ]; then
@@ -1155,6 +1174,11 @@ main() {
     # Restore machine settings on any exit (normal end, error, Ctrl-C), then stop the sudo keepalive.
     trap bench_on_exit EXIT
     trap 'BENCH_INTERRUPTED=1; exit 130' INT TERM
+    bench_block_sleep
+    if [ -n "${CONFIG_FILE:-}" ] && [ "$("$PYTHON_PATH" -c 'import sys; sys.path.insert(0, "tools"); import run_metadata; print(run_metadata.ac_power())')" = "no" ]; then
+        print_status "ERROR" "The laptop is on battery. Connect the charger and start again (on battery the CPU can run under different power limits)."
+        exit 1
+    fi
     bench_apply_environment
     if [ -n "${CONFIG_FILE:-}" ]; then
         if [ "$CFG_SETTLE_SECONDS" -gt 0 ]; then
