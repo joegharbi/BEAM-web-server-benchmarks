@@ -77,9 +77,14 @@ are in `configs/machine/`:
 |---|---|---|
 | `minimal` (default) | A laptop or desktop you control, left alone while it measures (published results) | CPU at a fixed speed, turbo off, other containers stopped, screen at 1%, keyboard light, Wi-Fi and Bluetooth off |
 | `tolerable` | The same, but reached over the network or needing to stay online | As minimal, but Wi-Fi stays on |
-| `untouched` | A machine you do not control (shared server, cloud) | Nothing is changed; if the machine never becomes calm, it measures anyway and records why |
+| `remote` | A machine you control over SSH: your desktop, a lab or university server reserved for you | CPU at a fixed speed, turbo off, other containers stopped, screen and Bluetooth off where present; Wi-Fi never touched; stops cleanly (resumable) after 15 minutes without calm |
+| `cloud` | A rented cloud machine | CPU settings where the provider allows them; shared hardware, so it measures after 10 minutes without calm and records why. Needs visible RAPL energy counters (bare-metal instances) |
+| `untouched` | A machine you must not change (shared with others, or no rights) | Nothing is changed; if the machine never becomes calm, it measures anyway and records why |
 
-Values come from the defaults, then the profile, then the measurement file, which can override any
+Settings a machine does not have (no screen, battery, Bluetooth, or no CPU control in a virtual machine)
+are skipped and recorded. A machine without CPU energy counters (RAPL), as most cloud virtual machines,
+stops at the start: Scaphandre could not measure anything there. Values come from the defaults, then the
+profile, then the measurement file, which can override any
 machine setting for one measurement (for example `ENV_WIFI=unchanged`). `MACHINE` can also be the path of
 your own profile file. The results folder keeps a copy of both files (`bench.config`, `machine.config`)
 and every value actually used (`bench.config.resolved`). A run started over SSH through Wi-Fi refuses to

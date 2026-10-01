@@ -16,7 +16,9 @@ Values come from the built-in defaults, then the machine profile (`configs/machi
 |---|---|
 | `minimal` | A machine you control, left alone while it measures: CPU at a fixed speed, turbo off, other containers stopped, screen at 1%, keyboard light, Wi-Fi and Bluetooth off |
 | `tolerable` | As minimal, but Wi-Fi stays on (reached over the network, or must stay online) |
-| `untouched` | A machine you do not control: nothing is changed; if it never becomes calm, it measures anyway and records why |
+| `remote` | A machine you control over SSH (desktop, lab or university server): CPU fixed, turbo off, other containers stopped, nothing that could cut the connection; stops cleanly (resumable) after 15 minutes without calm |
+| `cloud` | A rented machine: CPU settings where the provider allows them; shared hardware, so it measures after 10 minutes without calm and records why. Needs visible RAPL energy counters (bare-metal instances); the measurement stops at the start without them |
+| `untouched` | A machine you must not change (shared with others, or no rights): nothing is changed; if it never becomes calm, it measures anyway and records why |
 
 ## Machine profile
 
@@ -24,7 +26,7 @@ Values come from the built-in defaults, then the machine profile (`configs/machi
 
 Default: `minimal`
 
-How the machine is prepared: a profile in configs/machine/ (minimal, tolerable, untouched) or the path of a profile file. Any machine setting written in the measurement file overrides the profile. none = no profile, only the built-in defaults (which equal minimal).
+How the machine is prepared: a profile in configs/machine/ (minimal, tolerable, remote, cloud, untouched) orthe path of a profile file. Any machine setting written in the measurement file overrides the profile. none = no profile, only the built-in defaults (which equal minimal).
 
 Unit: profile name, .config file, or none
 

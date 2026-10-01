@@ -4,7 +4,7 @@
 # the MACHINE profile; any of them written here overrides the profile for this measurement.
 
 # ===== Machine profile =====
-# machine profile: minimal, tolerable, untouched (configs/machine/), a .config file, or none
+# machine profile: minimal | tolerable | remote | cloud | untouched (configs/machine/), a .config file, or none
 MACHINE=minimal
 
 # ===== What to measure =====

@@ -26,6 +26,7 @@ import glob
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 
@@ -102,6 +103,18 @@ def image_id(image):
     return full.split(":", 1)[-1][:12] if full else ""
 
 
+def virtualization():
+    """'none' on real hardware, else the kind of virtual machine or container (kvm, xen, docker, ...)."""
+    out = subprocess.run(["systemd-detect-virt"], capture_output=True, text=True).stdout.strip() \
+        if shutil.which("systemd-detect-virt") else ""
+    return out or "unknown"
+
+
+def rapl_available():
+    """True when the CPU's energy counters (RAPL), which Scaphandre reads, are visible."""
+    return bool(glob.glob("/sys/class/powercap/*rapl*:0"))
+
+
 def software_and_machine():
     return {
         "framework_version": framework_version(),
@@ -114,6 +127,8 @@ def software_and_machine():
         "cpu_model": cpu_model(),
         "logical_cpus": os.cpu_count(),
         "memory_gb": memory_gb(),
+        "virtualization": virtualization(),
+        "rapl_available": rapl_available(),
     }
 
 
@@ -336,11 +351,11 @@ def write_start(path, settings):
 # What must be the same to continue a measurement in the same folder (resume), and what is
 # reported when a measurement is made again (reproduce).
 COMPARED = ("framework_version", "scaphandre_version", "scaphandre_package_version", "docker_version",
-            "python_version", "os", "kernel", "cpu_model", "logical_cpus", "memory_gb")
+            "python_version", "os", "kernel", "cpu_model", "logical_cpus", "memory_gb", "virtualization")
 LABELS = {"framework_version": "Framework (git commit)", "scaphandre_version": "Scaphandre",
           "scaphandre_package_version": "Scaphandre package", "docker_version": "Docker",
           "python_version": "Python", "os": "Operating system", "kernel": "Kernel", "cpu_model": "CPU",
-          "logical_cpus": "Logical CPUs", "memory_gb": "Memory (GB)"}
+          "logical_cpus": "Logical CPUs", "memory_gb": "Memory (GB)", "virtualization": "Virtualization"}
 
 
 def file_sha256(path):

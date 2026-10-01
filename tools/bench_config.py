@@ -166,7 +166,8 @@ def _optional_margin(v):
 SCHEMA = {
     # --- Machine profile ---
     "MACHINE": dict(default="minimal", check=_machine, unit="profile name, .config file, or none",
-        help="How the machine is prepared: a profile in configs/machine/ (minimal, tolerable, untouched) or\n"
+        help="How the machine is prepared: a profile in configs/machine/ (minimal, tolerable, remote, cloud,\n"
+             "untouched) or"
              "the path of a profile file. Any machine setting written in the measurement file overrides the\n"
              "profile. none = no profile, only the built-in defaults (which equal minimal)."),
 
@@ -446,7 +447,7 @@ def load(path):
 
 # One line per setting, for the example files (the full text is in docs/CONFIG.md)
 SHORT = {
-    "MACHINE": "machine profile: minimal, tolerable, untouched (configs/machine/), a .config file, or none",
+    "MACHINE": "machine profile: minimal | tolerable | remote | cloud | untouched (configs/machine/), a .config file, or none",
     "MEASURE": "kinds: static dynamic websocket concurrency payload",
     "SERVERS": "server folder names, or TYPE:IMAGE; empty = every server found",
     "BENCHMARKS_DIR": "folder searched for servers; empty = benchmarks/",
@@ -548,8 +549,14 @@ def docs():
            "| `minimal` | A machine you control, left alone while it measures: CPU at a fixed speed, turbo off, other "
            "containers stopped, screen at 1%, keyboard light, Wi-Fi and Bluetooth off |",
            "| `tolerable` | As minimal, but Wi-Fi stays on (reached over the network, or must stay online) |",
-           "| `untouched` | A machine you do not control: nothing is changed; if it never becomes calm, it measures "
-           "anyway and records why |", ""]
+           "| `remote` | A machine you control over SSH (desktop, lab or university server): CPU fixed, turbo off, "
+           "other containers stopped, nothing that could cut the connection; stops cleanly (resumable) after "
+           "15 minutes without calm |",
+           "| `cloud` | A rented machine: CPU settings where the provider allows them; shared hardware, so it "
+           "measures after 10 minutes without calm and records why. Needs visible RAPL energy counters "
+           "(bare-metal instances); the measurement stops at the start without them |",
+           "| `untouched` | A machine you must not change (shared with others, or no rights): nothing is changed; "
+           "if it never becomes calm, it measures anyway and records why |", ""]
     for title, keys in DOCS_LAYOUT:
         out += [f"## {title}", ""]
         for key in keys:

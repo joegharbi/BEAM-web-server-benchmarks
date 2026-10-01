@@ -1228,6 +1228,20 @@ class MinimalDefaultsAndProfiles(unittest.TestCase):
         for key in ("ENV_GOVERNOR", "ENV_TURBO", "ENV_SCREEN_BRIGHTNESS", "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH"):
             self.assertEqual(untouched[key], "unchanged", key)
         self.assertEqual((untouched["ENV_STOP_CONTAINERS"], untouched["READY_ON_TIMEOUT"]), ("0", "measure"))
+        remote, cloud = self.profile("remote"), self.profile("cloud")
+        # remote: full CPU control, never cuts the network, stops (resumable) instead of waiting forever
+        self.assertEqual([remote[k] for k in ("ENV_GOVERNOR", "ENV_TURBO", "ENV_STOP_CONTAINERS", "ENV_WIFI",
+                                              "READY_ON_TIMEOUT")], ["performance", "off", "1", "unchanged", "stop"])
+        # cloud: CPU settings where allowed, nothing physical touched, measures and records on shared hardware
+        self.assertEqual([cloud[k] for k in ("ENV_GOVERNOR", "ENV_STOP_CONTAINERS", "ENV_SCREEN_BRIGHTNESS", "ENV_WIFI",
+                                             "ENV_BLUETOOTH", "READY_ON_TIMEOUT")],
+                         ["performance", "1", "unchanged", "unchanged", "unchanged", "measure"])
+
+    def test_virtual_machine_and_rapl_are_recorded(self):
+        import run_metadata
+        info = run_metadata.software_and_machine()
+        self.assertIn(info["rapl_available"], (True, False))
+        self.assertTrue(info["virtualization"])
 
     def test_ssh_over_wifi_is_detected(self):
         import prepare_environment as pe

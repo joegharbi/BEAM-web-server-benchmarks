@@ -1351,6 +1351,11 @@ main() {
     trap 'BENCH_INTERRUPTED=1; exit 130' INT TERM
     bench_block_sleep
     if [ -n "${CONFIG_FILE:-}" ]; then
+        # Without RAPL (most cloud virtual machines) Scaphandre measures nothing: stop now, not after hours
+        if ! "$PYTHON_PATH" -c 'import sys; sys.path.insert(0, "tools"); import run_metadata as m; sys.exit(0 if m.rapl_available() else 1)'; then
+            print_status "ERROR" "This machine shows no CPU energy counters (RAPL in /sys/class/powercap), so Scaphandre cannot measure energy. This is usual in cloud virtual machines; use a bare-metal machine or instance."
+            exit 1
+        fi
         bench_wait_for_charger
         bench_check_disk
         print_status "INFO" "Free disk space: $(bench_free_gb) GB (raw data kept: ~45 KB per second of measuring; RAW_DATA=$CFG_RAW_DATA)"
