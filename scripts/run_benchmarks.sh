@@ -273,15 +273,20 @@ bench_init_run_plan() {
 
     if [[ $RUN_ALL -eq 1 ]]; then
         local sa da wa
-        sa=($(discover_containers static))
-        da=($(discover_containers dynamic))
-        wa=($(discover_containers websocket))
+        if [ "$BENCH_SELECTED" = 1 ]; then
+            sa=("${SELECT_STATIC[@]}"); da=("${SELECT_DYNAMIC[@]}"); wa=("${SELECT_WEBSOCKET[@]}")
+        else
+            sa=($(discover_containers static))
+            da=($(discover_containers dynamic))
+            wa=($(discover_containers websocket))
+        fi
         BENCH_PLAN_STATIC=("${sa[@]}")
         BENCH_PLAN_DYNAMIC=("${da[@]}")
         BENCH_PLAN_WEBSOCKET=("${wa[@]}")
         ns=${#sa[@]}
         nd=${#da[@]}
         nw=${#wa[@]}
+        bs=$(( bs * BENCH_DO_WS )); c=$(( c * BENCH_DO_CONC )); p=$(( p * BENCH_DO_PAYLOAD ))
         BENCH_TOTAL_STEPS=$(( ns * H + nd * H + nw * bs + nw * c + nw * p ))
     else
         case $TARGET_TYPE in
@@ -409,6 +414,12 @@ get_container_port_mapping() {
         if [ -n "$exposed_port" ]; then
             container_port="$exposed_port"
         fi
+    else
+        # An image without a server folder (SERVERS=type:image): the port it exposes, e.g. 8080/tcp
+        local image_port
+        image_port=$(docker image inspect --format '{{range $p, $_ := .Config.ExposedPorts}}{{$p}} {{end}}' "$image_name" 2>/dev/null \
+            | tr ' ' '\n' | grep -m1 -o '^[0-9]*' || true)
+        [ -n "$image_port" ] && container_port="$image_port"
     fi
     echo "${host_port}:${container_port}"
 }
@@ -512,6 +523,7 @@ while [[ $# -gt 0 ]]; do
             exit 1
         fi
         BENCHMARKS_DIR="$2"
+        BENCH_DIR_FROM_CLI=1
         if [[ "$BENCHMARKS_DIR" != /* ]]; then
             BENCHMARKS_DIR="$REPO_ROOT/$BENCHMARKS_DIR"
         fi
@@ -538,6 +550,15 @@ if [ -n "${CONFIG_FILE:-}" ]; then
     eval "$cfg_out"
     if [ "$CFG_HTTP_MAX_WORKERS" = "system" ]; then HTTP_MAX_WORKERS=""; else HTTP_MAX_WORKERS="$CFG_HTTP_MAX_WORKERS"; fi
     export MEASURE_SCAPH_STEP_MS="$CFG_SCAPH_STEP_MS"
+    # The config's server folder, unless --bench was given on the command line
+    if [ -n "$CFG_BENCHMARKS_DIR" ] && [ "${BENCH_DIR_FROM_CLI:-0}" != "1" ]; then
+        BENCHMARKS_DIR="$CFG_BENCHMARKS_DIR"
+        [[ "$BENCHMARKS_DIR" != /* ]] && BENCHMARKS_DIR="$REPO_ROOT/$BENCHMARKS_DIR"
+        if [ ! -d "$BENCHMARKS_DIR" ]; then
+            echo -e "${RED}[ERROR]${NC} BENCHMARKS_DIR of the config not found: $BENCHMARKS_DIR"
+            exit 1
+        fi
+    fi
     export MEASURE_IDLE_SECONDS="$CFG_IDLE_SECONDS"
     export MEASURE_ON_BATTERY="$CFG_ON_BATTERY"
     export MEASURE_WARMUP_SECONDS="$CFG_WARMUP_SECONDS"
@@ -656,6 +677,82 @@ if [[ $# -gt 0 ]]; then
         TARGET_TYPE="$1"
         shift
         TARGET_IMAGES=("$@")
+    fi
+fi
+
+# What to measure, from the config (MEASURE, SERVERS) when the command line does not choose.
+# Resolved and checked here, before anything starts: every name must exist, every image be built.
+BENCH_DO_STATIC=1; BENCH_DO_DYNAMIC=1; BENCH_DO_WS=1; BENCH_DO_CONC=1; BENCH_DO_PAYLOAD=1
+BENCH_SELECTED=0
+SELECT_STATIC=(); SELECT_DYNAMIC=(); SELECT_WEBSOCKET=()
+
+bench_type_of_dir() {
+    case "$1" in
+        */websocket/*) echo websocket ;;
+        */dynamic/*) echo dynamic ;;
+        */static/*) echo static ;;
+    esac
+}
+
+# Stop before anything started: also remove the still empty results folder of this run
+bench_stop_early() {
+    [ -z "$RESUME_DIR" ] && [ -z "$(find "$RESULTS_DIR" -type f 2>/dev/null | head -1)" ] && rm -rf "$RESULTS_DIR"
+    exit 1
+}
+
+bench_select_from_config() {
+    local kinds=" $CFG_MEASURE " s t img dir missing=()
+    [[ "$kinds" == *" static "* ]] || BENCH_DO_STATIC=0
+    [[ "$kinds" == *" dynamic "* ]] || BENCH_DO_DYNAMIC=0
+    [[ "$kinds" == *" websocket "* ]] || BENCH_DO_WS=0
+    [[ "$kinds" == *" concurrency "* ]] || BENCH_DO_CONC=0
+    [[ "$kinds" == *" payload "* ]] || BENCH_DO_PAYLOAD=0
+    if [ -z "$CFG_SERVERS" ]; then
+        read -r -a SELECT_STATIC <<< "$(discover_containers static)"
+        read -r -a SELECT_DYNAMIC <<< "$(discover_containers dynamic)"
+        read -r -a SELECT_WEBSOCKET <<< "$(discover_containers websocket)"
+    else
+        for s in $CFG_SERVERS; do
+            if [[ "$s" == *:* ]]; then
+                t="${s%%:*}"; img="${s#*:}"
+            else
+                img="$s"; dir=$(find_container_dir "$img")
+                if [ -z "$dir" ]; then
+                    echo -e "${RED}[ERROR]${NC} SERVERS: '$s' is not a server folder under $BENCHMARKS_DIR."
+                    echo "For an image built on this machine without a folder, give its type: static:$s, dynamic:$s or websocket:$s"
+                    bench_stop_early
+                fi
+                t=$(bench_type_of_dir "$dir")
+            fi
+            case "$t" in
+                static) SELECT_STATIC+=("$img") ;;
+                dynamic) SELECT_DYNAMIC+=("$img") ;;
+                websocket) SELECT_WEBSOCKET+=("$img") ;;
+            esac
+        done
+    fi
+    [ "$BENCH_DO_STATIC" = 1 ] || SELECT_STATIC=()
+    [ "$BENCH_DO_DYNAMIC" = 1 ] || SELECT_DYNAMIC=()
+    [ "$BENCH_DO_WS$BENCH_DO_CONC$BENCH_DO_PAYLOAD" != "000" ] || SELECT_WEBSOCKET=()
+    if [ $(( ${#SELECT_STATIC[@]} + ${#SELECT_DYNAMIC[@]} + ${#SELECT_WEBSOCKET[@]} )) -eq 0 ]; then
+        echo -e "${RED}[ERROR]${NC} Nothing to measure: no server of the kinds in MEASURE ($CFG_MEASURE) among SERVERS (${CFG_SERVERS:-all found in $BENCHMARKS_DIR})."
+        bench_stop_early
+    fi
+    for img in "${SELECT_STATIC[@]}" "${SELECT_DYNAMIC[@]}" "${SELECT_WEBSOCKET[@]}"; do
+        docker image inspect "$img" >/dev/null 2>&1 || missing+=("$img")
+    done
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo -e "${RED}[ERROR]${NC} These images are not built: ${missing[*]}. Build them first (make build)."
+        bench_stop_early
+    fi
+    BENCH_SELECTED=1
+}
+
+if [ -n "${CONFIG_FILE:-}" ]; then
+    if [ "$RUN_ALL" -eq 0 ]; then
+        echo -e "${BLUE}[INFO]${NC} The command line chooses what to measure ($TARGET_TYPE${TARGET_IMAGES[*]:+ ${TARGET_IMAGES[*]}}); MEASURE and SERVERS of the config are not used."
+    else
+        bench_select_from_config
     fi
 fi
 
@@ -1319,6 +1416,7 @@ main() {
         --set http_connection="$CFG_HTTP_CONNECTION" --set failures_stop_after="$CFG_FAILURES_STOP_AFTER" \
         --set idle_s="${CFG_IDLE_SECONDS:-0}" --set warmup_s="${CFG_WARMUP_SECONDS:-0}" \
         --set reproduces="${REPRODUCE_DIR:-}" \
+        --set measure="${CFG_MEASURE:-}" --set servers="${CFG_SERVERS:-}" \
         --set env_screen_brightness="${CFG_ENV_SCREEN_BRIGHTNESS:-}" --set env_keyboard_light="${CFG_ENV_KEYBOARD_LIGHT:-}" \
         --set env_wifi="${CFG_ENV_WIFI:-}" --set env_bluetooth="${CFG_ENV_BLUETOOTH:-}" --set on_battery="${CFG_ON_BATTERY:-}" \
         || print_status "WARNING" "Could not write $RESULTS_DIR/metadata.json"
@@ -1372,8 +1470,8 @@ bench_run_pass() {
     local _si=0
     if [[ $RUN_ALL -eq 1 ]]; then
         print_status "INFO" "Running all benchmarks..."
-        print_section "Static Container Tests"
         local static_containers=("${BENCH_PLAN_STATIC[@]}")
+        [ ${#static_containers[@]} -gt 0 ] && print_section "Static Container Tests"
         BENCH_PHASE="static HTTP"
         BENCH_CTOTAL=${#static_containers[@]}
         _si=0
@@ -1394,8 +1492,8 @@ bench_run_pass() {
             run_docker_tests "$container" "$HOST_PORT" "static"
             sleep 1
         done
-        print_section "Dynamic Container Tests"
         local dynamic_containers=("${BENCH_PLAN_DYNAMIC[@]}")
+        [ ${#dynamic_containers[@]} -gt 0 ] && print_section "Dynamic Container Tests"
         BENCH_PHASE="dynamic HTTP"
         BENCH_CTOTAL=${#dynamic_containers[@]}
         _si=0
@@ -1416,8 +1514,9 @@ bench_run_pass() {
             run_docker_tests "$container" "$HOST_PORT" "dynamic"
             sleep 1
         done
-        print_section "WebSocket Tests"
         local websocket_containers=("${BENCH_PLAN_WEBSOCKET[@]}")
+        [ "$BENCH_DO_WS" = 1 ] || websocket_containers=()
+        [ ${#websocket_containers[@]} -gt 0 ] && print_section "WebSocket Tests"
         BENCH_PHASE="WebSocket burst/stream"
         BENCH_CTOTAL=${#websocket_containers[@]}
         _si=0
@@ -1439,6 +1538,8 @@ bench_run_pass() {
             sleep 1
         done
         # Also run sweeps for all websocket servers
+        websocket_containers=("${BENCH_PLAN_WEBSOCKET[@]}")
+        [ "$BENCH_DO_CONC$BENCH_DO_PAYLOAD" != "00" ] || websocket_containers=()
         BENCH_CTOTAL=${#websocket_containers[@]}
         _si=0
         for container in "${websocket_containers[@]}"; do
@@ -1455,10 +1556,14 @@ bench_run_pass() {
                 docker rm "$container" > /dev/null 2>&1 || true
                 sleep 1
             fi
-            BENCH_PHASE="WebSocket concurrency"
-            run_concurrency "$container" "$HOST_PORT"
-            BENCH_PHASE="WebSocket payload"
-            run_payload "$container" "$HOST_PORT"
+            if [ "$BENCH_DO_CONC" = 1 ]; then
+                BENCH_PHASE="WebSocket concurrency"
+                run_concurrency "$container" "$HOST_PORT"
+            fi
+            if [ "$BENCH_DO_PAYLOAD" = 1 ]; then
+                BENCH_PHASE="WebSocket payload"
+                run_payload "$container" "$HOST_PORT"
+            fi
             sleep 1
         done
     else

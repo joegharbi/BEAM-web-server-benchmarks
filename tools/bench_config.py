@@ -67,6 +67,36 @@ def _list(item_check, what):
     return check
 
 
+MEASUREMENT_KINDS = ("static", "dynamic", "websocket", "concurrency", "payload")
+SERVER_TYPES = ("static", "dynamic", "websocket")
+
+
+def _kind(v):
+    if v not in MEASUREMENT_KINDS:
+        raise ValueError(f"'{v}' is not one of: {', '.join(MEASUREMENT_KINDS)}")
+    return v
+
+
+def _servers(v):
+    """Empty (all servers found), or names, each a server folder name or TYPE:IMAGE for an image
+    built on this machine without a folder."""
+    out = []
+    for item in v.split():
+        name = item.split(":", 1)[1] if ":" in item else item
+        if ":" in item and item.split(":", 1)[0] not in SERVER_TYPES:
+            raise ValueError(f"'{item}': the type before ':' must be one of: {', '.join(SERVER_TYPES)}")
+        if not re.fullmatch(r"[A-Za-z0-9_.\-/]+(:[A-Za-z0-9_.\-]+)?", name):
+            raise ValueError(f"'{item}' is not a container or image name")
+        out.append(item)
+    return " ".join(out)
+
+
+def _path(v):
+    if any(c.isspace() for c in v):
+        raise ValueError("must be a folder path without spaces")
+    return v
+
+
 def _number(lo=0.0):
     def check(v):
         try:
@@ -122,6 +152,23 @@ def _optional_margin(v):
 # or the options of a choice (each with a short meaning). bench.config.example is
 # generated from this, so the documentation always matches the code.
 SCHEMA = {
+    # --- What to measure ---
+    "MEASURE": dict(default=" ".join(MEASUREMENT_KINDS), check=_list(_kind, "measurement kind"),
+        unit="kinds, separated by spaces: static dynamic websocket concurrency payload",
+        help="Which kinds of measurement to run. static/dynamic: HTTP load levels (HTTP_REQUESTS) on the\n"
+             "static and dynamic HTTP servers; websocket: burst and stream tests; concurrency and payload:\n"
+             "the WebSocket client-count and message-size sweeps. A type on the command line\n"
+             "(make run-static ...) takes precedence over this setting."),
+    "SERVERS": dict(default="", check=_servers, unit="names separated by spaces, or empty = all servers found",
+        help="Which servers to measure. Empty = every server found in BENCHMARKS_DIR (a folder with a\n"
+             "Dockerfile; its place, static/, dynamic/ or websocket/, gives its type). A name is a server\n"
+             "folder name, e.g. st-erlang-cowboy-28-4-3. An image built on this machine without a folder is\n"
+             "given with its type: static:my-nginx, dynamic:my-app, websocket:my-ws (port from the image).\n"
+             "Every name must exist and every image must be built, or the measurement does not start."),
+    "BENCHMARKS_DIR": dict(default="", check=_path, unit="folder path, or empty = benchmarks/",
+        help="The folder searched for servers. Empty = benchmarks/ (or BENCHMARKS_DIR from the environment).\n"
+             "--bench on the command line takes precedence."),
+
     # --- Repeats and order ---
     "REPEATS": dict(default="5", check=_int(1), unit="runs, 1 or more",
         help="How many times every measurement is repeated. Each repeat is one full pass over all servers."),
@@ -287,7 +334,9 @@ SCHEMA = {
 # How bench.config.example is laid out: the settings people usually change first, the rest after.
 LAYOUT = [
     ("PART 1: settings you usually change", [
-        (None, ["REPEATS", "HTTP_REQUESTS", "IDLE_SECONDS", "WARMUP_SECONDS", "FAILURES_STOP_AFTER", "RAW_DATA"]),
+        ("What to measure", ["MEASURE", "SERVERS", "BENCHMARKS_DIR"]),
+        ("How to measure", ["REPEATS", "HTTP_REQUESTS", "IDLE_SECONDS", "WARMUP_SECONDS", "FAILURES_STOP_AFTER",
+                            "RAW_DATA"]),
     ]),
     ("PART 2: advanced. The defaults are the recommended values; change them only for a reason", [
         ("Order of the runs", ["SHUFFLE", "SHUFFLE_SEED"]),

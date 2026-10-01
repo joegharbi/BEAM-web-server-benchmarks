@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1312,6 +1313,102 @@ class FixesFromTheRealCheck(LaptopSettings):
         self.assertEqual(r.returncode, 1, out)
         self.assertIn("stopping before it fills up", out)
         self.assertNotIn("Letting the machine settle", out)
+
+
+class WhatToMeasure(unittest.TestCase):
+    """MEASURE, SERVERS and BENCHMARKS_DIR in the config; checked before anything starts."""
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.bin = os.path.join(self.d, "bin")
+        os.makedirs(self.bin)
+        with open(os.path.join(self.bin, "sudo"), "w") as fh:          # machine settings are not touched here
+            fh.write('#!/bin/sh\nwhile [ $# -gt 0 ]; do case "$1" in -*) shift ;; *) break ;; esac; done\n'
+                     '[ $# -eq 0 ] && exit 0\ncase "$*" in *prepare_environment.py*) exit 0 ;; esac\nexec "$@"\n')
+        with open(os.path.join(self.bin, "docker"), "w") as fh:        # "built" images: $FAKE_IMAGES
+            fh.write('#!/bin/sh\nif [ "$1 $2" = "image inspect" ]; then\n'
+                     '  case "$*" in *ExposedPorts*) echo "8080/tcp "; exit 0 ;; esac\n'
+                     '  for i in $FAKE_IMAGES; do [ "$i" = "$3" ] && exit 0; done; exit 1\nfi\nexit 0\n')
+        for f in ("sudo", "docker"):
+            os.chmod(os.path.join(self.bin, f), 0o755)
+        self.bench = os.path.join(self.d, "bench")
+        for rel in ("static/erlang/cowboy/st-a", "static/elixir/pure/st-b", "dynamic/erlang/pure/dy-c",
+                    "websocket/erlang/cowboy/ws-d"):
+            os.makedirs(os.path.join(self.bench, rel))
+            open(os.path.join(self.bench, rel, "Dockerfile"), "w").close()
+
+    def run_until_plan(self, config, args=(), images="st-a st-b dy-c ws-d my-img"):
+        import signal
+        cfg = os.path.join(self.d, "c.config")
+        with open(cfg, "w") as fh:
+            fh.write("SETTLE_SECONDS=0\nRESTING_MEASURE_SECONDS=1\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\n"
+                     "ENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\n"
+                     "ENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n" + config)
+        before = set(os.listdir(os.path.join(ROOT, "results")))
+        env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], FAKE_IMAGES=images)
+        out_file = os.path.join(self.d, "out.txt")
+        with open(out_file, "w") as fh:
+            p = subprocess.Popen(["bash", "scripts/run_benchmarks.sh", "--bench", self.bench, "--config", cfg, *args],
+                                 cwd=ROOT, env=env, stdout=fh, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            for _ in range(300):                                          # stop once the plan is printed
+                time.sleep(0.1)
+                with open(out_file) as fh:
+                    text = fh.read()
+                if p.poll() is not None or "Results directory:" in text and "measurements in total" in text \
+                        or "WS payload:" in text:
+                    break
+            if p.poll() is None:
+                os.killpg(p.pid, signal.SIGINT)
+                p.wait(timeout=30)
+        finally:
+            if p.poll() is None:
+                os.killpg(p.pid, signal.SIGKILL)
+            for name in set(os.listdir(os.path.join(ROOT, "results"))) - before:
+                shutil.rmtree(os.path.join(ROOT, "results", name), ignore_errors=True)
+        with open(out_file) as fh:
+            text = fh.read()
+        log = text.split("Logging to ", 1)[1].split()[0] if "Logging to " in text else ""
+        if log and os.path.isfile(os.path.join(ROOT, log)):
+            os.remove(os.path.join(ROOT, log))
+        return p.returncode, text
+
+    def test_selected_servers_and_kinds(self):
+        rc, out = self.run_until_plan("MEASURE=static\nSERVERS=st-a static:my-img\nHTTP_REQUESTS=1000 2000 3000\n")
+        self.assertIn("Static HTTP:     2 containers × 3 levels = 6", out)
+        self.assertIn("Dynamic HTTP:    0 containers", out)
+        self.assertIn("WS concurrency:  0 ×", out)
+
+    def test_unknown_name_stops_before_anything(self):
+        rc, out = self.run_until_plan("SERVERS=st-zzz\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("'st-zzz' is not a server folder", out)
+        self.assertIn("static:st-zzz", out)
+        self.assertNotIn("Sleep and lid-close", out)                             # nothing started:
+        self.assertNotIn("Machine settings", out)                                # machine untouched
+
+    def test_early_stop_leaves_no_empty_results_folder(self):
+        before = set(os.listdir(os.path.join(ROOT, "results")))
+        self.run_until_plan("SERVERS=st-zzz\n")
+        self.assertEqual(set(os.listdir(os.path.join(ROOT, "results"))), before)
+
+    def test_image_not_built_stops_before_anything(self):
+        rc, out = self.run_until_plan("MEASURE=static\n", images="st-a")
+        self.assertEqual(rc, 1)
+        self.assertIn("These images are not built: st-b", out)
+
+    def test_command_line_wins(self):
+        rc, out = self.run_until_plan("MEASURE=websocket\n", args=("static",))
+        self.assertIn("The command line chooses what to measure (static); MEASURE and SERVERS of the config are not used", out)
+
+    def test_port_of_an_image_without_folder(self):
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            sh = fh.read()
+        funcs = "".join(sh[sh.index(f"{f}() {{"):][:sh[sh.index(f"{f}() {{"):].index("\n}\n") + 3]
+                        for f in ("find_container_dir", "get_container_port_mapping"))
+        r = subprocess.run(["bash", "-c", f'BENCHMARKS_DIR="{self.bench}"\n{funcs}\n'
+                            'get_container_port_mapping my-img 8001; get_container_port_mapping st-a 8001'],
+                           capture_output=True, text=True, env=dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"]))
+        self.assertEqual(r.stdout.split(), ["8001:8080", "8001:80"])
 
 
 if __name__ == "__main__":

@@ -6,6 +6,30 @@
 # PART 1: settings you usually change
 ##############################################################################
 
+# ===== What to measure =====
+
+# Which kinds of measurement to run. static/dynamic: HTTP load levels (HTTP_REQUESTS) on the
+# static and dynamic HTTP servers; websocket: burst and stream tests; concurrency and payload:
+# the WebSocket client-count and message-size sweeps. A type on the command line
+# (make run-static ...) takes precedence over this setting.
+# Unit: kinds, separated by spaces: static dynamic websocket concurrency payload
+MEASURE=static dynamic websocket concurrency payload
+
+# Which servers to measure. Empty = every server found in BENCHMARKS_DIR (a folder with a
+# Dockerfile; its place, static/, dynamic/ or websocket/, gives its type). A name is a server
+# folder name, e.g. st-erlang-cowboy-28-4-3. An image built on this machine without a folder is
+# given with its type: static:my-nginx, dynamic:my-app, websocket:my-ws (port from the image).
+# Every name must exist and every image must be built, or the measurement does not start.
+# Unit: names separated by spaces, or empty = all servers found
+SERVERS=
+
+# The folder searched for servers. Empty = benchmarks/ (or BENCHMARKS_DIR from the environment).
+# --bench on the command line takes precedence.
+# Unit: folder path, or empty = benchmarks/
+BENCHMARKS_DIR=
+
+# ===== How to measure =====
+
 # How many times every measurement is repeated. Each repeat is one full pass over all servers.
 # Unit: runs, 1 or more
 REPEATS=5

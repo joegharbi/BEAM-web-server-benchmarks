@@ -66,6 +66,22 @@ make run CONFIG=configs/minimal.config          # or: make run-static CONFIG=con
 cp configs/minimal.config my.config             # your own: add lines such as REPEATS=10
 ```
 
+### What to measure
+
+The config also says what is measured, so one file describes the whole measurement:
+
+```
+MEASURE=static dynamic                     # kinds: static dynamic websocket concurrency payload (default: all)
+SERVERS=st-erlang-cowboy-28-4-3 static:my-nginx   # empty (default) = every server found in BENCHMARKS_DIR
+BENCHMARKS_DIR=benchmarks                  # the folder searched for servers (default: benchmarks/)
+HTTP_REQUESTS=1000 20000 80000             # the load levels
+```
+
+A name in `SERVERS` is a server folder (its place, `static/`, `dynamic/` or `websocket/`, gives its type), or
+`TYPE:IMAGE` for an image built on this machine without a folder (its port is read from the image). Every
+name must exist and every image must be built, or the measurement stops before it starts. A type or names
+on the command line (`make run-static ...`) take precedence over `MEASURE` and `SERVERS`.
+
 Every setting is optional; an empty file uses the defaults, which are the minimal profile.
 `bench.config.example` explains every setting, in two parts: the few you usually change (repeats, load
 levels, idle, warm-up, failures, raw data), and the advanced ones, whose defaults are the recommended
