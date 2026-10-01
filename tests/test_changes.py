@@ -932,5 +932,67 @@ class RunPlanCount(unittest.TestCase):
         self.assertIn("config=3", r.stdout, r.stderr)
 
 
+class IdleAndWarmup(unittest.TestCase):
+    def test_every_key_is_in_the_example_once(self):
+        import bench_config
+        laid_out = [k for _, sections in bench_config.LAYOUT for _, keys in sections for k in keys]
+        self.assertEqual(sorted(laid_out), sorted(bench_config.SCHEMA))
+        example = bench_config.example()
+        for key in bench_config.SCHEMA:
+            self.assertEqual(example.count(f"\n{key}="), 1, key)
+
+    def test_off_by_default(self):
+        import bench_config, load_phases
+        cfg = bench_config.parse("")
+        self.assertEqual((cfg["IDLE_SECONDS"], cfg["WARMUP_SECONDS"]), ("0", "0"))
+        saved = {k: os.environ.pop(k, None) for k in ("MEASURE_IDLE_SECONDS", "MEASURE_WARMUP_SECONDS")}
+        try:
+            self.assertEqual((load_phases.default_idle_s(), load_phases.default_warmup_s()), (0.0, 0.0))
+        finally:
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
+        f = load_phases.idle_fields("unused.json", "srv", None, None, 0)
+        self.assertEqual((f["Idle Time (s)"], f["Idle Energy (J)"]), (0, ""))
+
+    def test_idle_energy_from_the_same_log(self):
+        import load_phases
+        # 2 W idle for t=1..6, then 8 W under load
+        entries = [entry(0, 0, [])] + [entry(t, 10, [consumer(7, 2.0 if t <= 6 else 8.0, "srv")]) for t in range(1, 12)]
+        path = write_json(entries)
+        f = load_phases.idle_fields(path, "srv", None, (1, 6), 3)
+        self.assertAlmostEqual(f["Idle Energy (J)"], 10.0)         # 2 W x 5 s
+        self.assertAlmostEqual(f["Idle Avg Power (W)"], 2.0)
+        self.assertAlmostEqual(f["Idle Host Avg Power (W)"], 10.0)
+        self.assertEqual((f["Idle Time (s)"], f["Warm-up (s)"]), (5, 3))
+
+    def test_http_warmup_is_not_counted(self):
+        import http.server, threading, measure_docker as md
+
+        class Ok(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+            hits = 0
+
+            def do_GET(self):
+                Ok.hits += 1
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"ok")
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Ok)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            md.results_counter.update(success=0, failure=0, total=0)
+            md.warm_up(f"http://127.0.0.1:{srv.server_port}/", 0.5, 4, "reuse")
+            self.assertGreater(Ok.hits, 0)                              # the server got traffic
+            self.assertEqual(md.results_counter["total"], 0)            # but nothing was counted
+        finally:
+            srv.shutdown()
+
+
 if __name__ == "__main__":
     unittest.main()

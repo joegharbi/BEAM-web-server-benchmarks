@@ -17,6 +17,7 @@ import measure_failure
 import readiness
 import run_metadata
 from scaphandre_energy import compute_window_energy, finish_raw, raw_json_path, scaphandre_json_args, window_record
+import load_phases
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger()
@@ -112,6 +113,24 @@ def send_request(url, request_num, verbose=False, connection_mode="reuse"):
     finally:
         with results_lock:
             results_counter['total'] += 1
+
+def warm_up(url, seconds, max_workers, connection_mode):
+    """Unmeasured requests for `seconds`, with the same client settings as the load."""
+    if seconds <= 0:
+        return
+    deadline = time.time() + seconds
+
+    def worker(_):
+        while time.time() < deadline:
+            try:
+                _get(url, connection_mode)
+            except requests.exceptions.RequestException:
+                pass
+
+    workers = max_workers or min(32, (os.cpu_count() or 1) + 4)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        list(executor.map(worker, range(workers)))
+
 
 def cleanup_existing_container(container_name, docker_path):
     logger.info(f"Cleaning up any existing container named '{container_name}'...")
@@ -442,6 +461,10 @@ def main():
     parser.add_argument('--connection', choices=['reuse', 'per-request'], default='reuse',
                         help="HTTP connection handling: 'reuse' keeps one keep-alive connection per worker (default); "
                              "'per-request' opens a new connection for every request, as in the published results")
+    parser.add_argument('--warmup_s', type=float, default=load_phases.default_warmup_s(),
+                        help="Seconds of unmeasured requests after boot, before the measurement (default: 0, or WARMUP_SECONDS of the config)")
+    parser.add_argument('--idle_s', type=float, default=load_phases.default_idle_s(),
+                        help="Seconds the idle server is measured right before the load (default: 0, or IDLE_SECONDS of the config)")
     parser.add_argument('--waited_s', type=float, default=None, help="Seconds the readiness gate waited before this run (set by run_benchmarks.sh --config)")
     parser.add_argument('--ready_check', type=str, default="not checked", help="Result of the readiness gate before this run (set by run_benchmarks.sh --config)")
     parser.add_argument('--repeat', type=int, default=1, help="Quick manual check only: run this measurement N times with a fixed --cooldown, without machine settings or readiness checks. For real measurements use: make run CONFIG=bench.config (default: 1)")
@@ -500,6 +523,11 @@ def main():
         logger.error("To allow more boot time: MEASURE_STARTUP_WAIT=25 MEASURE_HEALTH_RETRIES=30 make run")
         measure_failure.fail("health check failed: no HTTP 200 from the container within the wait time")
 
+    if args.warmup_s > 0:
+        if is_measure_quiet() and not args.verbose:
+            measure_quiet_msg(f"{container_name} | warm-up {args.warmup_s:g}s (not measured) …")
+        warm_up(url, args.warmup_s, args.max_workers, args.connection)
+
     # Readiness check 2: booting the server warms the CPU, so wait again right before the load.
     pre_load = pre_load_check(container_name, docker_path)
 
@@ -513,6 +541,9 @@ def main():
 
     logger.info(f"Sending {args.num_requests} requests to {url}...")
     time.sleep(2)
+    if args.idle_s > 0 and is_measure_quiet() and not args.verbose:
+        measure_quiet_msg(f"{container_name} | idle {args.idle_s:g}s (measured, no requests) …")
+    idle = load_phases.idle_window(args.idle_s)
 
     stop_event = threading.Event()
     resource_results = {'cpu': {}, 'mem': {}}
@@ -578,7 +609,11 @@ def main():
     if result.returncode == 0 and result.stdout.strip():
         container_id = result.stdout.strip()
     energy = compute_window_energy(output_json, container_name, start_time, end_time, container_id=container_id)
-    output_json = finish_raw(output_json, window_record(container_name, container_id, start_time, end_time, energy))
+    phases = load_phases.idle_fields(output_json, container_name, container_id, idle, args.warmup_s)
+    record = window_record(container_name, container_id, start_time, end_time, energy)
+    if idle:
+        record["idle_start_epoch"], record["idle_end_epoch"] = idle
+    output_json = finish_raw(output_json, record)
     total_energy, average_power, total_samples = energy["energy_j"], energy["avg_power_w"], energy["samples"]
     stop_server_container(container_name, docker_path)
     measurement_type = getattr(args, 'measurement_type', None) or "unknown"
@@ -591,7 +626,8 @@ def main():
                                      "Host Avg Power (W)": round(energy["host_avg_power_w"], 6),
                                      "Sampling Step (ms)": energy["step_ms"],
                                      "Window Coverage": round(energy["coverage"], 4),
-                                     **thermal_fields(thermal_before, thermal_after, args, pre_load)})
+                                     **thermal_fields(thermal_before, thermal_after, args, pre_load),
+                                     **phases})
     csv_disp = args.output_csv or os.path.join("results_docker", f"{container_name}.csv")
     if is_measure_quiet() and not args.verbose:
         ok = results_counter["success"] == results_counter["total"]

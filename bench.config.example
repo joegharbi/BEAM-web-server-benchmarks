@@ -2,11 +2,50 @@
 # Copy this file to bench.config and edit it. Every key is optional; the value
 # shown is the default. Lines starting with # are comments.
 
-# ===== Repeats and order =====
+##############################################################################
+# PART 1: settings you usually change
+##############################################################################
 
 # How many times every measurement is repeated. Each repeat is one full pass over all servers.
 # Unit: runs, 1 or more
 REPEATS=5
+
+# Load levels of the static and dynamic HTTP measurements, measured in this order.
+# Unit: request counts, separated by spaces
+HTTP_REQUESTS=100 1000 5000 8000 10000 15000 20000 30000 40000 50000 60000 70000 80000
+
+# Measure every server doing nothing for this long, right before its load. Gives its idle
+# energy and power (Idle ... columns in the CSV). 0 = off, as in the published results.
+# Adds this many seconds to every measurement.
+# Unit: seconds, 0 = off
+IDLE_SECONDS=0
+
+# Unmeasured traffic of the same kind as the load (HTTP requests or WebSocket echo messages)
+# for this long after the server starts, so the measurement does not include its very first
+# requests. The readiness check afterwards lets the CPU cool down again. 0 = off, as in the
+# published results.
+# Unit: seconds, 0 = off
+WARMUP_SECONDS=0
+
+# What to do when a measurement fails (server did not start, health check failed, ...).
+# Every failure is written to failures.csv.
+# Options:
+#   1  stop at the first failure
+#   N  keep going, but stop after N failures in a row, because then something is broken (default 5)
+#   0  never stop; measure everything that works
+FAILURES_STOP_AFTER=5
+
+# Scaphandre's raw power log of each run, after its energy has been calculated.
+# Options:
+#   keep    keep it as it is (plain JSON) in <results>/raw/ (energy can be recalculated later; recommended)
+#   delete  delete it (saves disk space)
+RAW_DATA=keep
+
+##############################################################################
+# PART 2: advanced. The defaults are the recommended values; change them only for a reason
+##############################################################################
+
+# ===== Order of the runs =====
 
 # Shuffle the order of the servers in every repeat, so no server always runs first on a cool machine.
 # Options:
@@ -111,29 +150,24 @@ READY_MAX_WAIT_SECONDS=300
 #   measure  measure anyway and write the reason in the CSV (cloud or shared servers)
 READY_ON_TIMEOUT=wait
 
-# ===== Failures =====
+# ===== Load and energy measurement =====
 
-# What to do when a measurement fails (server did not start, health check failed, ...).
-# Every failure is written to failures.csv.
+# How many requests the HTTP client sends in parallel. 'system' = Python's default (differs per machine).
+# Unit: threads, 1 or more, or 'system'
+HTTP_MAX_WORKERS=100
+
+# How the HTTP client uses TCP connections.
 # Options:
-#   1  stop at the first failure
-#   N  keep going, but stop after N failures in a row, because then something is broken (default 5)
-#   0  never stop; measure everything that works
-FAILURES_STOP_AFTER=5
+#   reuse        one kept-alive connection per worker, like browsers (recommended)
+#   per-request  a new connection for every request, as in the published results;
+#                fails above ~28,000 requests when the client runs out of ports
+HTTP_CONNECTION=reuse
 
-# ===== Raw data =====
+# How often Scaphandre reads the power. Smaller = more detail but Scaphandre itself uses more power.
+# Unit: milliseconds, 10 or more
+SCAPH_STEP_MS=500
 
-# Scaphandre's raw power log of each run, after its energy has been calculated.
-# Options:
-#   keep    keep it as it is (plain JSON) in <results>/raw/ (energy can be recalculated later; recommended)
-#   delete  delete it (saves disk space)
-RAW_DATA=keep
-
-# ===== Workloads (full runs; --quick and --super-quick keep their short lists) =====
-
-# Load levels of the static and dynamic HTTP measurements, measured in this order.
-# Unit: request counts, separated by spaces
-HTTP_REQUESTS=100 1000 5000 8000 10000 15000 20000 30000 40000 50000 60000 70000 80000
+# ===== WebSocket workloads (full runs; --quick and --super-quick keep their short lists) =====
 
 # WebSocket burst: how many clients connect at once.
 # Unit: client counts, separated by spaces
@@ -183,20 +217,3 @@ WS_PAYLOAD_CLIENTS=5
 # WebSocket payload test: message sizes.
 # Unit: KB per message, separated by spaces
 WS_PAYLOAD_SIZES_KB=8 1024 65536
-
-# ===== Load and energy measurement =====
-
-# How many requests the HTTP client sends in parallel. 'system' = Python's default (differs per machine).
-# Unit: threads, 1 or more, or 'system'
-HTTP_MAX_WORKERS=100
-
-# How the HTTP client uses TCP connections.
-# Options:
-#   reuse        one kept-alive connection per worker, like browsers (recommended)
-#   per-request  a new connection for every request, as in the published results;
-#                fails above ~28,000 requests when the client runs out of ports
-HTTP_CONNECTION=reuse
-
-# How often Scaphandre reads the power. Smaller = more detail but Scaphandre itself uses more power.
-# Unit: milliseconds, 10 or more
-SCAPH_STEP_MS=500

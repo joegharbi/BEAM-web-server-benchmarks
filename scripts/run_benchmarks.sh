@@ -514,6 +514,8 @@ if [ -n "${CONFIG_FILE:-}" ]; then
     eval "$cfg_out"
     if [ "$CFG_HTTP_MAX_WORKERS" = "system" ]; then HTTP_MAX_WORKERS=""; else HTTP_MAX_WORKERS="$CFG_HTTP_MAX_WORKERS"; fi
     export MEASURE_SCAPH_STEP_MS="$CFG_SCAPH_STEP_MS"
+    export MEASURE_IDLE_SECONDS="$CFG_IDLE_SECONDS"
+    export MEASURE_WARMUP_SECONDS="$CFG_WARMUP_SECONDS"
     # Workloads of full runs (defaults equal the built-in lists)
     read -r -a full_http_requests <<< "$CFG_HTTP_REQUESTS"
     read -r -a full_ws_burst_clients <<< "$CFG_WS_BURST_CLIENTS"
@@ -1240,6 +1242,7 @@ main() {
         --set env_governor="$CFG_ENV_GOVERNOR" \
         --set env_turbo="$CFG_ENV_TURBO" --set env_stop_containers="$CFG_ENV_STOP_CONTAINERS" \
         --set http_connection="$CFG_HTTP_CONNECTION" --set failures_stop_after="$CFG_FAILURES_STOP_AFTER" \
+        --set idle_s="${CFG_IDLE_SECONDS:-0}" --set warmup_s="${CFG_WARMUP_SECONDS:-0}" \
         || print_status "WARNING" "Could not write $RESULTS_DIR/metadata.json"
     print_status "INFO" "Starting benchmarks at $(date)"
     print_status "INFO" "Results will be saved to: $RESULTS_DIR"

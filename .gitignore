@@ -25,3 +25,4 @@ _build/
 web-socket/
 TODObench.config
 bench.config
+pilot.config

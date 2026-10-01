@@ -238,7 +238,40 @@ SCHEMA = {
                                 "#                fails above ~28,000 requests when the client runs out of ports"}),
     "SCAPH_STEP_MS": dict(default="500", check=_int(10), unit="milliseconds, 10 or more",
         help="How often Scaphandre reads the power. Smaller = more detail but Scaphandre itself uses more power."),
+
+    # --- Phases around the load ---
+    "IDLE_SECONDS": dict(default="0", check=_int(0), unit="seconds, 0 = off",
+        help="Measure every server doing nothing for this long, right before its load. Gives its idle\n"
+             "energy and power (Idle ... columns in the CSV). 0 = off, as in the published results.\n"
+             "Adds this many seconds to every measurement."),
+    "WARMUP_SECONDS": dict(default="0", check=_int(0), unit="seconds, 0 = off",
+        help="Unmeasured traffic of the same kind as the load (HTTP requests or WebSocket echo messages)\n"
+             "for this long after the server starts, so the measurement does not include its very first\n"
+             "requests. The readiness check afterwards lets the CPU cool down again. 0 = off, as in the\n"
+             "published results."),
 }
+
+# How bench.config.example is laid out: the settings people usually change first, the rest after.
+LAYOUT = [
+    ("PART 1: settings you usually change", [
+        (None, ["REPEATS", "HTTP_REQUESTS", "IDLE_SECONDS", "WARMUP_SECONDS", "FAILURES_STOP_AFTER", "RAW_DATA"]),
+    ]),
+    ("PART 2: advanced. The defaults are the recommended values; change them only for a reason", [
+        ("Order of the runs", ["SHUFFLE", "SHUFFLE_SEED"]),
+        ("Machine settings (applied before, restored after)",
+         ["ENV_GOVERNOR", "ENV_TURBO", "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "SETTLE_SECONDS",
+          "RESTING_MEASURE_SECONDS"]),
+        ("Readiness check before every run",
+         ["READY_CHECK_EVERY_SECONDS", "READY_TEMP_REFERENCE_C", "READY_TEMP_MARGIN_C",
+          "READY_CPU_BUSY_REFERENCE_PERCENT", "READY_CPU_BUSY_MARGIN_PERCENT", "READY_NO_THROTTLING",
+          "READY_CONSECUTIVE_CHECKS", "READY_MIN_WAIT_SECONDS", "READY_MAX_WAIT_SECONDS", "READY_ON_TIMEOUT"]),
+        ("Load and energy measurement", ["HTTP_MAX_WORKERS", "HTTP_CONNECTION", "SCAPH_STEP_MS"]),
+        ("WebSocket workloads (full runs; --quick and --super-quick keep their short lists)",
+         ["WS_BURST_CLIENTS", "WS_BURST_SIZES_KB", "WS_BURST_BURSTS", "WS_BURST_INTERVAL_SECONDS",
+          "WS_STREAM_CLIENTS", "WS_STREAM_SIZES_KB", "WS_STREAM_RATE_PER_SECOND", "WS_STREAM_DURATION_SECONDS",
+          "WS_CONCURRENCY_CLIENTS", "WS_CONCURRENCY_SIZE_KB", "WS_PAYLOAD_CLIENTS", "WS_PAYLOAD_SIZES_KB"]),
+    ]),
+]
 
 
 class ConfigError(Exception):
@@ -285,23 +318,21 @@ def example():
     out = ["# Benchmark configuration for:  make run CONFIG=bench.config",
            "# Copy this file to bench.config and edit it. Every key is optional; the value",
            "# shown is the default. Lines starting with # are comments.", ""]
-    section = {"REPEATS": "Repeats and order", "ENV_GOVERNOR": "Machine settings (applied before, restored after)",
-               "READY_CHECK_EVERY_SECONDS": "Readiness check before every run",
-               "FAILURES_STOP_AFTER": "Failures",
-               "RAW_DATA": "Raw data",
-               "HTTP_REQUESTS": "Workloads (full runs; --quick and --super-quick keep their short lists)",
-               "HTTP_MAX_WORKERS": "Load and energy measurement"}
-    for key, spec in SCHEMA.items():
-        if key in section:
-            out += [f"# ===== {section[key]} =====", ""]
-        out += ["# " + line for line in spec["help"].split("\n")]
-        if "options" in spec:
-            width = max(len(o) for o in spec["options"])
-            out.append("# Options:")
-            out += [f"#   {o:<{width}}  {meaning}" for o, meaning in spec["options"].items()]
-        else:
-            out.append(f"# Unit: {spec['unit']}")
-        out += [f"{key}={spec['default']}", ""]
+    for part, sections in LAYOUT:
+        out += ["#" * 78, f"# {part}", "#" * 78, ""]
+        for title, keys in sections:
+            if title:
+                out += [f"# ===== {title} =====", ""]
+            for key in keys:
+                spec = SCHEMA[key]
+                out += ["# " + line for line in spec["help"].split("\n")]
+                if "options" in spec:
+                    width = max(len(o) for o in spec["options"])
+                    out.append("# Options:")
+                    out += [f"#   {o:<{width}}  {meaning}" for o, meaning in spec["options"].items()]
+                else:
+                    out.append(f"# Unit: {spec['unit']}")
+                out += [f"{key}={spec['default']}", ""]
     return "\n".join(out).rstrip()
 
 

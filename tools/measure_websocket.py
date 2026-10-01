@@ -16,6 +16,7 @@ import measure_failure
 import readiness
 import run_metadata
 from scaphandre_energy import compute_window_energy, finish_raw, raw_json_path, scaphandre_json_args, window_record
+import load_phases
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger()
@@ -64,6 +65,10 @@ def parse_args():
     parser.add_argument('--interval', type=float, default=0.0, help='Seconds to wait between bursts (default: 0 = back-to-back saturation burst, which matches "as fast as possible"; set higher for a paced burst)')
     parser.add_argument('--duration', type=int, default=30, help='Test duration in seconds (stream mode)')
     parser.add_argument('--url', type=str, default='ws://localhost:8001/ws', help='WebSocket server URL')
+    parser.add_argument('--warmup_s', type=float, default=load_phases.default_warmup_s(),
+                        help="Seconds of unmeasured echo messages after boot, before the measurement (default: 0, or WARMUP_SECONDS of the config)")
+    parser.add_argument('--idle_s', type=float, default=load_phases.default_idle_s(),
+                        help="Seconds the idle server is measured right before the load (default: 0, or IDLE_SECONDS of the config)")
     parser.add_argument('--waited_s', type=float, default=None, help="Seconds the readiness gate waited before this run (set by run_benchmarks.sh --config)")
     parser.add_argument('--ready_check', type=str, default="not checked", help="Result of the readiness gate before this run (set by run_benchmarks.sh --config)")
     parser.add_argument('--repeat', type=int, default=1, help="Quick manual check only: run this measurement N times with a fixed --cooldown, without machine settings or readiness checks. For real measurements use: make run CONFIG=bench.config (default: 1)")
@@ -296,6 +301,20 @@ async def echo_stream_client(url, size_kb, rate, duration, results, client_id, v
         results['total'] += 1
     results['latencies'].extend(latencies)
 
+async def warm_up(url, seconds, size_kb=8):
+    """Unmeasured echo messages over one connection for `seconds` (8 KB, back to back)."""
+    if seconds <= 0:
+        return
+    deadline = time.time() + seconds
+    payload = os.urandom(size_kb * 1024)
+    try:
+        async with websockets.connect(url, max_size=None, ping_interval=None) as ws:
+            while time.time() < deadline:
+                await ws.send(payload)
+                await ws.recv()
+    except Exception as e:  # noqa: BLE001 - a warm-up problem shows up in the measurement itself
+        logger.warning("Warm-up stopped early: %s", e)
+
 # =====================
 # Main Benchmark Runner
 # =====================
@@ -501,6 +520,11 @@ def main():
             logger.debug("Could not get container logs: %s", e)
         measure_failure.fail("health check failed: no WebSocket echo from the container within the wait time")
 
+    if args.warmup_s > 0:
+        if is_measure_quiet() and not args.verbose:
+            measure_quiet_msg(f"{container_name} | warm-up {args.warmup_s:g}s (not measured) …")
+        asyncio.run(warm_up(url, args.warmup_s))
+
     # Readiness check 2: booting the server warms the CPU, so wait again right before the load.
     pre_load = pre_load_check(container_name, docker_path)
 
@@ -516,6 +540,9 @@ def main():
     logger.info("Starting Scaphandre...")
     scaphandre_process = start_scaphandre(output_json, scaphandre_path)
     time.sleep(2)
+    if args.idle_s > 0 and is_measure_quiet() and not args.verbose:
+        measure_quiet_msg(f"{container_name} | idle {args.idle_s:g}s (measured, no messages) …")
+    idle = load_phases.idle_window(args.idle_s)
 
     stop_event = threading.Event()
     resource_results = {'cpu': {}, 'mem': {}}
@@ -595,7 +622,11 @@ def main():
     requests_per_second = total_msgs / runtime if runtime > 0 else 0.0
     throughput_mb_s = (total_msgs * args.size_kb / 1024) / runtime if runtime > 0 else 0.0
     energy = compute_window_energy(output_json, container_name, start_time, end_time, container_id=container_id)
-    output_json = finish_raw(output_json, window_record(container_name, container_id, start_time, end_time, energy))
+    phases = load_phases.idle_fields(output_json, container_name, container_id, idle, args.warmup_s)
+    record = window_record(container_name, container_id, start_time, end_time, energy)
+    if idle:
+        record["idle_start_epoch"], record["idle_end_epoch"] = idle
+    output_json = finish_raw(output_json, record)
     total_energy, avg_power, total_samples = energy["energy_j"], energy["avg_power_w"], energy["samples"]
     stop_server_container(container_name, docker_path)
 
@@ -644,7 +675,7 @@ def main():
         round(energy["coverage"], 4),
     ]
     thermal = thermal_fields(thermal_before, thermal_after, args, pre_load)
-    append_csv_row(output_csv, headers + list(thermal), row + list(thermal.values()))
+    append_csv_row(output_csv, headers + list(thermal) + list(phases), row + list(thermal.values()) + list(phases.values()))
 
     if is_measure_quiet() and not args.verbose:
         ok = total_success == total_msgs
