@@ -33,10 +33,15 @@ ENV_STOP_CONTAINERS=1
 RAW_DATA=keep
 IDLE_SECONDS=5
 WARMUP_SECONDS=3
+# Laptop settings (Wi-Fi is left alone, so a remote session is not cut during the check)
+ENV_SCREEN_BRIGHTNESS=20
+ENV_KEYBOARD_LIGHT=off
+ENV_BLUETOOTH=off
+ON_BATTERY=wait
 EOF
 
 state() {
-    srv/bin/python -c 'import sys; sys.path.insert(0, "tools"); import run_metadata as m; print(m.cpu_governor(), m.turbo_state())'
+    srv/bin/python -c 'import sys; sys.path.insert(0, "tools"); import run_metadata as m; print(m.cpu_governor(), m.turbo_state(), "screen", m.screen_brightness_percent(), "kbd", m.keyboard_backlight_percent(), "bt", m.radios().get("bluetooth"))'
     docker ps --format '{{.Names}}' | sort | tr '\n' ' '
 }
 BEFORE=$(state)
@@ -96,7 +101,11 @@ checks = [
      and os.path.isfile(os.path.join(d, "static", "summary.csv"))),
     ("bench.config.resolved saved", os.path.isfile(os.path.join(d, "bench.config.resolved"))),
     ("schedule and config saved", os.path.isfile(os.path.join(d, "schedule.txt")) and os.path.isfile(os.path.join(d, "bench.config"))),
-    ("machine restored exactly (governor, turbo, containers)", before == after),
+    ("machine restored exactly (governor, turbo, containers, screen, keyboard light, Bluetooth)", before == after),
+    ("screen at 20%, keyboard light and Bluetooth off while measuring",
+     abs(int(s["screen_brightness_percent"] or -99) - 20) <= 2 and s["keyboard_backlight_percent"] in (0, "")
+     and s["bluetooth"] in ("off", "")),
+    ("image IDs recorded at the start", len(m.get("images_at_start", {})) == 2 and all(m["images_at_start"].values())),
     ("sleep was blocked while measuring", inhibited >= 1),
     ("warm-up of 3 s before every run", all(float(r["Warm-up (s)"]) == 3 for r in runs)),
     # A quiet server can use no CPU at all while idle, and then its idle energy is truly 0 J
