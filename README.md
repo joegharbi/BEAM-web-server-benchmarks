@@ -66,11 +66,13 @@ before: one pass, no waiting between runs, machine settings untouched.
 
 With a config, a measurement:
 
-1. **Applies the machine settings** (CPU governor, turbo off, other Docker containers stopped), checks
-   that they took effect, and refuses to measure if they did not. They are restored at the end, also
-   after an error or Ctrl-C.
+1. **Applies the machine settings** (CPU governor, turbo off, other Docker containers stopped, and
+   optionally a fixed screen brightness, keyboard light off, Wi-Fi and Bluetooth off), checks that they
+   took effect, and refuses to measure if they did not. They are restored at the end, also after an
+   error or Ctrl-C. Each one can be `unchanged`, for machines you do not control.
 2. **Keeps the machine awake.** Sleep and lid-close suspend are blocked while it runs. A laptop must run
-   on its charger: the measurement does not start on battery, and waits if the charger is unplugged.
+   on its charger (`ON_BATTERY`): by default it waits for the charger before measuring, and a run during
+   which the charger was unplugged is recorded as failed.
 3. **Measures the resting state** of the machine (CPU temperature and CPU use) after a settle period.
 4. **Repeats every measurement** `REPEATS` times. Each repeat is a full pass over all servers in a
    shuffled order (`SHUFFLE`, `SHUFFLE_SEED`), so slow drift such as heat is spread evenly.
@@ -87,10 +89,11 @@ With a config, a measurement:
 
 ### Before leaving a long measurement alone
 
-Connect the charger, close other programs, and keep the screen brightness, Wi-Fi and Bluetooth as they
-are for the whole run. Their state is recorded at the start and end in `metadata.json`. They do not
+Connect the charger and close other programs. Set the screen, keyboard light, Wi-Fi and Bluetooth in
+the config (`ENV_SCREEN_BRIGHTNESS`, `ENV_KEYBOARD_LIGHT`, `ENV_WIFI`, `ENV_BLUETOOTH`), or leave them
+alone for the whole run. Their state is recorded at the start and end in `metadata.json`. They do not
 affect the container's energy, which is its share of the CPU's power, but they do affect the whole
-machine's energy (`Host Energy (J)`).
+machine's energy (`Host Energy (J)`). The desktop may still dim or switch off the screen by itself.
 
 ### What a results folder contains
 
@@ -111,11 +114,29 @@ Ctrl-C stops the measurement, restores the machine settings and prints the comma
 campaign can take days; after Ctrl-C, a crash or a reboot:
 
 ```bash
-make resume RESUME=results/<folder>
+make resume                            # the most recent unfinished measurement
+make resume RESUME=results/<folder>    # a specific one
 ```
 
 This continues in the same folder with the same config, arguments and shuffle order, and skips the
 measurements that already finished. The measurement that was running when it stopped is done again.
+
+A measurement is only continued with the tools it started with. If the framework (git commit),
+Scaphandre, Docker, Python, OS, kernel, CPU, memory or a server image changed in between, resume refuses
+and lists what changed, because results made with different tools must not share one folder.
+`RESUME_ANYWAY=1 make resume ...` continues anyway and records the differences in `metadata.json`.
+
+### Reproducing a measurement
+
+```bash
+make reproduce FROM=results/<folder>
+```
+
+This makes the measurement again in a new folder, with every setting it used (`bench.config.resolved`,
+shuffle seed included) and its original arguments. It prints what is different from the original
+(framework, Scaphandre, Docker, OS, kernel, CPU, images) and records it in the new `metadata.json`
+together with the folder it reproduces. Server images are rebuilt from their Dockerfiles, so a base image
+that received updates under the same name gives a different image ID; this is reported, not hidden.
 
 ### Recalculating energy from the raw logs
 
