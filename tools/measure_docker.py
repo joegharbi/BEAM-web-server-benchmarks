@@ -577,6 +577,7 @@ def main():
         hb_thread.start()
 
     thermal_before = thermal_reading()
+    charger_before = run_metadata.ac_power()
     start_time = time.time()
     try:
         with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
@@ -587,6 +588,8 @@ def main():
             hb_thread.join(timeout=3)
     end_time = time.time()
     thermal_after = thermal_reading()
+    if load_phases.charger_unplugged(charger_before, run_metadata.ac_power()):
+        measure_failure.fail("the laptop ran on battery during the load (charger unplugged)")
     runtime = end_time - start_time
     runtime_data['runtime'] = runtime
 

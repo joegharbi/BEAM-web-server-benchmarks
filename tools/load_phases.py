@@ -34,6 +34,16 @@ def default_idle_s():
     return seconds_from_env("MEASURE_IDLE_SECONDS")
 
 
+def charger_unplugged(before, after):
+    """True when a laptop ran on battery at the start or end of the load (ON_BATTERY not 'ignore').
+
+    `before`/`after` are run_metadata.ac_power() readings: "yes", "no", or "" without a battery.
+    Without a config (no MEASURE_ON_BATTERY) this is never checked, as in earlier releases.
+    """
+    policy = os.environ.get("MEASURE_ON_BATTERY", "ignore")
+    return policy != "ignore" and "no" in (before, after)
+
+
 def idle_window(seconds):
     """Wait `seconds` without traffic; returns the (start, end) wall-clock window, or None when off."""
     if seconds <= 0:

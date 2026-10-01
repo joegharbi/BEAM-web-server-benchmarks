@@ -994,5 +994,118 @@ class IdleAndWarmup(unittest.TestCase):
             srv.shutdown()
 
 
+class LaptopSettings(unittest.TestCase):
+    """Screen, keyboard light, Wi-Fi and Bluetooth: applied, verified and restored (on a fake /sys)."""
+    def setUp(self):
+        import prepare_environment as pe
+        self.pe = pe
+        self.root = tempfile.mkdtemp()
+        def node(path, **files):
+            os.makedirs(path, exist_ok=True)
+            for name, value in files.items():
+                with open(os.path.join(path, name), "w") as fh:
+                    fh.write(value)
+        node(f"{self.root}/backlight/intel", brightness="300", max_brightness="1000")
+        node(f"{self.root}/leds/tpacpi::kbd_backlight", brightness="2", max_brightness="2")
+        node(f"{self.root}/rfkill/rfkill0", type="wlan", soft="0", hard="0")
+        node(f"{self.root}/rfkill/rfkill1", type="bluetooth", soft="0", hard="0")
+        node(f"{self.root}/rfkill/rfkill2", type="bluetooth", soft="0", hard="0")
+        self.saved = (pe.BACKLIGHT_GLOB, pe.KBD_LIGHT_GLOB, pe.RFKILL_GLOB, pe.require_root, pe.docker_running)
+        pe.BACKLIGHT_GLOB, pe.KBD_LIGHT_GLOB = f"{self.root}/backlight/*", f"{self.root}/leds/*kbd_backlight*"
+        pe.RFKILL_GLOB = f"{self.root}/rfkill/rfkill*"
+        pe.require_root, pe.docker_running = (lambda: None), (lambda: [])
+
+    def tearDown(self):
+        (self.pe.BACKLIGHT_GLOB, self.pe.KBD_LIGHT_GLOB, self.pe.RFKILL_GLOB,
+         self.pe.require_root, self.pe.docker_running) = self.saved
+
+    def read(self, rel):
+        with open(os.path.join(self.root, rel)) as fh:
+            return fh.read()
+
+    def args(self, **kw):
+        import argparse
+        d = dict(governor="unchanged", turbo="unchanged", stop_containers=False, keep="",
+                 screen_brightness="20", keyboard_light="off", wifi="off", bluetooth="off",
+                 state=os.path.join(self.root, "state.json"))
+        d.update(kw)
+        return argparse.Namespace(**d)
+
+    def test_apply_verify_restore(self):
+        self.pe.do_apply(self.args())
+        self.assertEqual(self.read("backlight/intel/brightness"), "200")          # 20% of 1000
+        self.assertEqual(self.read("leds/tpacpi::kbd_backlight/brightness"), "0")
+        self.assertEqual([self.read(f"rfkill/rfkill{i}/soft") for i in range(3)], ["1", "1", "1"])
+        with self.assertRaises(SystemExit) as e:
+            self.pe.do_verify(self.args())
+        self.assertEqual(e.exception.code, 0)
+        self.pe.do_restore(self.args())
+        self.assertEqual(self.read("backlight/intel/brightness"), "300")
+        self.assertEqual(self.read("leds/tpacpi::kbd_backlight/brightness"), "2")
+        self.assertEqual([self.read(f"rfkill/rfkill{i}/soft") for i in range(3)], ["0", "0", "0"])
+
+    def test_verify_notices_a_radio_still_on(self):
+        with self.assertRaises(SystemExit) as e:
+            self.pe.do_verify(self.args(screen_brightness="unchanged", keyboard_light="unchanged", bluetooth="unchanged"))
+        self.assertEqual(e.exception.code, 1)                                     # Wi-Fi is still on
+
+    def test_unchanged_touches_nothing(self):
+        self.pe.do_apply(self.args(screen_brightness="unchanged", keyboard_light="unchanged",
+                                   wifi="unchanged", bluetooth="unchanged"))
+        self.assertEqual(self.read("backlight/intel/brightness"), "300")
+        self.assertEqual(self.read("rfkill/rfkill0/soft"), "0")
+
+    def test_config_values(self):
+        import bench_config
+        cfg = bench_config.parse("ENV_SCREEN_BRIGHTNESS=20\nENV_WIFI=off")
+        self.assertEqual((cfg["ENV_SCREEN_BRIGHTNESS"], cfg["ENV_WIFI"], cfg["ON_BATTERY"]), ("20", "off", "wait"))
+        for bad in ("ENV_SCREEN_BRIGHTNESS=120", "ENV_WIFI=on", "ON_BATTERY=maybe"):
+            with self.assertRaises(bench_config.ConfigError):
+                bench_config.parse(bad)
+
+
+class OnBattery(ReadinessGate):
+    """ON_BATTERY: wait never measures on battery, stop stops, ignore measures."""
+    def test_wait_ignores_ready_on_timeout_while_on_battery(self):
+        self.m.cpu_package_temp_c = lambda: 40.0
+        calls = [0]
+        def ac():
+            calls[0] += 1
+            return "no" if calls[0] <= 40 else "yes"                              # charger back after 40 checks
+        self.m.ac_power = ac
+        waited, ready = self.r.wait(self.args(on_timeout="measure", on_battery="wait", max_wait=0.05))
+        self.assertEqual(ready, "yes")                                            # never "no: on battery"
+        self.assertGreater(calls[0], 40)
+
+    def test_stop(self):
+        self.m.cpu_package_temp_c = lambda: 40.0
+        self.m.ac_power = lambda: "no"
+        with self.assertRaises(SystemExit) as e:
+            self.r.wait(self.args(on_battery="stop"))
+        self.assertEqual(e.exception.code, 2)
+
+    def test_ignore(self):
+        prev = {"busy": 0, "total": 0, "throttle": 0, "temp": 40}
+        self.m.cpu_package_temp_c = lambda: 40.0
+        self.m.ac_power = lambda: "no"
+        self.assertEqual(self.r.check_once(prev, self.args(on_battery="ignore"))[1], [])
+
+    def test_unplugged_during_the_load_fails_the_run(self):
+        import load_phases
+        saved = os.environ.pop("MEASURE_ON_BATTERY", None)
+        try:
+            self.assertFalse(load_phases.charger_unplugged("yes", "no"))           # no config: not checked
+            os.environ["MEASURE_ON_BATTERY"] = "wait"
+            self.assertTrue(load_phases.charger_unplugged("yes", "no"))
+            self.assertFalse(load_phases.charger_unplugged("yes", "yes"))
+            self.assertFalse(load_phases.charger_unplugged("", ""))                # no battery at all
+            os.environ["MEASURE_ON_BATTERY"] = "ignore"
+            self.assertFalse(load_phases.charger_unplugged("yes", "no"))
+        finally:
+            os.environ.pop("MEASURE_ON_BATTERY", None)
+            if saved is not None:
+                os.environ["MEASURE_ON_BATTERY"] = saved
+
+
 if __name__ == "__main__":
     unittest.main()

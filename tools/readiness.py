@@ -7,7 +7,8 @@ Checks, every CHECK_EVERY seconds:
   * CPU busy     - whole-machine CPU use over the last interval <= CPU reference + CPU margin
                    (reference = the resting CPU use measured at the start, or a fixed value)
   * throttling   - the CPU throttle counters did not increase during the last interval
-  * charger      - a laptop must run on its charger (always checked; skipped without a battery)
+  * charger      - a laptop must run on its charger (ON_BATTERY: wait, stop or ignore;
+                   machines without a battery are never affected)
 The machine is ready when every enabled check passes CONSECUTIVE times in a row and
 at least MIN_WAIT seconds have passed. If it is still not ready after MAX_WAIT
 seconds, ON_TIMEOUT decides: keep waiting, stop, or measure anyway (and say why).
@@ -32,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import run_metadata  # noqa: E402
 
 STATUS_EVERY_S = 60
+ON_BATTERY_REASON = "on battery (connect the charger)"
 
 
 def resting_state(seconds=10, every=1.0):
@@ -74,8 +76,8 @@ def check_once(prev, args):
             fails.append(f"CPU busy {pct:.1f}% > {limit:g}%")
     if args.no_throttling and events != "" and prev["throttle"] != "" and events > prev["throttle"]:
         fails.append(f"throttling ({events - prev['throttle']} new events)")
-    if run_metadata.ac_power() == "no":
-        fails.append("on battery (connect the charger)")
+    if getattr(args, "on_battery", "wait") != "ignore" and run_metadata.ac_power() == "no":
+        fails.append(ON_BATTERY_REASON)
     return now, fails
 
 
@@ -95,7 +97,12 @@ def wait(args):
         elapsed = time.monotonic() - t0
         if passes >= args.consecutive and elapsed >= args.min_wait:
             return round(elapsed, 1), "yes"
-        if elapsed >= args.max_wait and fails:
+        on_battery = ON_BATTERY_REASON in fails
+        if on_battery and getattr(args, "on_battery", "wait") == "stop":
+            print("[READY] the laptop is on battery (ON_BATTERY=stop). Stopping.", flush=True)
+            sys.exit(2)
+        # On battery with ON_BATTERY=wait, never measure: READY_ON_TIMEOUT does not apply
+        if elapsed >= args.max_wait and fails and not on_battery:
             if args.on_timeout == "measure":
                 return round(elapsed, 1), "no: " + "; ".join(fails)
             if args.on_timeout == "stop":
@@ -134,6 +141,7 @@ def pre_load_gate():
         min_wait=0,
         max_wait=float(env.get("MEASURE_READY_MAX_WAIT_SECONDS", "300")),
         on_timeout=env["MEASURE_READY_ON_TIMEOUT"],
+        on_battery=env.get("MEASURE_ON_BATTERY", "wait"),
     )
     return wait(args)
 
@@ -171,6 +179,7 @@ def main():
     w.add_argument("--min-wait", type=float, default=10)
     w.add_argument("--max-wait", type=float, default=300)
     w.add_argument("--on-timeout", choices=["wait", "stop", "measure"], default="wait")
+    w.add_argument("--on-battery", choices=["wait", "stop", "ignore"], default="wait")
     args = ap.parse_args()
 
     if args.cmd == "baseline":

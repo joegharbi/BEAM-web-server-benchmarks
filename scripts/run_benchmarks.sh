@@ -515,6 +515,7 @@ if [ -n "${CONFIG_FILE:-}" ]; then
     if [ "$CFG_HTTP_MAX_WORKERS" = "system" ]; then HTTP_MAX_WORKERS=""; else HTTP_MAX_WORKERS="$CFG_HTTP_MAX_WORKERS"; fi
     export MEASURE_SCAPH_STEP_MS="$CFG_SCAPH_STEP_MS"
     export MEASURE_IDLE_SECONDS="$CFG_IDLE_SECONDS"
+    export MEASURE_ON_BATTERY="$CFG_ON_BATTERY"
     export MEASURE_WARMUP_SECONDS="$CFG_WARMUP_SECONDS"
     # Workloads of full runs (defaults equal the built-in lists)
     read -r -a full_http_requests <<< "$CFG_HTTP_REQUESTS"
@@ -539,6 +540,8 @@ if [ -n "${CONFIG_FILE:-}" ]; then
 else
     CFG_REPEATS=1; CFG_SHUFFLE=0; CFG_SHUFFLE_SEED=""; CFG_SETTLE_SECONDS=0; CFG_FAILURES_STOP_AFTER=0
     CFG_ENV_GOVERNOR=unchanged; CFG_ENV_TURBO=unchanged; CFG_ENV_STOP_CONTAINERS=0; CFG_ENV_KEEP_CONTAINERS=""
+    CFG_ENV_SCREEN_BRIGHTNESS=unchanged; CFG_ENV_KEYBOARD_LIGHT=unchanged; CFG_ENV_WIFI=unchanged; CFG_ENV_BLUETOOTH=unchanged
+    CFG_ON_BATTERY=ignore
     CFG_HTTP_CONNECTION=reuse
 fi
 
@@ -994,9 +997,9 @@ bench_ready_gate() {
         --no-throttling "$CFG_READY_NO_THROTTLING" \
         --check-every "$CFG_READY_CHECK_EVERY_SECONDS" --consecutive "$CFG_READY_CONSECUTIVE_CHECKS" \
         --min-wait "$CFG_READY_MIN_WAIT_SECONDS" --max-wait "$CFG_READY_MAX_WAIT_SECONDS" \
-        --on-timeout "$CFG_READY_ON_TIMEOUT" || rc=$?
+        --on-timeout "$CFG_READY_ON_TIMEOUT" --on-battery "$CFG_ON_BATTERY" || rc=$?
     if [ "$rc" -ne 0 ]; then
-        print_status "ERROR" "Machine not ready (READY_ON_TIMEOUT=$CFG_READY_ON_TIMEOUT); stopping the measurement."
+        print_status "ERROR" "Machine not ready (reason above); stopping the measurement."
         exit 1
     fi
     local g
@@ -1086,19 +1089,21 @@ print("\n".join(items))' "$CFG_SHUFFLE_SEED" "$pass" "$@"
 }
 
 bench_apply_environment() {
-    if [ "$CFG_ENV_GOVERNOR" = "unchanged" ] && [ "$CFG_ENV_TURBO" = "unchanged" ] && [ "$CFG_ENV_STOP_CONTAINERS" = "0" ]; then
+    if [ "$CFG_ENV_GOVERNOR" = "unchanged" ] && [ "$CFG_ENV_TURBO" = "unchanged" ] && [ "$CFG_ENV_STOP_CONTAINERS" = "0" ] \
+            && [ "$CFG_ENV_SCREEN_BRIGHTNESS" = "unchanged" ] && [ "$CFG_ENV_KEYBOARD_LIGHT" = "unchanged" ] \
+            && [ "$CFG_ENV_WIFI" = "unchanged" ] && [ "$CFG_ENV_BLUETOOTH" = "unchanged" ]; then
         print_status "INFO" "Machine settings: left unchanged"
         return 0
     fi
-    local stop_arg=()
-    [ "$CFG_ENV_STOP_CONTAINERS" = "0" ] && stop_arg=(--no-stop-containers)
+    local env_args=(--governor "$CFG_ENV_GOVERNOR" --turbo "$CFG_ENV_TURBO" --keep "$CFG_ENV_KEEP_CONTAINERS"
+        --screen-brightness "$CFG_ENV_SCREEN_BRIGHTNESS" --keyboard-light "$CFG_ENV_KEYBOARD_LIGHT"
+        --wifi "$CFG_ENV_WIFI" --bluetooth "$CFG_ENV_BLUETOOTH")
+    [ "$CFG_ENV_STOP_CONTAINERS" = "0" ] && env_args+=(--no-stop-containers)
     BENCH_ENV_STATE="$RESULTS_DIR/.environment_state.json"
-    print_status "INFO" "Machine settings: governor=$CFG_ENV_GOVERNOR turbo=$CFG_ENV_TURBO stop_containers=$CFG_ENV_STOP_CONTAINERS"
-    sudo "$PYTHON_PATH" ./tools/prepare_environment.py apply --governor "$CFG_ENV_GOVERNOR" --turbo "$CFG_ENV_TURBO" \
-        --keep "$CFG_ENV_KEEP_CONTAINERS" --state "$BENCH_ENV_STATE" "${stop_arg[@]}"
+    print_status "INFO" "Machine settings: governor=$CFG_ENV_GOVERNOR turbo=$CFG_ENV_TURBO stop_containers=$CFG_ENV_STOP_CONTAINERS screen=$CFG_ENV_SCREEN_BRIGHTNESS keyboard_light=$CFG_ENV_KEYBOARD_LIGHT wifi=$CFG_ENV_WIFI bluetooth=$CFG_ENV_BLUETOOTH"
+    sudo "$PYTHON_PATH" ./tools/prepare_environment.py apply "${env_args[@]}" --state "$BENCH_ENV_STATE"
     BENCH_ENV_APPLIED=1
-    if ! "$PYTHON_PATH" ./tools/prepare_environment.py verify --governor "$CFG_ENV_GOVERNOR" --turbo "$CFG_ENV_TURBO" \
-            --keep "$CFG_ENV_KEEP_CONTAINERS" "${stop_arg[@]}"; then
+    if ! "$PYTHON_PATH" ./tools/prepare_environment.py verify "${env_args[@]}"; then
         print_status "ERROR" "Machine settings could not be applied as configured; not measuring."
         exit 1
     fi
@@ -1128,6 +1133,28 @@ bench_unblock_sleep() {
     [ -n "${BENCH_INHIBIT_PID:-}" ] || return 0
     kill "$BENCH_INHIBIT_PID" >/dev/null 2>&1 || true
     BENCH_INHIBIT_PID=""
+}
+
+# ON_BATTERY at the start: wait for the charger, stop, or ignore (machines without a battery: no check)
+bench_on_battery() {
+    [ "$("$PYTHON_PATH" -c 'import sys; sys.path.insert(0, "tools"); import run_metadata; print(run_metadata.ac_power())')" = "no" ]
+}
+
+bench_wait_for_charger() {
+    [ "$CFG_ON_BATTERY" = "ignore" ] && return 0
+    bench_on_battery || return 0
+    if [ "$CFG_ON_BATTERY" = "stop" ]; then
+        print_status "ERROR" "The laptop is on battery (ON_BATTERY=stop). Connect the charger and start again."
+        exit 1
+    fi
+    print_status "WARNING" "The laptop is on battery. Connect the charger; the measurement starts when it is connected (ON_BATTERY=wait)."
+    local n=0
+    while bench_on_battery; do
+        sleep 5
+        n=$((n + 1))
+        [ $((n % 12)) -eq 0 ] && print_status "WARNING" "Still on battery; waiting for the charger ..."
+    done
+    print_status "INFO" "Charger connected."
 }
 
 bench_on_exit() {
@@ -1177,10 +1204,7 @@ main() {
     trap bench_on_exit EXIT
     trap 'BENCH_INTERRUPTED=1; exit 130' INT TERM
     bench_block_sleep
-    if [ -n "${CONFIG_FILE:-}" ] && [ "$("$PYTHON_PATH" -c 'import sys; sys.path.insert(0, "tools"); import run_metadata; print(run_metadata.ac_power())')" = "no" ]; then
-        print_status "ERROR" "The laptop is on battery. Connect the charger and start again (on battery the CPU can run under different power limits)."
-        exit 1
-    fi
+    [ -n "${CONFIG_FILE:-}" ] && bench_wait_for_charger
     bench_apply_environment
     if [ -n "${CONFIG_FILE:-}" ]; then
         if [ "$CFG_SETTLE_SECONDS" -gt 0 ]; then
@@ -1243,6 +1267,8 @@ main() {
         --set env_turbo="$CFG_ENV_TURBO" --set env_stop_containers="$CFG_ENV_STOP_CONTAINERS" \
         --set http_connection="$CFG_HTTP_CONNECTION" --set failures_stop_after="$CFG_FAILURES_STOP_AFTER" \
         --set idle_s="${CFG_IDLE_SECONDS:-0}" --set warmup_s="${CFG_WARMUP_SECONDS:-0}" \
+        --set env_screen_brightness="${CFG_ENV_SCREEN_BRIGHTNESS:-}" --set env_keyboard_light="${CFG_ENV_KEYBOARD_LIGHT:-}" \
+        --set env_wifi="${CFG_ENV_WIFI:-}" --set env_bluetooth="${CFG_ENV_BLUETOOTH:-}" --set on_battery="${CFG_ON_BATTERY:-}" \
         || print_status "WARNING" "Could not write $RESULTS_DIR/metadata.json"
     print_status "INFO" "Starting benchmarks at $(date)"
     print_status "INFO" "Results will be saved to: $RESULTS_DIR"

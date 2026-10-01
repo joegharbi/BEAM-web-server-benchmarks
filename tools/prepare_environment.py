@@ -3,9 +3,12 @@
 
 Two actions:
   apply    - save the current state, then set the CPU governor to performance,
-             turn turbo off, and stop other running Docker containers.
+             turn turbo off, and stop other running Docker containers. Optionally
+             also set the screen brightness, turn the keyboard light off, and turn
+             Wi-Fi and Bluetooth off (each 'unchanged' by default).
   restore  - read the saved state and put everything back: the governor, turbo,
-             and the containers that were stopped.
+             the containers that were stopped, the screen and keyboard light, and
+             the Wi-Fi and Bluetooth radios.
 
 It records what it changed in a small state file, so restore undoes exactly what
 apply did and nothing more. Read-only checking is in tools/check_environment.py;
@@ -30,6 +33,9 @@ DEFAULT_STATE = os.path.join(tempfile.gettempdir(), "wseb_env_state.json")
 GOV_GLOB = "/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor"
 INTEL_NO_TURBO = "/sys/devices/system/cpu/intel_pstate/no_turbo"
 BOOST = "/sys/devices/system/cpu/cpufreq/boost"
+BACKLIGHT_GLOB = "/sys/class/backlight/*"
+KBD_LIGHT_GLOB = "/sys/class/leds/*kbd_backlight*"
+RFKILL_GLOB = "/sys/class/rfkill/rfkill*"
 
 
 def read(path):
@@ -64,9 +70,35 @@ def docker_running():
         return []
 
 
+def set_brightness(pattern, percent, label, saved):
+    """Set every light matching `pattern` to `percent` of its maximum; previous values go to `saved`."""
+    dirs = [d for d in sorted(glob.glob(pattern)) if (read(os.path.join(d, "max_brightness")) or "").isdigit()]
+    if not dirs:
+        print(f"{label}: not available, skipped")
+        return
+    for d in dirs:
+        path = os.path.join(d, "brightness")
+        saved[path] = read(path)
+        write(path, str(round(int(read(os.path.join(d, "max_brightness"))) * percent / 100)))
+    print(f"{label}: {percent}%")
+
+
+def radio_off(kind, label, saved):
+    """Block every radio of `kind` ('wlan' or 'bluetooth') in software, like airplane mode."""
+    radios = [r for r in sorted(glob.glob(RFKILL_GLOB)) if read(os.path.join(r, "type")) == kind]
+    if not radios:
+        print(f"{label}: not available, skipped")
+        return
+    for r in radios:
+        path = os.path.join(r, "soft")
+        saved[path] = read(path)
+        write(path, "1")
+    print(f"{label}: off")
+
+
 def do_apply(args):
     require_root()
-    state = {"governors": {}, "turbo": None, "stopped_containers": []}
+    state = {"governors": {}, "turbo": None, "stopped_containers": [], "files": {}}
 
     gov_files = sorted(glob.glob(GOV_GLOB))
     if args.governor == "unchanged":
@@ -93,6 +125,15 @@ def do_apply(args):
         print(f"Turbo (boost): {args.turbo}")
     else:
         print("Turbo: not available, skipped")
+
+    if args.screen_brightness != "unchanged":
+        set_brightness(BACKLIGHT_GLOB, int(args.screen_brightness), "Screen brightness", state["files"])
+    if args.keyboard_light == "off":
+        set_brightness(KBD_LIGHT_GLOB, 0, "Keyboard light", state["files"])
+    if args.wifi == "off":
+        radio_off("wlan", "Wi-Fi", state["files"])
+    if args.bluetooth == "off":
+        radio_off("bluetooth", "Bluetooth", state["files"])
 
     keep = {n.strip() for n in (args.keep or "").split(",") if n.strip()}
     to_stop = [n for n in docker_running() if n not in keep] if args.stop_containers else []
@@ -126,6 +167,11 @@ def do_restore(args):
         write(t["path"], t["prev"])
         print("Turbo: restored")
 
+    files = state.get("files") or {}
+    restored = sum(1 for path, prev in files.items() if prev is not None and write(path, prev))
+    if files:
+        print(f"Screen, keyboard light and radios: restored {restored} setting(s)")
+
     stopped = state.get("stopped_containers") or []
     if stopped:
         subprocess.run(["docker", "start"] + stopped, capture_output=True, text=True)
@@ -133,6 +179,22 @@ def do_restore(args):
 
     os.remove(args.state)
     print(f"\nRestored. Removed {args.state}.")
+
+
+def brightness_percent(pattern):
+    for d in sorted(glob.glob(pattern)):
+        b, m = read(os.path.join(d, "brightness")), read(os.path.join(d, "max_brightness"))
+        if (b or "").isdigit() and (m or "").isdigit() and int(m) > 0:
+            return round(100 * int(b) / int(m))
+    return ""
+
+
+def brightness_arg(v):
+    if v == "unchanged":
+        return v
+    if v.isdigit() and 0 <= int(v) <= 100:
+        return v
+    raise argparse.ArgumentTypeError("must be 'unchanged' or a percentage 0-100")
 
 
 def do_verify(args):
@@ -146,6 +208,17 @@ def do_verify(args):
     turbo = run_metadata.turbo_state()
     if args.turbo != "unchanged" and turbo and turbo != args.turbo:
         problems.append(f"turbo is '{turbo}', expected '{args.turbo}'")
+    if args.screen_brightness != "unchanged":
+        now = brightness_percent(BACKLIGHT_GLOB)
+        # The steps of a backlight are coarse, so a difference of 2% is still the requested level
+        if now != "" and abs(now - int(args.screen_brightness)) > 2:
+            problems.append(f"screen brightness is {now}%, expected {args.screen_brightness}%")
+    if args.keyboard_light == "off" and brightness_percent(KBD_LIGHT_GLOB) not in ("", 0):
+        problems.append("keyboard light is on, expected off")
+    for kind, label, wanted in (("wlan", "Wi-Fi", args.wifi), ("bluetooth", "Bluetooth", args.bluetooth)):
+        if wanted == "off" and any(read(os.path.join(r, "type")) == kind and read(os.path.join(r, "soft")) == "0"
+                                   for r in glob.glob(RFKILL_GLOB)):
+            problems.append(f"{label} is on, expected off")
     if args.stop_containers:
         keep = {n.strip() for n in (args.keep or "").split(",") if n.strip()}
         others = [n for n in docker_running() if n not in keep]
@@ -168,6 +241,14 @@ def main():
                     help="Leave other running containers alone on apply")
     ap.add_argument("--keep", default="",
                     help="Comma-separated container names to keep running on apply")
+    ap.add_argument("--screen-brightness", type=brightness_arg, default="unchanged",
+                    help="Screen brightness in percent on apply, or 'unchanged' (default)")
+    ap.add_argument("--keyboard-light", choices=["off", "unchanged"], default="unchanged",
+                    help="Keyboard backlight on apply (default: unchanged)")
+    ap.add_argument("--wifi", choices=["off", "unchanged"], default="unchanged",
+                    help="Wi-Fi radio on apply (default: unchanged)")
+    ap.add_argument("--bluetooth", choices=["off", "unchanged"], default="unchanged",
+                    help="Bluetooth radio on apply (default: unchanged)")
     ap.add_argument("--state", default=DEFAULT_STATE,
                     help=f"State file path (default: {DEFAULT_STATE})")
     args = ap.parse_args()

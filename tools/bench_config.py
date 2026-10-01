@@ -100,6 +100,15 @@ def _optional_percent(v):
     return n
 
 
+def _brightness(v):
+    if v == "unchanged":
+        return v
+    n = _int(0)(v)
+    if int(n) > 100:
+        raise ValueError("must be 'unchanged' or a percentage 0-100")
+    return n
+
+
 def _optional_margin(v):
     if v == "":
         return ""
@@ -142,6 +151,27 @@ SCHEMA = {
         options={"1": "stop them before, restart them after (recommended)", "0": "leave them running"}),
     "ENV_KEEP_CONTAINERS": dict(default="", check=_names, unit="container names, comma-separated, or empty",
         help="Containers that must keep running even when ENV_STOP_CONTAINERS=1."),
+    "ENV_SCREEN_BRIGHTNESS": dict(default="unchanged", check=_brightness, unit="percent 0-100, or 'unchanged'",
+        help="Screen brightness during the measurement. It does not change the container's energy (the screen\n"
+             "is not part of the CPU), only the whole machine's. The desktop may still dim or switch off the\n"
+             "screen by itself. 'unchanged' on machines without a screen or where you have no control."),
+    "ENV_KEYBOARD_LIGHT": dict(default="unchanged", check=_choice("unchanged", "off"),
+        help="Keyboard backlight during the measurement.",
+        options={"unchanged": "leave it as it is", "off": "switch it off (restored after)"}),
+    "ENV_WIFI": dict(default="unchanged", check=_choice("unchanged", "off"),
+        help="Wi-Fi radio during the measurement. Off removes background network traffic and updates.\n"
+             "Careful: off cuts a remote (SSH) connection over Wi-Fi.",
+        options={"unchanged": "leave it as it is", "off": "switch it off (restored after)"}),
+    "ENV_BLUETOOTH": dict(default="unchanged", check=_choice("unchanged", "off"),
+        help="Bluetooth radio during the measurement.",
+        options={"unchanged": "leave it as it is", "off": "switch it off (restored after)"}),
+    "ON_BATTERY": dict(default="wait", check=_choice("wait", "stop", "ignore"),
+        help="A laptop not on its charger: the CPU can run under other power limits on battery. Checked at\n"
+             "the start and before every run; a run during which the charger was unplugged counts as failed.\n"
+             "Machines without a battery are never affected.",
+        options={"wait": "do not measure on battery; wait until the charger is back (recommended)",
+                 "stop": "stop the measurement; continue later with make resume",
+                 "ignore": "measure anyway"}),
     "SETTLE_SECONDS": dict(default="60", check=_int(0), unit="seconds",
         help="Wait after applying the machine settings, before the resting state is measured."),
     "RESTING_MEASURE_SECONDS": dict(default="10", check=_int(1), unit="seconds, 1 or more (one reading per second)",
@@ -259,7 +289,8 @@ LAYOUT = [
     ("PART 2: advanced. The defaults are the recommended values; change them only for a reason", [
         ("Order of the runs", ["SHUFFLE", "SHUFFLE_SEED"]),
         ("Machine settings (applied before, restored after)",
-         ["ENV_GOVERNOR", "ENV_TURBO", "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "SETTLE_SECONDS",
+         ["ENV_GOVERNOR", "ENV_TURBO", "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "ENV_SCREEN_BRIGHTNESS",
+          "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH", "ON_BATTERY", "SETTLE_SECONDS",
           "RESTING_MEASURE_SECONDS"]),
         ("Readiness check before every run",
          ["READY_CHECK_EVERY_SECONDS", "READY_TEMP_REFERENCE_C", "READY_TEMP_MARGIN_C",
