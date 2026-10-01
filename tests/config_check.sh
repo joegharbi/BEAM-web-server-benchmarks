@@ -7,7 +7,7 @@
 # Run from the repo root:  bash tests/config_check.sh   (about 6 minutes, needs sudo)
 set -uo pipefail
 cd "$(dirname "$0")/.."
-BEAM_BENCH="${BEAM_BENCH:-../BEAM-web-server-benchmarks/benchmarks}"
+BEAM_BENCH="${BEAM_BENCH:-benchmarks}"
 TMP=$(mktemp -d)
 
 # Two targets whose images are already built
@@ -31,27 +31,34 @@ ENV_GOVERNOR=performance
 ENV_TURBO=off
 ENV_STOP_CONTAINERS=1
 RAW_DATA=keep
+IDLE_SECONDS=5
+WARMUP_SECONDS=3
 EOF
 
 state() {
-    venv/bin/python -c 'import sys; sys.path.insert(0, "tools"); import run_metadata as m; print(m.cpu_governor(), m.turbo_state())'
+    srv/bin/python -c 'import sys; sys.path.insert(0, "tools"); import run_metadata as m; print(m.cpu_governor(), m.turbo_state())'
     docker ps --format '{{.Names}}' | sort | tr '\n' ' '
 }
 BEFORE=$(state)
 echo "Before: $BEFORE"
 
-source venv/bin/activate
-bash scripts/run_benchmarks.sh --super-quick --bench "$TMP/bench" --config "$TMP/check.config" static
+source srv/bin/activate
+bash scripts/run_benchmarks.sh --super-quick --bench "$TMP/bench" --config "$TMP/check.config" static > "$TMP/run.out" 2>&1 &
+RUN=$!
+sleep 20
+INHIBITED=$(systemd-inhibit --list --no-pager | grep -c "web-server benchmarks")
+wait $RUN
 RC=$?
+cat "$TMP/run.out"
 AFTER=$(state)
 echo "After:  $AFTER"
 D=$(ls -d results/*/ | tail -1)
 
-venv/bin/python - "$D" "$RC" "$BEFORE" "$AFTER" <<'EOF'
+srv/bin/python - "$D" "$RC" "$BEFORE" "$AFTER" "$INHIBITED" <<'EOF'
 import csv, glob, json, os, sys
 sys.path.insert(0, "tools")
 import scaphandre_energy as se
-d, rc, before, after = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+d, rc, before, after, inhibited = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], int(sys.argv[5])
 m = json.load(open(os.path.join(d, "metadata.json")))
 s = m["machine_state_start"]
 runs = [r for f in glob.glob(os.path.join(d, "static", "*.csv"))
@@ -90,6 +97,13 @@ checks = [
     ("bench.config.resolved saved", os.path.isfile(os.path.join(d, "bench.config.resolved"))),
     ("schedule and config saved", os.path.isfile(os.path.join(d, "schedule.txt")) and os.path.isfile(os.path.join(d, "bench.config"))),
     ("machine restored exactly (governor, turbo, containers)", before == after),
+    ("sleep was blocked while measuring", inhibited >= 1),
+    ("warm-up of 3 s before every run", all(float(r["Warm-up (s)"]) == 3 for r in runs)),
+    ("idle measured for 5 s with energy > 0", all(abs(float(r["Idle Time (s)"]) - 5) < 0.5
+                                                    and float(r["Idle Energy (J)"]) > 0 for r in runs)),
+    ("laptop state recorded (charger, battery, screen, radios)",
+     all(k in s for k in ("ac_power", "battery", "screen_brightness_percent", "wifi", "bluetooth"))),
+    ("Scaphandre package version recorded", bool(m.get("software_and_machine", m).get("scaphandre_package_version", ""))),
 ]
 for name, ok in checks:
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}")

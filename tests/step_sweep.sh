@@ -17,13 +17,13 @@ trap 'kill $KEEPALIVE 2>/dev/null' EXIT
 for step in $STEPS; do
   for i in $(seq 1 "$RUNS"); do
     echo "== step ${step} ms, run ${i}/${RUNS}"
-    MEASURE_SCAPH_STEP_MS=$step MEASURE_STARTUP_WAIT=5 venv/bin/python tools/measure_docker.py \
+    MEASURE_SCAPH_STEP_MS=$step MEASURE_STARTUP_WAIT=5 srv/bin/python tools/measure_docker.py \
       --server_image "$IMAGE" --num_requests "$REQS" --max_workers 100 --measurement_type static \
       --output_csv "$OUT/step_${step}.csv" --output_json "$OUT/step_${step}_${i}.json"
     sleep 20
   done
 done
-venv/bin/python - "$OUT" "$STEPS" "$RUNS" <<'EOF'
+srv/bin/python - "$OUT" "$STEPS" "$RUNS" <<'EOF'
 import csv, json, statistics as st, sys
 out, steps, runs = sys.argv[1], sys.argv[2].split(), int(sys.argv[3])
 print(f"\n{'step ms':>8} {'container J':>18} {'CV %':>6} {'host W':>7} {'scaph W idle':>12} {'scaph W load':>12} {'spacing s':>9}")

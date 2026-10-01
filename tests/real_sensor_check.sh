@@ -5,10 +5,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 sudo -v
 OUT=$(mktemp -d)
-MEASURE_STARTUP_WAIT=5 venv/bin/python tools/measure_docker.py \
+MEASURE_STARTUP_WAIT=5 srv/bin/python tools/measure_docker.py \
   --server_image st-erlang-cowboy-28-4-3 --num_requests 5000 --max_workers 100 \
   --measurement_type static --output_csv "$OUT/run.csv" --output_json "$OUT/run.json"
-venv/bin/python - "$OUT" <<'EOF'
+srv/bin/python - "$OUT" <<'EOF'
 import csv, json, statistics, sys
 out = sys.argv[1]
 r = list(csv.DictReader(open(f"{out}/run.csv")))[-1]

@@ -15,15 +15,15 @@ OUT=$(mktemp -d)
 sudo -v
 ( while true; do sudo -n true; sleep 50; done ) 2>/dev/null &
 KEEPALIVE=$!
-restore() { sudo venv/bin/python tools/prepare_environment.py restore || true; kill $KEEPALIVE 2>/dev/null || true; }
+restore() { sudo srv/bin/python tools/prepare_environment.py restore || true; kill $KEEPALIVE 2>/dev/null || true; }
 trap restore EXIT
-venv/bin/python tools/check_environment.py || true
-sudo venv/bin/python tools/prepare_environment.py apply
-venv/bin/python tools/check_environment.py || true
-MEASURE_STARTUP_WAIT=5 venv/bin/python tools/measure_docker.py \
+srv/bin/python tools/check_environment.py || true
+sudo srv/bin/python tools/prepare_environment.py apply
+srv/bin/python tools/check_environment.py || true
+MEASURE_STARTUP_WAIT=5 srv/bin/python tools/measure_docker.py \
   --server_image "$IMAGE" --num_requests "$REQS" --max_workers 100 --measurement_type static \
   --repeat "$RUNS" --cooldown "$COOLDOWN" --output_csv "$OUT/noise.csv"
-venv/bin/python - "$OUT/noise.csv" <<'EOF'
+srv/bin/python - "$OUT/noise.csv" <<'EOF'
 import csv, statistics as st, sys
 rows = list(csv.DictReader(open(sys.argv[1])))
 def show(col):
