@@ -13,6 +13,11 @@ from datetime import datetime
 import logging
 import psutil
 
+import measure_failure
+import readiness
+import run_metadata
+from scaphandre_energy import compute_window_energy, finish_raw, raw_json_path, scaphandre_json_args, window_record
+
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger()
 
@@ -72,11 +77,28 @@ def check_prerequisites():
         logger.error("The following required tools are missing. Please install them before running measurements.")
         for name, install_hint in missing:
             logger.error("  - %s: %s", name, install_hint)
-        sys.exit(1)
+        sys.exit(measure_failure.SETUP_BROKEN)
 
-def send_request(url, request_num, verbose=False):
+# One HTTP session per worker thread, so "reuse" mode keeps one keep-alive
+# connection per worker instead of opening a new TCP connection per request.
+_thread_local = threading.local()
+
+def _get(url, connection_mode):
+    if connection_mode == "reuse":
+        session = getattr(_thread_local, "session", None)
+        if session is None:
+            session = requests.Session()
+            _thread_local.session = session
+        return session.get(url, timeout=5)
+    # "per-request": a fresh connection for every request, closed by the client.
+    # This is how the published results were produced; with servers that keep the
+    # connection open, the client's closed sockets pile up in TIME_WAIT and can
+    # exhaust the ephemeral port range at high request counts.
+    return requests.get(url, timeout=5)
+
+def send_request(url, request_num, verbose=False, connection_mode="reuse"):
     try:
-        response = requests.get(url, timeout=5)
+        response = _get(url, connection_mode)
         if verbose:
             logger.debug(f'{url} "GET / HTTP/1.1" {response.status_code} {len(response.content)}')
         with results_lock:
@@ -111,7 +133,7 @@ def cleanup_existing_scaphandre():
 
 def start_scaphandre(output_json, scaphandre_path):
     os.makedirs("output", exist_ok=True)
-    cmd = ["sudo", scaphandre_path, "json", "--containers", "-f", output_json]
+    cmd = ["sudo", scaphandre_path] + scaphandre_json_args(output_json)
     scaphandre_process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
@@ -221,66 +243,6 @@ def collect_resources_docker_stats(container_name, stop_event, docker_path, inte
            {'avg': mem_avg, 'peak': mem_peak, 'total': mem_total}
 
 
-def _pid_in_container(pid, container_id):
-    """Check if pid belongs to container via /proc/pid/cgroup (fallback when Scaphandre reports container=null)."""
-    if not container_id or pid <= 0:
-        return False
-    try:
-        with open(f"/proc/{pid}/cgroup", "r") as f:
-            cgroup = f.read()
-        return container_id in cgroup
-    except (OSError, IOError):
-        return False
-
-
-def parse_json_and_compute_energy(file_name, container_name, runtime, container_id=None):
-    """Extract energy from Scaphandre JSON. Prefers Scaphandre's container field; falls back to cgroup when all container=null."""
-    with open(file_name, "r") as file:
-        data = json.load(file)
-
-    total_power_microwatts = 0.0
-    number_samples = 0
-    found_containers = set()
-
-    for entry in data:
-        for consumer in entry.get("consumers", []):
-            container = consumer.get("container")
-            if container:
-                found_containers.add(container.get("name"))
-            if container and container.get("name") == container_name:
-                power = consumer.get("consumption", 0.0)
-                if power > 0:
-                    total_power_microwatts += power
-                    number_samples += 1
-
-    # Fallback: when Scaphandre reports container=null for all (e.g. cgroups v2), attribute by cgroup path
-    if number_samples == 0 and container_id and not found_containers:
-        for entry in data:
-            for consumer in entry.get("consumers", []):
-                if consumer.get("container"):
-                    continue
-                pid = consumer.get("pid", 0)
-                power = consumer.get("consumption", 0.0)
-                if power > 0 and _pid_in_container(pid, container_id):
-                    total_power_microwatts += power
-                    number_samples += 1
-        if number_samples > 0:
-            logger.info(f"Using cgroup fallback for '{container_name}' (Scaphandre container=null on this system)")
-
-    if not found_containers and number_samples == 0:
-        logger.warning(f"No containers found in Scaphandre output {file_name}")
-    elif found_containers:
-        logger.info(f"Containers found in Scaphandre output: {found_containers}")
-    if container_name not in found_containers and number_samples == 0:
-        logger.warning(f"Container '{container_name}' not found in Scaphandre output!")
-    if number_samples == 0:
-        logger.warning(f"No energy samples found for container '{container_name}' in {file_name}")
-        return 0.0, 0.0, 0
-
-    avg_power_watts = (total_power_microwatts / number_samples) * 1e-6
-    total_energy_joules = avg_power_watts * runtime
-    return total_energy_joules, avg_power_watts, number_samples
-
 def save_results_to_csv(filename, results, total_energy, average_power, runtime, requests_per_second, total_samples, 
                        cpu_metrics, mem_metrics, num_cores, container_name, measurement_type, extra_fields=None):
     extra_fields = extra_fields or {}
@@ -362,6 +324,109 @@ def print_summary(results, total_energy, average_power, runtime, requests_per_se
     logger.info(f"JSON: {output_json}, CSV: {output_csv or f'results_docker/{container_name}.csv'}")
     logger.info("==========================")
 
+
+
+def thermal_reading():
+    """CPU package temperature and cumulative throttle milliseconds, read just outside the load window."""
+    return run_metadata.cpu_package_temp_c(), run_metadata.throttle_counters()[1]
+
+
+def thermal_fields(before, after, args, pre_load=(None, "not checked")):
+    """Per-run CSV columns: temperatures around the load, throttling during it, and both readiness checks.
+
+    `args.waited_s`/`args.ready_check` come from check 1 (run_benchmarks.sh, before the container
+    starts); `pre_load` is (waited_s, result) of check 2 (right before the load).
+    """
+    ms0, ms1 = before[1], after[1]
+    return {
+        "CPU Temp Start (C)": before[0],
+        "CPU Temp End (C)": after[0],
+        "Throttled (ms)": ms1 - ms0 if ms0 != "" and ms1 != "" else "",
+        "Waited Before Start (s)": "" if args.waited_s is None else args.waited_s,
+        "Waited Before Load (s)": "" if pre_load[0] is None else pre_load[0],
+        "Ready Check": readiness.combine(args.ready_check, pre_load[1]),
+    }
+
+
+def pre_load_check(container_name, docker_path):
+    """Readiness check 2, with the server booted; removes the container if the campaign must stop."""
+    try:
+        return readiness.pre_load_gate()
+    except SystemExit:
+        stop_server_container(container_name, docker_path)
+        raise
+
+
+def run_repeats(args):
+    """Run the measurement args.repeat times, each as a fresh process, then summarise.
+
+    Each repeat is a separate run of this same script with --repeat 1, so it boots
+    its own container and does its own load. All runs append to one CSV, and then
+    tools/aggregate_repeats.py turns those rows into an average with a give-or-take.
+    """
+    import subprocess
+    import sys
+
+    container_name = args.container_name or args.server_image
+    if args.output_csv:
+        target_csv = args.output_csv
+    else:
+        os.makedirs("results_docker", exist_ok=True)
+        stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        target_csv = os.path.join("results_docker", f"{container_name}_{stamp}_repeats.csv")
+
+    base_cmd = [
+        sys.executable, os.path.abspath(__file__),
+        "--server_image", args.server_image,
+        "--port_mapping", args.port_mapping,
+        "--network", args.network,
+        "--num_requests", str(args.num_requests),
+        "--output_csv", target_csv,
+        "--repeat", "1",
+        "--connection", args.connection,
+    ]
+    if args.container_name:
+        base_cmd += ["--container_name", args.container_name]
+    if args.max_workers is not None:
+        base_cmd += ["--max_workers", str(args.max_workers)]
+    if args.measurement_type:
+        base_cmd += ["--measurement_type", args.measurement_type]
+    if args.verbose:
+        base_cmd += ["--verbose"]
+
+    logger.warning("Quick repeat mode (no machine settings or readiness checks; "
+                   "for real measurements use: make run CONFIG=bench.config)")
+    logger.warning("Repeat mode: %d runs of '%s', %ds cooldown between runs -> %s",
+                   args.repeat, container_name, args.cooldown, target_csv)
+    meta_path = os.path.splitext(target_csv)[0] + "_metadata.json"
+    run_metadata.write_start(meta_path, {"tool": "measure_docker", "repeat": args.repeat, "cooldown_s": args.cooldown,
+                                          "command": " ".join(base_cmd[2:])})
+    completed = 0
+    any_failed = False
+    for i in range(1, args.repeat + 1):
+        logger.warning("--- run %d of %d ---", i, args.repeat)
+        if subprocess.run(base_cmd).returncode != 0:
+            logger.error("Run %d failed; stopping repeats.", i)
+            any_failed = True
+            break
+        completed += 1
+        if i < args.repeat and args.cooldown > 0:
+            logger.warning("Cooldown %ds ...", args.cooldown)
+            time.sleep(args.cooldown)
+
+    run_metadata.write_end(meta_path, [target_csv])
+    if completed == 0:
+        logger.error("No runs completed; nothing to summarise.")
+        return 1
+    aggregator = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aggregate_repeats.py")
+    logger.warning("Summarising %d run(s) ...", completed)
+    rc = subprocess.run([sys.executable, aggregator, target_csv]).returncode
+    if rc != 0:
+        logger.error("Summary step failed (aggregate_repeats.py exited %d).", rc)
+        return 1
+    return 1 if any_failed else 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Measure web server energy with Scaphandre in Docker")
     parser.add_argument('--server_image', type=str, required=True, help="Docker image of the server (e.g., nginx-deb)")
@@ -374,19 +439,31 @@ def main():
     parser.add_argument('--output_json', type=str, default=None, help="Output JSON file path (default: output/<timestamp>.json)")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging")
     parser.add_argument('--measurement_type', type=str, default=None, help="Type of measurement (static, dynamic, etc.)")
-    
+    parser.add_argument('--connection', choices=['reuse', 'per-request'], default='reuse',
+                        help="HTTP connection handling: 'reuse' keeps one keep-alive connection per worker (default); "
+                             "'per-request' opens a new connection for every request, as in the published results")
+    parser.add_argument('--waited_s', type=float, default=None, help="Seconds the readiness gate waited before this run (set by run_benchmarks.sh --config)")
+    parser.add_argument('--ready_check', type=str, default="not checked", help="Result of the readiness gate before this run (set by run_benchmarks.sh --config)")
+    parser.add_argument('--repeat', type=int, default=1, help="Quick manual check only: run this measurement N times with a fixed --cooldown, without machine settings or readiness checks. For real measurements use: make run CONFIG=bench.config (default: 1)")
+    parser.add_argument('--cooldown', type=int, default=30, help="Seconds to rest between repeated runs (default: 30; only applies when --repeat > 1)")
+
     args = parser.parse_args()
     if args.verbose:
         logger.setLevel(logging.DEBUG)
     elif is_measure_quiet():
         logger.setLevel(logging.WARNING)
 
+    # Repeat mode: run the whole measurement several times (each a fresh run), then
+    # summarise with tools/aggregate_repeats.py. Handled before any measurement setup.
+    if args.repeat and args.repeat > 1:
+        sys.exit(run_repeats(args))
+
     check_prerequisites()  # Exit with error before any measurement if anything is missing
     scaphandre_path = get_binary_path("scaphandre")
     docker_path = get_binary_path("docker")
     num_cores = os.cpu_count()
     
-    output_json = args.output_json or os.path.join("output", datetime.now().strftime("%Y-%m-%d-%H%M%S") + ".json")
+    output_json = args.output_json or raw_json_path(args.container_name or args.server_image, args.measurement_type)
     url = "http://localhost:80/" if args.network == "host" else f"http://localhost:{args.port_mapping.split(':')[0]}/"
     container_name = args.container_name or args.server_image
 
@@ -400,12 +477,13 @@ def main():
         logger.error("[INFO] The following processes are using port %s:\n%s", host_port, '\n'.join([line for line in result2.stdout.splitlines() if f":{host_port} " in line]))
         result3 = subprocess.run(["docker", "ps", "--filter", f"publish={host_port}"], capture_output=True, text=True)
         logger.error("[INFO] Docker containers using this port:\n%s", result3.stdout)
-        exit(1)
+        measure_failure.fail(f"port {host_port} already in use")
 
     cleanup_existing_scaphandre()
     if is_measure_quiet() and not args.verbose:
         measure_quiet_msg(f"{container_name} | Docker start + HTTP readiness wait …")
     logger.info(f"Starting container '{container_name}'...")
+    measure_failure.started_container(container_name, docker_path)
     start_server_container(args.server_image, args.port_mapping, container_name, docker_path, args.network)
 
     if not check_container_health(url):
@@ -420,8 +498,10 @@ def main():
         except Exception as e:
             logger.debug("Could not get container logs: %s", e)
         logger.error("To allow more boot time: MEASURE_STARTUP_WAIT=25 MEASURE_HEALTH_RETRIES=30 make run")
-        stop_server_container(container_name, docker_path)
-        return
+        measure_failure.fail("health check failed: no HTTP 200 from the container within the wait time")
+
+    # Readiness check 2: booting the server warms the CPU, so wait again right before the load.
+    pre_load = pre_load_check(container_name, docker_path)
 
     if is_measure_quiet() and not args.verbose:
         measure_quiet_msg(
@@ -465,15 +545,18 @@ def main():
         hb_thread = threading.Thread(target=_heartbeat_worker, daemon=True)
         hb_thread.start()
 
+    thermal_before = thermal_reading()
     start_time = time.time()
     try:
         with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
-            executor.map(lambda i: send_request(url, i, args.verbose), range(args.num_requests))
+            executor.map(lambda i: send_request(url, i, args.verbose, args.connection), range(args.num_requests))
     finally:
         if hb_thread is not None:
             hb_stop.set()
             hb_thread.join(timeout=3)
-    runtime = time.time() - start_time
+    end_time = time.time()
+    thermal_after = thermal_reading()
+    runtime = end_time - start_time
     runtime_data['runtime'] = runtime
 
     time.sleep(3)
@@ -494,15 +577,21 @@ def main():
     )
     if result.returncode == 0 and result.stdout.strip():
         container_id = result.stdout.strip()
-    total_energy, average_power, total_samples = parse_json_and_compute_energy(
-        output_json, container_name, runtime, container_id=container_id
-    )
+    energy = compute_window_energy(output_json, container_name, start_time, end_time, container_id=container_id)
+    output_json = finish_raw(output_json, window_record(container_name, container_id, start_time, end_time, energy))
+    total_energy, average_power, total_samples = energy["energy_j"], energy["avg_power_w"], energy["samples"]
     stop_server_container(container_name, docker_path)
     measurement_type = getattr(args, 'measurement_type', None) or "unknown"
     http_workers_label = http_max_workers_label(args)
     save_results_to_csv(args.output_csv, results_counter, total_energy, average_power, runtime, requests_per_second, 
                        int(total_samples), resource_results['cpu'], resource_results['mem'], num_cores, args.server_image, measurement_type,
-                       extra_fields={"HTTP Max Workers": http_workers_label})
+                       extra_fields={"HTTP Max Workers": http_workers_label,
+                                     "HTTP Connection Mode": args.connection,
+                                     "Host Energy (J)": round(energy["host_energy_j"], 6),
+                                     "Host Avg Power (W)": round(energy["host_avg_power_w"], 6),
+                                     "Sampling Step (ms)": energy["step_ms"],
+                                     "Window Coverage": round(energy["coverage"], 4),
+                                     **thermal_fields(thermal_before, thermal_after, args, pre_load)})
     csv_disp = args.output_csv or os.path.join("results_docker", f"{container_name}.csv")
     if is_measure_quiet() and not args.verbose:
         ok = results_counter["success"] == results_counter["total"]
@@ -521,4 +610,4 @@ def main():
                       http_max_workers_label=http_workers_label)
 
 if __name__ == "__main__":
-    main()
+    measure_failure.run(main)

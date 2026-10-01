@@ -23,7 +23,7 @@ RUN set -eux; \
       printf '%s\n' "-include(\"$YAWS_HRL\")."; \
       echo '-export([out/1, handle_message/1, terminate/2]).'; \
       echo 'out(_Arg) ->'; \
-      echo '    Opts = [{max_frame_size, 64*1024*1024}, {max_message_size, 64*1024*1024}],'; \
+      echo '    Opts = [{max_frame_size, 128*1024*1024}, {max_message_size, 128*1024*1024}],'; \
       echo '    {websocket, ws_handler, Opts}.'; \
       echo 'handle_message({text, Data}) ->'; \
       echo '    {reply, {text, Data}};'; \

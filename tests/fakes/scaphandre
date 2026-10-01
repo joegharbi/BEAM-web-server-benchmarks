@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Test stand-in for `scaphandre json`, writing known power values.
+
+Every step it lists each thread of each running Docker container as a consumer
+(container=null, like real Scaphandre on cgroup v2), splitting a fixed
+FAKE_CONTAINER_W watts evenly across that container's threads. The host draws
+FAKE_HOST_W. So the correct container energy is FAKE_CONTAINER_W x window,
+whatever the thread count. The arguments it received are logged to FAKE_ARGS_LOG.
+"""
+import glob, json, os, re, signal, sys, time
+
+args = sys.argv[1:]
+if "--version" in args:
+    print("scaphandre 0.0.0-fake")
+    sys.exit(0)
+log = os.environ.get("FAKE_ARGS_LOG")
+if log:
+    with open(log, "a") as fh:
+        fh.write(" ".join(args) + "\n")
+
+def opt(name, default):
+    return args[args.index(name) + 1] if name in args else default
+
+step = int(opt("--step", "2")) + int(opt("--step-nano", "0")) / 1e9
+out = opt("-f", "out.json")
+cont_w = float(os.environ.get("FAKE_CONTAINER_W", "6"))
+host_w = float(os.environ.get("FAKE_HOST_W", "20"))
+entries = []
+
+def container_threads():
+    by_scope = {}
+    for d in glob.glob("/proc/[0-9]*"):
+        try:
+            cg = open(d + "/cgroup").read()
+        except OSError:
+            continue
+        m = re.search(r"docker-([0-9a-f]{64})\.scope", cg)
+        if m:
+            tids = [int(os.path.basename(t)) for t in glob.glob(d + "/task/*")]
+            by_scope.setdefault(m.group(1), []).extend(tids)
+    return by_scope
+
+def flush(*_):
+    with open(out, "w") as fh:
+        json.dump(entries, fh)
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, flush)
+signal.signal(signal.SIGINT, flush)
+first = True
+while True:
+    now = time.time()
+    consumers = []
+    if not first:
+        for tids in container_threads().values():
+            for tid in tids:
+                consumers.append({"exe": "/fake/beam.smp", "cmdline": "fake", "pid": tid,
+                                  "resources_usage": None, "timestamp": now,
+                                  "consumption": cont_w / len(tids) * 1e6, "container": None})
+    entries.append({"host": {"consumption": 0.0 if first else host_w * 1e6, "timestamp": now,
+                             "components": {"disks": []}},
+                    "consumers": consumers, "sockets": []})
+    first = False
+    time.sleep(step)

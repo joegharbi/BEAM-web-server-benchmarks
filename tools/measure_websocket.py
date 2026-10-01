@@ -12,6 +12,11 @@ import psutil
 import asyncio
 import websockets
 
+import measure_failure
+import readiness
+import run_metadata
+from scaphandre_energy import compute_window_energy, finish_raw, raw_json_path, scaphandre_json_args, window_record
+
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger()
 
@@ -56,9 +61,13 @@ def parse_args():
     parser.add_argument('--size_kb', type=int, default=64, help='Message size in KB (per message)')
     parser.add_argument('--rate', type=int, default=10, help='Messages per second per client (stream mode only)')
     parser.add_argument('--bursts', type=int, default=10, help='Number of bursts (burst mode only)')
-    parser.add_argument('--interval', type=float, default=1.0, help='Interval between bursts (seconds)')
+    parser.add_argument('--interval', type=float, default=0.0, help='Seconds to wait between bursts (default: 0 = back-to-back saturation burst, which matches "as fast as possible"; set higher for a paced burst)')
     parser.add_argument('--duration', type=int, default=30, help='Test duration in seconds (stream mode)')
     parser.add_argument('--url', type=str, default='ws://localhost:8001/ws', help='WebSocket server URL')
+    parser.add_argument('--waited_s', type=float, default=None, help="Seconds the readiness gate waited before this run (set by run_benchmarks.sh --config)")
+    parser.add_argument('--ready_check', type=str, default="not checked", help="Result of the readiness gate before this run (set by run_benchmarks.sh --config)")
+    parser.add_argument('--repeat', type=int, default=1, help="Quick manual check only: run this measurement N times with a fixed --cooldown, without machine settings or readiness checks. For real measurements use: make run CONFIG=bench.config (default: 1)")
+    parser.add_argument('--cooldown', type=int, default=30, help="Seconds to rest between repeated runs (default: 30; only applies when --repeat > 1)")
     return parser.parse_args()
 
 # =====================
@@ -86,7 +95,7 @@ def check_prerequisites():
         logger.error("The following required tools are missing. Please install them before running measurements.")
         for name, install_hint in missing:
             logger.error("  - %s: %s", name, install_hint)
-        sys.exit(1)
+        sys.exit(measure_failure.SETUP_BROKEN)
 
 def cleanup_existing_scaphandre():
     subprocess.run(["sudo", "pkill", "-9", "scaphandre"], capture_output=True, text=True, check=False)
@@ -94,7 +103,7 @@ def cleanup_existing_scaphandre():
 
 def start_scaphandre(output_json, scaphandre_path):
     os.makedirs("output", exist_ok=True)
-    cmd = ["sudo", scaphandre_path, "json", "--containers", "-f", output_json]
+    cmd = ["sudo", scaphandre_path] + scaphandre_json_args(output_json)
     scaphandre_process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
@@ -165,61 +174,29 @@ def collect_resources_docker_stats(container_name, stop_event, docker_path, inte
            {'avg': mem_avg, 'peak': mem_peak, 'total': mem_total}
 
 
-def _pid_in_container(pid, container_id):
-    """Check if pid belongs to container via /proc/pid/cgroup (fallback when Scaphandre reports container=null)."""
-    if not container_id or pid <= 0:
-        return False
-    try:
-        with open(f"/proc/{pid}/cgroup", "r") as f:
-            cgroup = f.read()
-        return container_id in cgroup
-    except (OSError, IOError):
-        return False
-
-
-def parse_json_and_compute_energy(file_name, container_name, runtime, container_id=None):
-    """Extract energy from Scaphandre JSON. Prefers Scaphandre's container field; falls back to cgroup when all container=null."""
-    with open(file_name, "r") as file:
-        data = json.load(file)
-    total_power_microwatts = 0.0
-    number_samples = 0
-    found_containers = set()
-    for entry in data:
-        for consumer in entry.get("consumers", []):
-            container = consumer.get("container")
-            if container:
-                found_containers.add(container.get("name"))
-            if container and container.get("name") == container_name:
-                power = consumer.get("consumption", 0.0)
-                if power > 0:
-                    total_power_microwatts += power
-                    number_samples += 1
-    # Fallback: when Scaphandre reports container=null for all (e.g. cgroups v2), attribute by cgroup path
-    if number_samples == 0 and container_id and not found_containers:
-        for entry in data:
-            for consumer in entry.get("consumers", []):
-                if consumer.get("container"):
-                    continue
-                pid = consumer.get("pid", 0)
-                power = consumer.get("consumption", 0.0)
-                if power > 0 and _pid_in_container(pid, container_id):
-                    total_power_microwatts += power
-                    number_samples += 1
-        if number_samples > 0:
-            logger.info(f"Using cgroup fallback for '{container_name}' (Scaphandre container=null on this system)")
-    if not found_containers and number_samples == 0:
-        logger.warning(f"No containers found in Scaphandre output {file_name}")
-    elif found_containers:
-        logger.info(f"Containers found in Scaphandre output: {found_containers}")
-    if container_name not in found_containers and number_samples == 0:
-        logger.warning(f"Container '{container_name}' not found in Scaphandre output!")
-    if number_samples == 0:
-        logger.warning(f"No energy samples found for container '{container_name}' in {file_name}")
-        return 0.0, 0.0, 0
-
-    avg_power_watts = (total_power_microwatts / number_samples) * 1e-6
-    total_energy_joules = avg_power_watts * runtime
-    return total_energy_joules, avg_power_watts, number_samples
+def append_csv_row(filename, headers, row):
+    """Append a row; if the file has an older header, rewrite it with the new header and padded rows."""
+    existing = []
+    if os.path.isfile(filename) and os.stat(filename).st_size > 0:
+        with open(filename, newline='') as f:
+            existing = list(csv.reader(f))
+    if not existing:
+        with open(filename, 'w', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(headers)
+            w.writerow(row)
+        return
+    old_header = existing[0]
+    if old_header == headers:
+        with open(filename, 'a', newline='') as f:
+            csv.writer(f).writerow(row)
+        return
+    migrated = [[dict(zip(old_header, r)).get(k, '') for k in headers] for r in existing[1:]]
+    with open(filename, 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(headers)
+        w.writerows(migrated)
+        w.writerow(row)
 
 # =====================
 # Container Lifecycle
@@ -322,17 +299,130 @@ async def echo_stream_client(url, size_kb, rate, duration, results, client_id, v
 # =====================
 # Main Benchmark Runner
 # =====================
+
+def thermal_reading():
+    """CPU package temperature and cumulative throttle milliseconds, read just outside the load window."""
+    return run_metadata.cpu_package_temp_c(), run_metadata.throttle_counters()[1]
+
+
+def thermal_fields(before, after, args, pre_load=(None, "not checked")):
+    """Per-run CSV columns: temperatures around the load, throttling during it, and both readiness checks.
+
+    `args.waited_s`/`args.ready_check` come from check 1 (run_benchmarks.sh, before the container
+    starts); `pre_load` is (waited_s, result) of check 2 (right before the load).
+    """
+    ms0, ms1 = before[1], after[1]
+    return {
+        "CPU Temp Start (C)": before[0],
+        "CPU Temp End (C)": after[0],
+        "Throttled (ms)": ms1 - ms0 if ms0 != "" and ms1 != "" else "",
+        "Waited Before Start (s)": "" if args.waited_s is None else args.waited_s,
+        "Waited Before Load (s)": "" if pre_load[0] is None else pre_load[0],
+        "Ready Check": readiness.combine(args.ready_check, pre_load[1]),
+    }
+
+
+def pre_load_check(container_name, docker_path):
+    """Readiness check 2, with the server booted; removes the container if the campaign must stop."""
+    try:
+        return readiness.pre_load_gate()
+    except SystemExit:
+        stop_server_container(container_name, docker_path)
+        raise
+
+
+def run_repeats(args):
+    """Run the measurement args.repeat times, each as a fresh process, then summarise.
+
+    Each repeat is a separate run of this same script with --repeat 1, so it boots
+    its own container and does its own load. All runs append to one CSV, and then
+    tools/aggregate_repeats.py turns those rows into an average with a give-or-take.
+    """
+    import subprocess
+    import sys
+    import time as _time
+
+    container_name = args.container_name or args.server_image
+    if args.output_csv:
+        target_csv = args.output_csv
+    else:
+        os.makedirs("results_docker", exist_ok=True)
+        stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        target_csv = os.path.join("results_docker", f"{container_name}_{stamp}_repeats.csv")
+
+    base_cmd = [
+        sys.executable, os.path.abspath(__file__),
+        "--server_image", args.server_image,
+        "--pattern", args.pattern,
+        "--port_mapping", args.port_mapping,
+        "--network", args.network,
+        "--mode", args.mode,
+        "--clients", str(args.clients),
+        "--size_kb", str(args.size_kb),
+        "--rate", str(args.rate),
+        "--bursts", str(args.bursts),
+        "--interval", str(args.interval),
+        "--duration", str(args.duration),
+        "--url", args.url,
+        "--measurement_type", args.measurement_type,
+        "--output_csv", target_csv,
+        "--repeat", "1",
+    ]
+    if args.container_name:
+        base_cmd += ["--container_name", args.container_name]
+    if args.verbose:
+        base_cmd += ["--verbose"]
+
+    logger.warning("Quick repeat mode (no machine settings or readiness checks; "
+                   "for real measurements use: make run CONFIG=bench.config)")
+    logger.warning("Repeat mode: %d runs of '%s' (%s, %d clients), %ds cooldown -> %s",
+                   args.repeat, container_name, args.pattern, args.clients, args.cooldown, target_csv)
+    meta_path = os.path.splitext(target_csv)[0] + "_metadata.json"
+    run_metadata.write_start(meta_path, {"tool": "measure_websocket", "repeat": args.repeat, "cooldown_s": args.cooldown,
+                                          "command": " ".join(base_cmd[2:])})
+    completed = 0
+    any_failed = False
+    for i in range(1, args.repeat + 1):
+        logger.warning("--- run %d of %d ---", i, args.repeat)
+        if subprocess.run(base_cmd).returncode != 0:
+            logger.error("Run %d failed; stopping repeats.", i)
+            any_failed = True
+            break
+        completed += 1
+        if i < args.repeat and args.cooldown > 0:
+            logger.warning("Cooldown %ds ...", args.cooldown)
+            _time.sleep(args.cooldown)
+
+    run_metadata.write_end(meta_path, [target_csv])
+    if completed == 0:
+        logger.error("No runs completed; nothing to summarise.")
+        return 1
+    aggregator = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aggregate_repeats.py")
+    logger.warning("Summarising %d run(s) ...", completed)
+    rc = subprocess.run([sys.executable, aggregator, target_csv]).returncode
+    if rc != 0:
+        logger.error("Summary step failed (aggregate_repeats.py exited %d).", rc)
+        return 1
+    return 1 if any_failed else 0
+
+
 def main():
     args = parse_args()
     if args.verbose:
         logger.setLevel(logging.DEBUG)
     elif is_measure_quiet():
         logger.setLevel(logging.WARNING)
+
+    # Repeat mode: run the whole measurement several times (each a fresh run), then
+    # summarise with tools/aggregate_repeats.py. Handled before any measurement setup.
+    if args.repeat and args.repeat > 1:
+        sys.exit(run_repeats(args))
+
     check_prerequisites()  # Exit with error before any measurement if anything is missing
     scaphandre_path = get_binary_path("scaphandre")
     docker_path = get_binary_path("docker")
     num_cores = os.cpu_count()
-    output_json = args.output_json or os.path.join("output", datetime.now().strftime("%Y-%m-%d-%H%M%S") + ".json")
+    output_json = args.output_json or raw_json_path(args.container_name or args.server_image, args.measurement_type)
     container_name = args.container_name or args.server_image
     output_csv = args.output_csv or os.path.join("results_docker", f"{container_name}.csv")
     output_csv_dir = os.path.dirname(output_csv)
@@ -349,12 +439,13 @@ def main():
         logger.error("[INFO] The following processes are using port %s:\n%s", host_port, '\n'.join([line for line in result2.stdout.splitlines() if f":{host_port} " in line]))
         result3 = subprocess.run(["docker", "ps", "--filter", f"publish={host_port}"], capture_output=True, text=True)
         logger.error("[INFO] Docker containers using this port:\n%s", result3.stdout)
-        exit(1)
+        measure_failure.fail(f"port {host_port} already in use")
 
     cleanup_existing_scaphandre()
     if is_measure_quiet() and not args.verbose:
         measure_quiet_msg(f"{container_name} | Docker start + WebSocket readiness wait …")
     logger.info(f"Starting container '{container_name}'...")
+    measure_failure.started_container(container_name, docker_path)
     start_server_container(args.server_image, args.port_mapping, container_name, docker_path, args.network)
     url = args.url
     if not url:
@@ -408,8 +499,10 @@ def main():
                         logger.error("  %s", line)
         except Exception as e:
             logger.debug("Could not get container logs: %s", e)
-        stop_server_container(container_name, docker_path)
-        exit(1)
+        measure_failure.fail("health check failed: no WebSocket echo from the container within the wait time")
+
+    # Readiness check 2: booting the server warms the CPU, so wait again right before the load.
+    pre_load = pre_load_check(container_name, docker_path)
 
     if is_measure_quiet() and not args.verbose:
         traffic_desc = f"{args.pattern} | clients={args.clients} size_kb={args.size_kb}"
@@ -466,6 +559,7 @@ def main():
         hb_thread = threading.Thread(target=_heartbeat_worker, daemon=True)
         hb_thread.start()
 
+    thermal_before = thermal_reading()
     start_time = time.time()
     try:
         asyncio.run(run_all())
@@ -473,7 +567,9 @@ def main():
         if hb_thread is not None:
             hb_stop.set()
             hb_thread.join(timeout=3)
-    runtime = time.time() - start_time
+    end_time = time.time()
+    thermal_after = thermal_reading()
+    runtime = end_time - start_time
 
     time.sleep(3)
     stop_event.set()
@@ -498,16 +594,17 @@ def main():
     avg_latency = sum(all_latencies) / len(all_latencies) if all_latencies else 0.0
     requests_per_second = total_msgs / runtime if runtime > 0 else 0.0
     throughput_mb_s = (total_msgs * args.size_kb / 1024) / runtime if runtime > 0 else 0.0
-    total_energy, avg_power, total_samples = parse_json_and_compute_energy(
-        output_json, container_name, runtime, container_id=container_id
-    )
+    energy = compute_window_energy(output_json, container_name, start_time, end_time, container_id=container_id)
+    output_json = finish_raw(output_json, window_record(container_name, container_id, start_time, end_time, energy))
+    total_energy, avg_power, total_samples = energy["energy_j"], energy["avg_power_w"], energy["samples"]
     stop_server_container(container_name, docker_path)
 
     headers = ["Container Name", "Test Type", "Num CPUs", "Total Messages", "Successful Messages", "Failed Messages", "Execution Time (s)", "Messages/s", "Throughput (MB/s)",
                "Avg Latency (ms)", "Min Latency (ms)", "Max Latency (ms)",
                "Total Energy (J)", "Avg Power (W)", "Samples", "Avg CPU (%)", "Peak CPU (%)", "Total CPU (%*s)",
                "Avg Mem (MB)", "Peak Mem (MB)", "Total Mem (MB*s)",
-               "Pattern", "Num Clients", "Message Size (KB)", "Rate (msg/s)", "Bursts", "Interval (s)", "Duration (s)"]
+               "Pattern", "Num Clients", "Message Size (KB)", "Rate (msg/s)", "Bursts", "Interval (s)", "Duration (s)",
+               "Host Energy (J)", "Host Avg Power (W)", "Sampling Step (ms)", "Window Coverage"]
     # Calculate latency statistics
     min_latency = min(all_latencies) if all_latencies else 0.0
     max_latency = max(all_latencies) if all_latencies else 0.0
@@ -540,14 +637,14 @@ def main():
         args.rate if args.pattern == 'stream' else '',  # Rate (msg/s) for stream mode
         args.bursts if args.pattern == 'burst' else '',  # Bursts count for burst mode
         args.interval if args.pattern == 'burst' else '',  # Interval (s) for burst mode
-        args.duration if args.pattern == 'stream' else ''  # Duration (s) for stream mode
+        args.duration if args.pattern == 'stream' else '',  # Duration (s) for stream mode
+        round(energy["host_energy_j"], 6),
+        round(energy["host_avg_power_w"], 6),
+        energy["step_ms"],
+        round(energy["coverage"], 4),
     ]
-    write_header = not os.path.exists(output_csv)
-    with open(output_csv, 'a', newline='') as f:
-        writer = csv.writer(f)
-        if write_header:
-            writer.writerow(headers)
-        writer.writerow(row)
+    thermal = thermal_fields(thermal_before, thermal_after, args, pre_load)
+    append_csv_row(output_csv, headers + list(thermal), row + list(thermal.values()))
 
     if is_measure_quiet() and not args.verbose:
         ok = total_success == total_msgs
@@ -571,4 +668,4 @@ def main():
         logger.info("==========================")
 
 if __name__ == "__main__":
-    main() 
+    measure_failure.run(main)

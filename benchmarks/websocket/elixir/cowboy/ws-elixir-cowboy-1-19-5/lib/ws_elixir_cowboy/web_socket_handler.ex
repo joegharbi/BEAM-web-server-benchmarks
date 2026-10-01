@@ -3,7 +3,7 @@ defmodule WsElixirCowboy.WebSocketHandler do
 
   @impl true
   def init(req, state) do
-    opts = %{idle_timeout: 60_000, max_frame_size: 64 * 1024 * 1024}
+    opts = %{idle_timeout: 60_000, max_frame_size: 128 * 1024 * 1024}
     {:cowboy_websocket, req, state, opts}
   end
 

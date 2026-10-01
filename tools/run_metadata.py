@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+"""Provenance of one measurement, written once to <results dir>/metadata.json.
+
+A measurement is one run of the benchmark that fills one results folder. Its CSV
+rows share the same software, machine and settings, so those are recorded here
+once instead of being repeated in every row.
+
+  start  - versions, machine, settings, and the machine state before the first run
+  end    - the machine state after the last run, the finish time, the ID of every
+           image that appears in the folder's CSVs, and whether the conditions
+           stayed the same from start to end
+
+Usage:
+  python3 tools/run_metadata.py start results/2026-09-30_120000 --set quick=0 --set http_max_workers=100
+  python3 tools/run_metadata.py end   results/2026-09-30_120000
+  python3 tools/run_metadata.py temp      # CPU package temperature (used by the cooldown)
+
+Every value is read without root. A value that cannot be read is left empty,
+never guessed. If `end` is missing from a metadata.json, the measurement did not
+finish.
+"""
+import argparse
+import csv
+import datetime
+import glob
+import json
+import os
+import platform
+import subprocess
+import sys
+
+_TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+FILENAME = "metadata.json"
+
+
+def _read(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def _run(cmd, cwd=None):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10, cwd=cwd)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+# --- software and machine (fixed for a measurement) ---
+
+def framework_version():
+    """Git commit of the framework, with -dirty when there are uncommitted changes."""
+    commit = _run(["git", "rev-parse", "--short", "HEAD"], cwd=_TOOLS_DIR)
+    if not commit:
+        return ""
+    dirty = _run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=_TOOLS_DIR)
+    return commit + ("-dirty" if dirty else "")
+
+
+def scaphandre_version():
+    out = _run(["scaphandre", "--version"])
+    return out.split()[-1] if out else ""
+
+
+def cpu_model():
+    for line in (_read("/proc/cpuinfo") or "").splitlines():
+        if line.startswith("model name"):
+            return line.split(":", 1)[1].strip()
+    return platform.processor()
+
+
+def os_name():
+    for line in (_read("/etc/os-release") or "").splitlines():
+        if line.startswith("PRETTY_NAME="):
+            return line.split("=", 1)[1].strip('"')
+    return platform.system()
+
+
+def memory_gb():
+    for line in (_read("/proc/meminfo") or "").splitlines():
+        if line.startswith("MemTotal:"):
+            return round(int(line.split()[1]) / 1024 / 1024, 1)
+    return ""
+
+
+def image_id(image):
+    """Short content ID of a Docker image, so a rebuilt image is never mistaken for the old one."""
+    full = _run(["docker", "image", "inspect", "--format", "{{.Id}}", image])
+    return full.split(":", 1)[-1][:12] if full else ""
+
+
+def software_and_machine():
+    return {
+        "framework_version": framework_version(),
+        "scaphandre_version": scaphandre_version(),
+        "docker_version": _run(["docker", "version", "--format", "{{.Server.Version}}"]),
+        "python_version": platform.python_version(),
+        "os": os_name(),
+        "kernel": platform.release(),
+        "cpu_model": cpu_model(),
+        "logical_cpus": os.cpu_count(),
+        "memory_gb": memory_gb(),
+    }
+
+
+# --- machine state (can change during a measurement) ---
+
+def cpu_governor():
+    govs = sorted({_read(p) for p in glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor")} - {None})
+    return "/".join(govs)
+
+
+def turbo_state():
+    no_turbo = _read("/sys/devices/system/cpu/intel_pstate/no_turbo")
+    if no_turbo is not None:
+        return "off" if no_turbo == "1" else "on"
+    boost = _read("/sys/devices/system/cpu/cpufreq/boost")
+    if boost is not None:
+        return "on" if boost == "1" else "off"
+    return ""
+
+
+def cpu_max_freq_mhz():
+    vals = {_read(p) for p in glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq")} - {None}
+    return "/".join(str(int(v) // 1000) for v in sorted(vals, key=int))
+
+
+def ac_power():
+    for p in glob.glob("/sys/class/power_supply/*/type"):
+        if _read(p) == "Mains":
+            online = _read(os.path.join(os.path.dirname(p), "online"))
+            return {"1": "yes", "0": "no"}.get(online, "")
+    return ""
+
+
+def cpu_package_temp_c():
+    """CPU package temperature: coretemp "Package id 0", else the x86_pkg_temp thermal zone."""
+    for hw in glob.glob("/sys/class/hwmon/hwmon*"):
+        if _read(os.path.join(hw, "name")) != "coretemp":
+            continue
+        for label in sorted(glob.glob(os.path.join(hw, "temp*_label"))):
+            if (_read(label) or "").startswith("Package id"):
+                v = _read(label.replace("_label", "_input"))
+                if v:
+                    return round(int(v) / 1000, 1)
+    for tz in glob.glob("/sys/class/thermal/thermal_zone*"):
+        if _read(os.path.join(tz, "type")) == "x86_pkg_temp":
+            v = _read(os.path.join(tz, "temp"))
+            if v:
+                return round(int(v) / 1000, 1)
+    return ""
+
+
+def throttle_counters():
+    """(events, milliseconds) of CPU thermal throttling since boot, summed over packages and cores.
+
+    Intel exposes these per CPU in /sys/devices/system/cpu/cpu*/thermal_throttle/. Package
+    counters repeat on every CPU of a package, so each package is counted once. Returns
+    ("", "") when the machine does not expose them.
+    """
+    events = ms = 0
+    found = False
+    seen_packages = set()
+    for d in glob.glob("/sys/devices/system/cpu/cpu[0-9]*/thermal_throttle"):
+        cpu = os.path.dirname(d)
+        pkg = _read(os.path.join(cpu, "topology", "physical_package_id"))
+        if pkg not in seen_packages:
+            seen_packages.add(pkg)
+            e = _read(os.path.join(d, "package_throttle_count"))
+            t = _read(os.path.join(d, "package_throttle_total_time_ms"))
+            if e is not None:
+                found = True
+                events += int(e)
+                ms += int(t or 0)
+        e = _read(os.path.join(d, "core_throttle_count"))
+        t = _read(os.path.join(d, "core_throttle_total_time_ms"))
+        if e is not None:
+            found = True
+            events += int(e)
+            ms += int(t or 0)
+    return (events, ms) if found else ("", "")
+
+
+def cpu_times():
+    """(busy, total) jiffies of all CPUs from /proc/stat; busy excludes idle and iowait."""
+    fields = (_read("/proc/stat") or "").splitlines()[0].split()[1:]
+    vals = [int(x) for x in fields]
+    idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+    total = sum(vals[:8])   # guest time is already counted in user/nice
+    return total - idle, total
+
+
+def load1():
+    la = _read("/proc/loadavg")
+    return float(la.split()[0]) if la else ""
+
+
+def machine_state():
+    return {
+        "time_utc": _now(),
+        "cpu_governor": cpu_governor(),
+        "turbo": turbo_state(),
+        "cpu_max_freq_mhz": cpu_max_freq_mhz(),
+        "ac_power": ac_power(),
+        "cpu_package_temp_c": cpu_package_temp_c(),
+        "load1": load1(),
+    }
+
+
+# Settings that change the measurement itself; a difference between start and end
+# means the measurement did not run under one set of conditions.
+STABLE_KEYS = ("cpu_governor", "turbo", "cpu_max_freq_mhz", "ac_power")
+
+
+def tool_settings():
+    """Measurement settings read from the environment, plus the Scaphandre defaults in use."""
+    sys.path.insert(0, _TOOLS_DIR)
+    import scaphandre_energy
+    env = {k: v for k, v in sorted(os.environ.items()) if k.startswith(("MEASURE_", "BENCH_"))}
+    return {
+        "scaphandre_step_ms": scaphandre_energy.scaphandre_step_ms(),
+        "scaphandre_max_top_consumers": int(os.environ.get("MEASURE_SCAPH_MAX_TOP",
+                                                           scaphandre_energy.DEFAULT_MAX_TOP_CONSUMERS)),
+        "environment": env,
+    }
+
+
+def csvs_in(folder):
+    return [p for p in glob.glob(os.path.join(folder, "**", "*.csv"), recursive=True)
+            if not p.endswith("_summary.csv") and os.path.basename(p) not in ("failures.csv", "summary.csv")]
+
+
+def images_in(csv_paths):
+    """Image name -> image ID for every "Container Name" in the given CSVs."""
+    names = set()
+    for path in csv_paths:
+        try:
+            with open(path, newline="", encoding="utf-8") as fh:
+                names.update(r["Container Name"] for r in csv.DictReader(fh) if r.get("Container Name"))
+        except (OSError, KeyError, csv.Error):
+            continue
+    return {n: image_id(n) for n in sorted(names)}
+
+
+def write_start(path, settings):
+    """Write the start of a measurement's metadata to `path`."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    # Named after the results folder (metadata.json) or after the CSV (<csv>_metadata.json).
+    if os.path.basename(path) == FILENAME:
+        name = os.path.basename(os.path.dirname(os.path.abspath(path)))
+    else:
+        name = os.path.basename(path).removesuffix("_metadata.json")
+    meta = {
+        "measurement": name,
+        "started_at_utc": _now(),
+        "software_and_machine": software_and_machine(),
+        "settings": {**settings, **tool_settings()},
+        "machine_state_start": machine_state(),
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, indent=2)
+    return path
+
+
+def write_resume(path, settings):
+    """Record that an unfinished measurement was resumed (the original start record is kept)."""
+    with open(path, encoding="utf-8") as fh:
+        meta = json.load(fh)
+    meta.setdefault("resumes", []).append({
+        "resumed_at_utc": _now(),
+        "settings": settings,
+        "machine_state": machine_state(),
+    })
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, indent=2)
+    return path
+
+
+def resume_info(folder):
+    """Shell assignments to resume `folder`: original arguments, seed, and whether it can be resumed.
+
+    The original --config is replaced by the copy saved in the folder; any --resume is dropped.
+    """
+    import shlex
+    path = os.path.join(folder, FILENAME)
+    problems = []
+    meta = {}
+    if not os.path.isfile(path):
+        problems.append(f"{path} not found")
+    else:
+        with open(path, encoding="utf-8") as fh:
+            meta = json.load(fh)
+        if "finished_at_utc" in meta:
+            problems.append("this measurement already finished")
+    if not os.path.isfile(os.path.join(folder, "bench.config")):
+        problems.append("no bench.config in the folder (only measurements made with --config can be resumed)")
+    settings = meta.get("settings", {})
+    args, out, skip = shlex.split(settings.get("arguments", "")), [], False
+    for i, a in enumerate(args):
+        if skip:
+            skip = False
+            continue
+        if a in ("--config", "--resume"):
+            skip = True
+            continue
+        out.append(a)
+    out = ["--config", os.path.join(folder, "bench.config")] + out
+    lines = [f"RESUME_PROBLEMS={shlex.quote('; '.join(problems))}",
+             f"RESUME_SEED={shlex.quote(str(settings.get('shuffle_seed', '')))}",
+             "set -- " + " ".join(shlex.quote(a) for a in out)]
+    return "\n".join(lines)
+
+
+def write_end(path, csv_paths):
+    """Complete the metadata at `path`; image IDs come from the measurement's CSVs."""
+    with open(path, encoding="utf-8") as fh:
+        meta = json.load(fh)
+    end = machine_state()
+    start = meta.get("machine_state_start", {})
+    meta["finished_at_utc"] = _now()
+    meta["machine_state_end"] = end
+    meta["conditions_stable"] = all(start.get(k) == end.get(k) for k in STABLE_KEYS)
+    meta["images"] = images_in(csv_paths)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, indent=2)
+    return path, meta["conditions_stable"]
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Write the provenance of one measurement to <folder>/metadata.json.")
+    ap.add_argument("phase", choices=["start", "end", "resume", "resume-info", "temp"],
+                    help="start/end/resume of a measurement, resume-info: shell assignments to resume a folder, "
+                         "temp: print the CPU package temperature")
+    ap.add_argument("folder", nargs="?", help="Results folder of the measurement (start/end)")
+    ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                    help="Extra setting to record at start (repeatable)")
+    args = ap.parse_args()
+    if args.phase == "temp":
+        print(cpu_package_temp_c())
+        return
+    if not args.folder:
+        ap.error("start/end need the results folder")
+    path = os.path.join(args.folder, FILENAME)
+    if args.phase == "resume-info":
+        print(resume_info(args.folder))
+        return
+    if args.phase == "resume":
+        settings = dict(s.split("=", 1) for s in args.set if "=" in s)
+        print(f"Metadata: {write_resume(path, settings)} (resumed)")
+        return
+    if args.phase == "start":
+        settings = dict(s.split("=", 1) for s in args.set if "=" in s)
+        print(f"Metadata: {write_start(path, settings)}")
+    else:
+        path, stable = write_end(path, csvs_in(args.folder))
+        print(f"Metadata: {path}" + ("" if stable else
+              "  WARNING: governor, turbo, frequency cap or AC power changed during the measurement"))
+
+
+if __name__ == "__main__":
+    main()

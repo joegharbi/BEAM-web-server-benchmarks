@@ -8,7 +8,7 @@
 -export([terminate/3]).
 
 init(Req, State) ->
-    {cowboy_websocket, Req, State}.
+    {cowboy_websocket, Req, State, #{max_frame_size => 128 * 1024 * 1024}}.
 
 websocket_init(State) ->
     {ok, State}.

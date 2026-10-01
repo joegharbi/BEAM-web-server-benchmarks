@@ -3,6 +3,7 @@
 # Usage: ./scripts/run_benchmarks.sh [static|dynamic|websocket] [--quick|--super-quick]
 # Called by: make run, make run-static, make run-quick, etc.
 set -e
+ORIGINAL_ARGS="$*"   # recorded in metadata.json before option parsing consumes them
 
 ulimit -n 100000
 # Prefer venv; fall back to system python3 if venv missing or not executable
@@ -130,6 +131,9 @@ quick_concurrency_clients=(100)
 quick_concurrency_size=8
 quick_payload_clients=5
 quick_payload_sizes=(8)
+
+# Pause between WebSocket bursts (also concurrency and payload tests); WS_BURST_INTERVAL_SECONDS in a config
+WS_BURST_INTERVAL=0.5
 
 # Concurrency parameters (balanced)
 concurrency_clients=(100 1000 5000)
@@ -434,9 +438,25 @@ clean_repo() {
   echo "Repository is now clean."
 }
 
+# --resume DIR: continue an unfinished measurement in its own folder, with its own saved
+# config, original arguments and shuffle seed; measurements listed in progress.txt are skipped.
+RESUME_DIR=""
+for ((_i = 1; _i <= $#; _i++)); do
+    if [ "${!_i}" = "--resume" ]; then _j=$((_i + 1)); RESUME_DIR="${!_j:-}"; fi
+done
+if [ -n "$RESUME_DIR" ]; then
+    RESUME_DIR="${RESUME_DIR%/}"
+    eval "$("$PYTHON_PATH" "$REPO_ROOT/tools/run_metadata.py" resume-info "$RESUME_DIR")"
+    if [ -n "$RESUME_PROBLEMS" ]; then
+        echo "[ERROR] Cannot resume $RESUME_DIR: $RESUME_PROBLEMS"
+        exit 1
+    fi
+    ORIGINAL_ARGS="$*"
+fi
+
 RESULTS_PARENT_DIR="results"
 TIMESTAMP=$(date +"%Y-%m-%d_%H%M%S")
-RESULTS_DIR="$RESULTS_PARENT_DIR/$TIMESTAMP"
+RESULTS_DIR="${RESUME_DIR:-$RESULTS_PARENT_DIR/$TIMESTAMP}"
 mkdir -p "$RESULTS_DIR/static" "$RESULTS_DIR/dynamic" "$RESULTS_DIR/websocket" logs
 
 LOG_FILE="logs/run_${TIMESTAMP}.log"
@@ -454,6 +474,13 @@ while [[ $# -gt 0 ]]; do
     elif [[ "$arg" == "--super-quick" ]]; then
         SUPER_QUICK_BENCH=1
         shift
+    elif [[ "$arg" == "--config" ]]; then
+        if [[ -z "${2:-}" ]]; then
+            echo -e "${RED}[ERROR]${NC} --config requires a file argument"
+            exit 1
+        fi
+        CONFIG_FILE="$2"
+        shift 2
     elif [[ "$arg" == "--bench" ]]; then
         if [[ -z "${2:-}" ]]; then
             echo -e "${RED}[ERROR]${NC} --bench requires a path argument"
@@ -474,6 +501,43 @@ while [[ $# -gt 0 ]]; do
     fi
 done
 set -- "${args[@]}"
+
+# Benchmark configuration (--config FILE). Without a config the run behaves as before:
+# one pass, no rest between measurements, machine settings left unchanged.
+if [ -n "${CONFIG_FILE:-}" ]; then
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${RED}[ERROR]${NC} Config file not found: $CONFIG_FILE"
+        exit 1
+    fi
+    cfg_out=$("$PYTHON_PATH" ./tools/bench_config.py "$CONFIG_FILE") || exit 1
+    eval "$cfg_out"
+    if [ "$CFG_HTTP_MAX_WORKERS" = "system" ]; then HTTP_MAX_WORKERS=""; else HTTP_MAX_WORKERS="$CFG_HTTP_MAX_WORKERS"; fi
+    export MEASURE_SCAPH_STEP_MS="$CFG_SCAPH_STEP_MS"
+    # Workloads of full runs (defaults equal the built-in lists)
+    read -r -a full_http_requests <<< "$CFG_HTTP_REQUESTS"
+    read -r -a full_ws_burst_clients <<< "$CFG_WS_BURST_CLIENTS"
+    read -r -a full_ws_burst_sizes <<< "$CFG_WS_BURST_SIZES_KB"
+    read -r -a full_ws_burst_bursts <<< "$CFG_WS_BURST_BURSTS"
+    full_ws_burst_intervals=("$CFG_WS_BURST_INTERVAL_SECONDS")
+    quick_ws_burst_intervals=("$CFG_WS_BURST_INTERVAL_SECONDS")
+    WS_BURST_INTERVAL="$CFG_WS_BURST_INTERVAL_SECONDS"
+    read -r -a full_ws_stream_clients <<< "$CFG_WS_STREAM_CLIENTS"
+    read -r -a full_ws_stream_sizes <<< "$CFG_WS_STREAM_SIZES_KB"
+    read -r -a full_ws_stream_rates <<< "$CFG_WS_STREAM_RATE_PER_SECOND"
+    read -r -a full_ws_stream_durations <<< "$CFG_WS_STREAM_DURATION_SECONDS"
+    read -r -a concurrency_clients <<< "$CFG_WS_CONCURRENCY_CLIENTS"
+    concurrency_size="$CFG_WS_CONCURRENCY_SIZE_KB"
+    payload_clients="$CFG_WS_PAYLOAD_CLIENTS"
+    read -r -a payload_sizes <<< "$CFG_WS_PAYLOAD_SIZES_KB"
+    # Raw Scaphandre logs go into this measurement's own folder; keep or delete after parsing
+    export MEASURE_RAW_DIR="$RESULTS_DIR/raw"
+    export MEASURE_RAW_DATA="$CFG_RAW_DATA"
+    [ -n "$RESUME_DIR" ] && [ -n "$RESUME_SEED" ] && CFG_SHUFFLE_SEED="$RESUME_SEED"
+else
+    CFG_REPEATS=1; CFG_SHUFFLE=0; CFG_SHUFFLE_SEED=""; CFG_SETTLE_SECONDS=0; CFG_FAILURES_STOP_AFTER=0
+    CFG_ENV_GOVERNOR=unchanged; CFG_ENV_TURBO=unchanged; CFG_ENV_STOP_CONTAINERS=0; CFG_ENV_KEEP_CONTAINERS=""
+    CFG_HTTP_CONNECTION=reuse
+fi
 
 # Help/short-info check after option parsing (supports e.g. --bench PATH --help)
 case "${1:-}" in
@@ -600,7 +664,7 @@ run_websocket_tests() {
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
         print_section "WebSocket Burst Test (Super Quick)"
         print_bench_progress "${image} | super-quick BURST | clients=${quick_ws_burst_clients[0]} size_kb=${quick_ws_burst_sizes[0]}"
-        "$PYTHON_PATH" ./tools/measure_websocket.py \
+        bench_measure ./tools/measure_websocket.py \
             --server_image "$image" \
             --pattern burst \
             --mode echo \
@@ -613,7 +677,7 @@ run_websocket_tests() {
         print_csv_summary "$RESULTS_DIR/websocket/${image}_burst.csv"
         print_section "WebSocket Stream Test (Super Quick)"
         print_bench_progress "${image} | super-quick STREAM | clients=${quick_ws_stream_clients[0]} size_kb=${quick_ws_stream_sizes[0]}"
-        "$PYTHON_PATH" ./tools/measure_websocket.py \
+        bench_measure ./tools/measure_websocket.py \
             --server_image "$image" \
             --pattern stream \
             --mode echo \
@@ -645,7 +709,7 @@ run_websocket_tests() {
                     for interval in "${burst_intervals[@]}"; do
                         bn=$((bn + 1))
                         print_bench_progress "${image} | BURST ${bn}/${bt} | clients=$clients size_kb=$size_kb bursts=$bursts interval=${interval}s"
-                        "$PYTHON_PATH" ./tools/measure_websocket.py \
+                        bench_measure ./tools/measure_websocket.py \
                             --server_image "$image" \
                             --pattern burst \
                             --mode echo \
@@ -667,7 +731,7 @@ run_websocket_tests() {
                     for duration in "${stream_durations[@]}"; do
                         sn=$((sn + 1))
                         print_bench_progress "${image} | STREAM ${sn}/${st} | clients=$clients size_kb=$size_kb rate=$rate duration=${duration}s"
-                        "$PYTHON_PATH" ./tools/measure_websocket.py \
+                        bench_measure ./tools/measure_websocket.py \
                             --server_image "$image" \
                             --pattern stream \
                             --mode echo \
@@ -687,7 +751,7 @@ run_websocket_tests() {
 # Helper to print a short summary from the last line of a CSV file
 print_csv_summary() {
     local csv_file="$1"
-    [ -f "$csv_file" ] || return
+    [ -f "$csv_file" ] || return 0
     local header last_row
     header=$(head -1 "$csv_file")
     last_row=$(tail -1 "$csv_file")
@@ -732,14 +796,14 @@ run_concurrency() {
         print_section "WebSocket Concurrency (Super Quick)"
         local csv_file="$RESULTS_DIR/websocket/${image}_concurrency.csv"
         print_bench_progress "${image} | super-quick concurrency | clients=${quick_concurrency_clients[0]} size_kb=$quick_concurrency_size"
-        "$PYTHON_PATH" ./tools/measure_websocket.py \
+        bench_measure ./tools/measure_websocket.py \
             --server_image "$image" \
             --pattern burst \
             --mode echo \
             --clients ${quick_concurrency_clients[0]} \
             --size_kb $quick_concurrency_size \
             --bursts 1 \
-            --interval 0.5 \
+            --interval "$WS_BURST_INTERVAL" \
             --output_csv "$csv_file" \
             --measurement_type "concurrency_${quick_concurrency_clients[0]}_${quick_concurrency_size}"
         print_csv_summary "$csv_file"
@@ -754,14 +818,14 @@ run_concurrency() {
         for clients in "${concurrency_clients[@]}"; do
             local csv_file="$RESULTS_DIR/websocket/${image}_concurrency.csv"
             print_bench_progress "${image} | concurrency ${idx}/${ntests} | clients=$clients size_kb=$concurrency_size"
-            "$PYTHON_PATH" ./tools/measure_websocket.py \
+            bench_measure ./tools/measure_websocket.py \
                 --server_image "$image" \
                 --pattern burst \
                 --mode echo \
                 --clients $clients \
                 --size_kb $concurrency_size \
                 --bursts 3 \
-                --interval 0.5 \
+                --interval "$WS_BURST_INTERVAL" \
                 --output_csv "$csv_file" \
                 --measurement_type "concurrency_${clients}_${concurrency_size}"
             print_csv_summary "$csv_file"
@@ -779,14 +843,14 @@ run_payload() {
         print_section "WebSocket Payload (Super Quick)"
         local csv_file="$RESULTS_DIR/websocket/${image}_payload.csv"
         print_bench_progress "${image} | super-quick payload | clients=$quick_payload_clients size_kb=${quick_payload_sizes[0]}"
-        "$PYTHON_PATH" ./tools/measure_websocket.py \
+        bench_measure ./tools/measure_websocket.py \
             --server_image "$image" \
             --pattern burst \
             --mode echo \
             --clients $quick_payload_clients \
             --size_kb ${quick_payload_sizes[0]} \
             --bursts 1 \
-            --interval 0.5 \
+            --interval "$WS_BURST_INTERVAL" \
             --output_csv "$csv_file" \
             --measurement_type "payload_${quick_payload_clients}_${quick_payload_sizes[0]}"
         print_csv_summary "$csv_file"
@@ -801,14 +865,14 @@ run_payload() {
         for size_kb in "${payload_sizes[@]}"; do
             local csv_file="$RESULTS_DIR/websocket/${image}_payload.csv"
             print_bench_progress "${image} | payload ${idx}/${ntests} | clients=$payload_clients size_kb=$size_kb"
-            "$PYTHON_PATH" ./tools/measure_websocket.py \
+            bench_measure ./tools/measure_websocket.py \
                 --server_image "$image" \
                 --pattern burst \
                 --mode echo \
                 --clients $payload_clients \
                 --size_kb $size_kb \
                 --bursts 3 \
-                --interval 0.5 \
+                --interval "$WS_BURST_INTERVAL" \
                 --output_csv "$csv_file" \
                 --measurement_type "payload_${payload_clients}_${size_kb}"
             print_csv_summary "$csv_file"
@@ -845,12 +909,13 @@ run_docker_tests() {
         if [ -n "$HTTP_MAX_WORKERS" ]; then
             worker_arg=(--max_workers "$HTTP_MAX_WORKERS")
         fi
-        "$PYTHON_PATH" ./tools/measure_docker.py \
+        bench_measure ./tools/measure_docker.py \
             --server_image "$image" \
             --port_mapping "$port_mapping" \
             --num_requests "$num_requests" \
             --output_csv "$csv_file" \
             --measurement_type "$test_type" \
+            --connection "$CFG_HTTP_CONNECTION" \
             "${worker_arg[@]}"
         if [ "${BENCH_MEASURE_QUIET:-1}" = "0" ]; then
             print_csv_summary "$csv_file"
@@ -903,11 +968,246 @@ EOF
     fi
 }
 
+# ---- Repeats, rest and machine settings (from --config) ----
+BENCH_ENV_APPLIED=0
+BENCH_ENV_STATE=""
+BENCH_RESTING_TEMP=""
+BENCH_TEMP_REFERENCE=""
+BENCH_RESTING_CPU=""
+BENCH_CPU_REFERENCE=""
+BENCH_GATE_ARGS=()
+
+# Readiness gate before every run (only with --config): waits until the CPU is near its
+# temperature reference + margin, the machine is not busy and the CPU is not throttling, checked
+# every READY_CHECK_EVERY_SECONDS (see tools/readiness.py). The result goes into the
+# CSV row of the run ("Waited (s)", "Ready Check").
+bench_ready_gate() {
+    BENCH_GATE_ARGS=()
+    [ -n "${CONFIG_FILE:-}" ] || return 0
+    local result="$RESULTS_DIR/.ready.json" rc=0
+    "$PYTHON_PATH" ./tools/readiness.py wait --result "$result" \
+        --temp-reference "$BENCH_TEMP_REFERENCE" --temp-margin "$CFG_READY_TEMP_MARGIN_C" \
+        --cpu-reference "$BENCH_CPU_REFERENCE" --cpu-margin "$CFG_READY_CPU_BUSY_MARGIN_PERCENT" \
+        --no-throttling "$CFG_READY_NO_THROTTLING" \
+        --check-every "$CFG_READY_CHECK_EVERY_SECONDS" --consecutive "$CFG_READY_CONSECUTIVE_CHECKS" \
+        --min-wait "$CFG_READY_MIN_WAIT_SECONDS" --max-wait "$CFG_READY_MAX_WAIT_SECONDS" \
+        --on-timeout "$CFG_READY_ON_TIMEOUT" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        print_status "ERROR" "Machine not ready (READY_ON_TIMEOUT=$CFG_READY_ON_TIMEOUT); stopping the measurement."
+        exit 1
+    fi
+    local g
+    mapfile -t g < <("$PYTHON_PATH" -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+print(d["waited_s"]); print(d["ready_check"])' "$result")
+    rm -f "$result"
+    [ "${g[1]}" != "yes" ] && print_status "WARNING" "Measuring although not ready: ${g[1]}"
+    BENCH_GATE_ARGS=(--waited_s "${g[0]}" --ready_check "${g[1]}")
+}
+
+# Failed measurements: recorded in failures.csv, the campaign continues (see tools/measure_failure.py).
+BENCH_PASS=1
+BENCH_FAILED_IN_A_ROW=0
+BENCH_FAILURES=0
+
+bench_record_failure() {
+    local image=$1 reason=$2 measurement=$3
+    local f="$RESULTS_DIR/failures.csv"
+    [ -f "$f" ] || echo "Time (UTC),Pass,Container Name,Measurement,Reason" > "$f"
+    "$PYTHON_PATH" -c 'import csv, sys, datetime
+csv.writer(sys.stdout).writerow([datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")] + sys.argv[1:])' \
+        "$BENCH_PASS" "$image" "$measurement" "$reason" >> "$f"
+}
+
+bench_measure() {
+    # What this measurement is: pass + tool arguments (without the output path)
+    local measurement key
+    measurement=$(printf '%s ' "$@" | sed -E 's# --output_csv [^ ]+##; s#\./tools/##; s/ +$//')
+    key="pass $BENCH_PASS | $measurement"
+    if [ -f "$RESULTS_DIR/progress.txt" ] && grep -Fxq "$key" "$RESULTS_DIR/progress.txt"; then
+        print_status "INFO" "Already measured, skipping: $key"
+        return 0
+    fi
+    bench_ready_gate
+    local reason_file="$RESULTS_DIR/.failure_reason" rc=0
+    rm -f "$reason_file"
+    MEASURE_FAILURE_REASON_FILE="$reason_file" "$PYTHON_PATH" "$@" "${BENCH_GATE_ARGS[@]}" || rc=$?
+    case "$rc" in
+        0)
+            BENCH_FAILED_IN_A_ROW=0
+            [ -n "${CONFIG_FILE:-}" ] && echo "$key" >> "$RESULTS_DIR/progress.txt"
+            ;;
+        2)
+            print_status "ERROR" "Machine not ready before the load (READY_ON_TIMEOUT=stop); stopping."
+            exit 1
+            ;;
+        3)
+            print_status "ERROR" "The measurement setup is broken (see above); stopping."
+            exit 1
+            ;;
+        *)
+            # This measurement failed: record why, remove what is left, continue with the next one.
+            local image="" a prev="" reason
+            for a in "$@"; do [ "$prev" = "--server_image" ] && image="$a"; prev="$a"; done
+            reason=$(cat "$reason_file" 2>/dev/null || true)
+            [ -n "$reason" ] || reason="tool exited with code $rc (see log)"
+            rm -f "$reason_file"
+            bench_record_failure "$image" "$reason" "$measurement"
+            [ -n "$image" ] && docker rm -f "$image" >/dev/null 2>&1 || true
+            BENCH_FAILURES=$((BENCH_FAILURES + 1))
+            BENCH_FAILED_IN_A_ROW=$((BENCH_FAILED_IN_A_ROW + 1))
+            print_status "WARNING" "Measurement failed ($reason); recorded in failures.csv, continuing"
+            if [ "$CFG_FAILURES_STOP_AFTER" -gt 0 ] && [ "$BENCH_FAILED_IN_A_ROW" -ge "$CFG_FAILURES_STOP_AFTER" ]; then
+                print_status "ERROR" "$BENCH_FAILED_IN_A_ROW measurements failed in a row (FAILURES_STOP_AFTER); stopping."
+                exit 1
+            fi
+            ;;
+    esac
+    return 0
+}
+
+bench_report_failures() {
+    [ "$BENCH_FAILURES" -gt 0 ] || return 0
+    print_status "WARNING" "$BENCH_FAILURES measurement(s) failed; see $RESULTS_DIR/failures.csv"
+}
+
+# Deterministic shuffle of the arguments for one pass (seed + pass number).
+bench_shuffle() {
+    local pass=$1
+    shift
+    [ $# -eq 0 ] && return 0
+    "$PYTHON_PATH" -c 'import random, sys
+items = sys.argv[3:]
+random.Random(f"{sys.argv[1]}-{sys.argv[2]}").shuffle(items)
+print("\n".join(items))' "$CFG_SHUFFLE_SEED" "$pass" "$@"
+}
+
+bench_apply_environment() {
+    if [ "$CFG_ENV_GOVERNOR" = "unchanged" ] && [ "$CFG_ENV_TURBO" = "unchanged" ] && [ "$CFG_ENV_STOP_CONTAINERS" = "0" ]; then
+        print_status "INFO" "Machine settings: left unchanged"
+        return 0
+    fi
+    local stop_arg=()
+    [ "$CFG_ENV_STOP_CONTAINERS" = "0" ] && stop_arg=(--no-stop-containers)
+    BENCH_ENV_STATE="$RESULTS_DIR/.environment_state.json"
+    print_status "INFO" "Machine settings: governor=$CFG_ENV_GOVERNOR turbo=$CFG_ENV_TURBO stop_containers=$CFG_ENV_STOP_CONTAINERS"
+    sudo "$PYTHON_PATH" ./tools/prepare_environment.py apply --governor "$CFG_ENV_GOVERNOR" --turbo "$CFG_ENV_TURBO" \
+        --keep "$CFG_ENV_KEEP_CONTAINERS" --state "$BENCH_ENV_STATE" "${stop_arg[@]}"
+    BENCH_ENV_APPLIED=1
+    if ! "$PYTHON_PATH" ./tools/prepare_environment.py verify --governor "$CFG_ENV_GOVERNOR" --turbo "$CFG_ENV_TURBO" \
+            --keep "$CFG_ENV_KEEP_CONTAINERS" "${stop_arg[@]}"; then
+        print_status "ERROR" "Machine settings could not be applied as configured; not measuring."
+        exit 1
+    fi
+}
+
+bench_restore_environment() {
+    [ "$BENCH_ENV_APPLIED" -eq 1 ] || return 0
+    BENCH_ENV_APPLIED=0
+    print_status "INFO" "Restoring machine settings ..."
+    sudo -n "$PYTHON_PATH" ./tools/prepare_environment.py restore --state "$BENCH_ENV_STATE" \
+        || print_status "WARNING" "Restore failed; run: sudo python3 tools/prepare_environment.py restore --state $BENCH_ENV_STATE"
+}
+
+bench_on_exit() {
+    bench_restore_environment
+    cleanup_sudo_keepalive
+}
+
+# Statistics per configuration: <csv>_summary.csv per server, and one summary.csv per family
+# folder (static, dynamic, websocket) with all servers in one table.
+bench_write_summaries() {
+    [ "$CFG_REPEATS" -gt 1 ] || return 0
+    local csv family files
+    while IFS= read -r csv; do
+        "$PYTHON_PATH" ./tools/aggregate_repeats.py "$csv" >/dev/null \
+            || print_status "WARNING" "Could not summarise $csv"
+    done < <(bench_measurement_csvs "$RESULTS_DIR")
+    for family in "$RESULTS_DIR"/static "$RESULTS_DIR"/dynamic "$RESULTS_DIR"/websocket; do
+        mapfile -t files < <(bench_measurement_csvs "$family")
+        [ ${#files[@]} -gt 0 ] || continue
+        "$PYTHON_PATH" ./tools/aggregate_repeats.py "${files[@]}" --output "$family/summary.csv" >/dev/null \
+            || print_status "WARNING" "Could not summarise $family"
+    done
+    print_status "INFO" "Statistics per configuration: <family>/summary.csv (all servers) and <server>_summary.csv"
+}
+
+# The measurement CSVs in a folder (not summaries, failures or raw data)
+bench_measurement_csvs() {
+    find "$1" -path "$1/raw" -prune -o -name '*.csv' ! -name '*_summary.csv' ! -name 'summary.csv' \
+        ! -name 'failures.csv' -print 2>/dev/null | sort
+}
+
 main() {
     export BENCH_MEASURE_QUIET
     # Optional: concurrency/payload modes set this so the shared footer SUCCESS line matches the suite.
     BENCH_SUCCESS_TAIL=""
     start_sudo_keepalive
+    # Restore machine settings on any exit (normal end, error, Ctrl-C), then stop the sudo keepalive.
+    trap bench_on_exit EXIT
+    trap 'exit 130' INT TERM
+    bench_apply_environment
+    if [ -n "${CONFIG_FILE:-}" ]; then
+        if [ "$CFG_SETTLE_SECONDS" -gt 0 ]; then
+            print_status "INFO" "Letting the machine settle for ${CFG_SETTLE_SECONDS}s ..."
+            sleep "$CFG_SETTLE_SECONDS"
+        fi
+        print_status "INFO" "Measuring the resting state for ${CFG_RESTING_MEASURE_SECONDS}s ..."
+        read -r BENCH_RESTING_TEMP BENCH_RESTING_CPU < <("$PYTHON_PATH" ./tools/readiness.py baseline --seconds "$CFG_RESTING_MEASURE_SECONDS")
+        # References the readiness checks compare to: fixed if configured, else the measured resting values
+        BENCH_TEMP_REFERENCE="${CFG_READY_TEMP_REFERENCE_C:-$BENCH_RESTING_TEMP}"
+        BENCH_CPU_REFERENCE="${CFG_READY_CPU_BUSY_REFERENCE_PERCENT:-$BENCH_RESTING_CPU}"
+        if [ -z "$CFG_READY_CPU_BUSY_MARGIN_PERCENT" ]; then
+            print_status "INFO" "Resting CPU use: ${BENCH_RESTING_CPU:-unknown}% (CPU check off)"
+        else
+            print_status "INFO" "Resting CPU use: ${BENCH_RESTING_CPU:-unknown}%; ready when CPU use <= ${BENCH_CPU_REFERENCE:-0} + ${CFG_READY_CPU_BUSY_MARGIN_PERCENT}%"
+        fi
+        if [ -n "$BENCH_RESTING_CPU" ] && awk -v c="$BENCH_RESTING_CPU" 'BEGIN{exit !(c > 20)}'; then
+            print_status "WARNING" "The machine is busy at rest (${BENCH_RESTING_CPU}% CPU); other programs may disturb the measurement"
+        fi
+        if [ -z "$CFG_READY_TEMP_MARGIN_C" ]; then
+            print_status "INFO" "Resting CPU temperature: ${BENCH_RESTING_TEMP:-unknown} C (temperature check off)"
+        else
+            print_status "INFO" "Resting CPU temperature: ${BENCH_RESTING_TEMP:-unknown} C; ready when CPU <= ${BENCH_TEMP_REFERENCE:-?} + ${CFG_READY_TEMP_MARGIN_C} C"
+        fi
+        # Settings for readiness check 2, done by the measurement tools right before the load
+        export MEASURE_READY_TEMP_REFERENCE_C="$BENCH_TEMP_REFERENCE"
+        export MEASURE_READY_TEMP_MARGIN_C="$CFG_READY_TEMP_MARGIN_C"
+        export MEASURE_READY_NO_THROTTLING="$CFG_READY_NO_THROTTLING"
+        export MEASURE_READY_CHECK_EVERY_SECONDS="$CFG_READY_CHECK_EVERY_SECONDS"
+        export MEASURE_READY_CONSECUTIVE_CHECKS="$CFG_READY_CONSECUTIVE_CHECKS"
+        export MEASURE_READY_MAX_WAIT_SECONDS="$CFG_READY_MAX_WAIT_SECONDS"
+        export MEASURE_READY_ON_TIMEOUT="$CFG_READY_ON_TIMEOUT"
+    fi
+    # Provenance of this measurement, written once to $RESULTS_DIR/metadata.json
+    local meta_phase=start
+    if [ -n "$RESUME_DIR" ]; then
+        meta_phase=resume
+        print_status "INFO" "Resuming $RESUME_DIR: measurements in progress.txt are skipped"
+        echo "resumed: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$RESULTS_DIR/schedule.txt"
+    elif [ -n "${CONFIG_FILE:-}" ]; then
+        cp "$CONFIG_FILE" "$RESULTS_DIR/bench.config"
+        # Every key with the value actually used (defaults and the drawn seed included)
+        { echo "# Values used by this measurement (defaults filled in), from $CONFIG_FILE"
+          printf '%s\n' "$cfg_out" | sed 's/^CFG_//'; } > "$RESULTS_DIR/bench.config.resolved"
+    fi
+    "$PYTHON_PATH" ./tools/run_metadata.py "$meta_phase" "$RESULTS_DIR" \
+        --set quick="$QUICK_BENCH" --set super_quick="$SUPER_QUICK_BENCH" \
+        --set http_max_workers="${HTTP_MAX_WORKERS:-System default}" \
+        --set benchmarks_dir="${BENCHMARKS_DIR:-}" --set arguments="$ORIGINAL_ARGS" \
+        --set config_file="${CONFIG_FILE:-}" --set repeats="$CFG_REPEATS" --set shuffle="$CFG_SHUFFLE" \
+        --set shuffle_seed="$CFG_SHUFFLE_SEED" --set settle_s="$CFG_SETTLE_SECONDS" \
+        --set resting_measure_s="${CFG_RESTING_MEASURE_SECONDS:-}" \
+        --set resting_temp_c="$BENCH_RESTING_TEMP" --set ready_temp_reference_c="$BENCH_TEMP_REFERENCE" \
+        --set ready_check_every_s="${CFG_READY_CHECK_EVERY_SECONDS:-}" --set ready_temp_margin_c="${CFG_READY_TEMP_MARGIN_C:-}" \
+        --set resting_cpu_busy_percent="$BENCH_RESTING_CPU" --set ready_cpu_busy_reference_percent="$BENCH_CPU_REFERENCE" \
+        --set ready_cpu_busy_margin_percent="${CFG_READY_CPU_BUSY_MARGIN_PERCENT:-}" --set ready_no_throttling="${CFG_READY_NO_THROTTLING:-}" \
+        --set ready_consecutive_checks="${CFG_READY_CONSECUTIVE_CHECKS:-}" --set ready_min_wait_s="${CFG_READY_MIN_WAIT_SECONDS:-}" \
+        --set ready_max_wait_s="${CFG_READY_MAX_WAIT_SECONDS:-}" --set ready_on_timeout="${CFG_READY_ON_TIMEOUT:-}" \
+        --set env_governor="$CFG_ENV_GOVERNOR" \
+        --set env_turbo="$CFG_ENV_TURBO" --set env_stop_containers="$CFG_ENV_STOP_CONTAINERS" \
+        --set http_connection="$CFG_HTTP_CONNECTION" --set failures_stop_after="$CFG_FAILURES_STOP_AFTER" \
+        || print_status "WARNING" "Could not write $RESULTS_DIR/metadata.json"
     print_status "INFO" "Starting benchmarks at $(date)"
     print_status "INFO" "Results will be saved to: $RESULTS_DIR"
     if [ -n "$HTTP_MAX_WORKERS" ]; then
@@ -916,6 +1216,39 @@ main() {
         print_status "INFO" "HTTP client max workers: System default (column \"HTTP Max Workers\" in static/dynamic CSVs; set HTTP_MAX_WORKERS=100 for reproducible runs)"
     fi
     bench_init_run_plan
+    BENCH_TOTAL_STEPS=$(( BENCH_TOTAL_STEPS * CFG_REPEATS ))
+    if [ "$CFG_REPEATS" -gt 1 ]; then
+        print_status "INFO" "Repeats: $CFG_REPEATS passes (shuffle=$CFG_SHUFFLE seed=$CFG_SHUFFLE_SEED), $BENCH_TOTAL_STEPS measurements in total"
+    fi
+    local base_static=("${BENCH_PLAN_STATIC[@]}")
+    local base_dynamic=("${BENCH_PLAN_DYNAMIC[@]}")
+    local base_websocket=("${BENCH_PLAN_WEBSOCKET[@]}")
+    local base_target_type="$TARGET_TYPE"
+    local pass
+    for ((pass = 1; pass <= CFG_REPEATS; pass++)); do
+        BENCH_PASS=$pass
+        TARGET_TYPE="$base_target_type"
+        if [ "$CFG_SHUFFLE" = "1" ]; then
+            mapfile -t BENCH_PLAN_STATIC < <(bench_shuffle "$pass" "${base_static[@]}")
+            mapfile -t BENCH_PLAN_DYNAMIC < <(bench_shuffle "$pass" "${base_dynamic[@]}")
+            mapfile -t BENCH_PLAN_WEBSOCKET < <(bench_shuffle "$pass" "${base_websocket[@]}")
+        fi
+        # The order of every pass, so a drift over time can be checked afterwards.
+        if [ -n "${CONFIG_FILE:-}" ]; then
+            local sched="$RESULTS_DIR/schedule.txt"
+            grep -q "^seed: " "$sched" 2>/dev/null || echo "seed: $CFG_SHUFFLE_SEED (shuffle=$CFG_SHUFFLE)" >> "$sched"
+            local order=("${BENCH_PLAN_STATIC[@]}" "${BENCH_PLAN_DYNAMIC[@]}" "${BENCH_PLAN_WEBSOCKET[@]}")
+            # Written once per pass, also when a resumed measurement reaches a pass for the first time
+            grep -q "^pass $pass: " "$sched" 2>/dev/null || echo "pass $pass: ${order[*]}" >> "$sched"
+        fi
+        [ "$CFG_REPEATS" -gt 1 ] && print_section "Repeat $pass of $CFG_REPEATS"
+        bench_run_pass
+    done
+    bench_finish_main
+}
+
+# One pass over every planned target (the measurement loop of a single repeat).
+bench_run_pass() {
     local _si=0
     if [[ $RUN_ALL -eq 1 ]]; then
         print_status "INFO" "Running all benchmarks..."
@@ -1131,6 +1464,9 @@ main() {
                 ;;
         esac
     fi
+}
+
+bench_finish_main() {
     printf "\n"
     if [ "${BENCH_TOTAL_STEPS:-0}" -gt 0 ]; then
         print_status "INFO" "Measurement steps finished: ${BENCH_STEP}/${BENCH_TOTAL_STEPS} (total elapsed $(bench_elapsed_human))"
@@ -1145,3 +1481,7 @@ main() {
 
 main "$@"
 print_run_summary
+bench_report_failures
+bench_write_summaries
+"$PYTHON_PATH" ./tools/run_metadata.py end "$RESULTS_DIR" \
+    || echo "[WARN] Could not complete $RESULTS_DIR/metadata.json"

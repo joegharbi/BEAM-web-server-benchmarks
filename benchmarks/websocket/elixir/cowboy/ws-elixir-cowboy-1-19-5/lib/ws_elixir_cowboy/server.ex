@@ -25,7 +25,7 @@ defmodule WsElixirCowboy.Server do
     }
     proto_opts = %{
       env: %{dispatch: dispatch},
-      max_frame_size: 64 * 1024 * 1024
+      max_frame_size: 128 * 1024 * 1024
     }
 
     case :cowboy.start_clear(:http, trans_opts, proto_opts) do

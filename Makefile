@@ -7,6 +7,8 @@
 VENV_NAME ?= srv
 VENV_PATH = $(VENV_NAME)/bin/activate
 BENCH_DIR ?= benchmarks
+# Optional benchmark config: make run CONFIG=bench.config (see bench.config.example)
+CONFIG_ARG = $(if $(CONFIG),--config $(CONFIG),)
 
 .PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-env clean-nuclear build run setup graph validate check-health build-test-run run-single run-single-super-quick clean-all clean-build-run clean-all-build-run test
 
@@ -126,13 +128,20 @@ run: check-env ## Run all benchmarks (log: run plan, [PROGRESS] lines, tail -f l
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh $(CONFIG_ARG)
+
+resume: check-env ## Continue an unfinished measurement: make resume RESUME=results/<folder>
+	@if [ -z "$(RESUME)" ]; then echo "Usage: make resume RESUME=results/<folder>"; exit 1; fi
+	@for v in ./*/bin/activate; do \
+		if [ -f "$$v" ]; then . "$$v"; break; fi; \
+	done; \
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --resume $(RESUME)
 
 run-single: check-env ## Run a single server (e.g. make run-single SERVER=dy-erlang-pure-27)
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --single $(SERVER)
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --single $(SERVER) $(CONFIG_ARG)
 
 # Explicit rule (not run-%): one container, one HTTP/WebSocket level preset (--super-quick).
 run-single-super-quick: check-env ## Quick smoke test: one server, super-quick (requires SERVER=image)
@@ -140,7 +149,7 @@ run-single-super-quick: check-env ## Quick smoke test: one server, super-quick (
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --super-quick --single $(SERVER)
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --super-quick --single $(SERVER) $(CONFIG_ARG)
 
 # Pattern rule: make run-static, run-dynamic, run-websocket, run-quick, run-grpc, etc.
 # Adding benchmarks/<type>/ + measure script gives you make run-<type> automatically.
@@ -148,7 +157,7 @@ run-%: check-env
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --$*
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --$* $(CONFIG_ARG)
 
 check-health: check-env ## Health check only: run health check on all already-built containers (no build). Log in logs/test_*.log.
 	@for v in ./*/bin/activate; do \
@@ -288,6 +297,8 @@ help:  ## Show this help message
 	@printf "${CYAN}Examples:${NC}\n"
 	@printf "  %-22s %s\n" "example" "make run BENCH_DIR=benchmarks"
 	@printf "  %-22s %s\n" "example" "make run HTTP_MAX_WORKERS=70  # default is 100; HTTP only"
+	@printf "  %-22s %s\n" "example" "make run CONFIG=bench.config  # repeats, rest, machine settings (see bench.config.example)"
+	@printf "  %-22s %s\n" "example" "make resume RESUME=results/<folder>  # continue an interrupted measurement"
 	@printf "  %-22s %s\n" "example" "make run HTTP_MAX_WORKERS=system  # override to Python default (None)"
 	@printf "  %-22s %s\n" "example" "make run BENCH_MEASURE_QUIET=0  # verbose logs"
 	@printf "  %-22s %s\n" "example" "make run BENCH_MEASURE_QUIET=1 MEASURE_HEARTBEAT_SEC=60  # compact mode for both"

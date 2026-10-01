@@ -1,0 +1,824 @@
+"""Unit tests for the P0 changes (energy window, connection mode, CSV and aggregator keys).
+
+Run from the repo root:  venv/bin/python -m unittest tests/test_changes.py -v
+Needs no sudo, Docker or Scaphandre.
+"""
+import csv
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+
+import scaphandre_energy as se  # noqa: E402
+
+
+def entry(t, host_w, consumers):
+    return {"host": {"consumption": host_w * 1e6, "timestamp": t, "components": {}},
+            "consumers": consumers, "sockets": []}
+
+
+def consumer(pid, watts, name=None):
+    return {"pid": pid, "exe": "x", "cmdline": "x", "timestamp": 0,
+            "consumption": watts * 1e6, "container": {"name": name} if name else None}
+
+
+def write_json(entries):
+    fd, path = tempfile.mkstemp(suffix=".json")
+    with os.fdopen(fd, "w") as fh:
+        json.dump(entries, fh)
+    return path
+
+
+class IntegrateWindow(unittest.TestCase):
+    def test_constant_power(self):
+        s = [(i * 0.3, 10.0, 20.0) for i in range(40)]
+        c, h, n, cov = se.integrate_window(s, 2.0, 7.0)
+        self.assertAlmostEqual(c, 50.0, places=6)
+        self.assertAlmostEqual(h, 100.0, places=6)
+        self.assertAlmostEqual(cov, 1.0, places=6)
+
+    def test_samples_outside_window_ignored(self):
+        # 100 W before and after the window, 5 W inside: only the 5 W counts.
+        s = [(t, 100.0 if (t <= 2 or t > 6) else 5.0, 0.0) for t in range(0, 10)]
+        c, *_ = se.integrate_window(s, 2.0, 6.0)
+        self.assertAlmostEqual(c, 20.0)
+
+    def test_zero_samples_count_as_zero(self):
+        # Half the window at 0 W, half at 8 W: mean power must be 4 W, not 8 W.
+        s = [(t, 0.0 if t <= 5 else 8.0, 0.0) for t in range(0, 11)]
+        c, *_ = se.integrate_window(s, 0.0, 10.0)
+        self.assertAlmostEqual(c / 10.0, 4.0)
+
+    def test_partial_coverage_reported(self):
+        c, h, n, cov = se.integrate_window([(0, 1, 1), (1, 1, 1)], 0.5, 2.0)
+        self.assertAlmostEqual(cov, 1 / 3, places=6)
+
+    def test_empty_or_bad_window(self):
+        self.assertEqual(se.integrate_window([], 0, 1), (0.0, 0.0, 0, 0.0))
+        self.assertEqual(se.integrate_window([(0, 1, 1), (1, 1, 1)], 1, 1), (0.0, 0.0, 0, 0.0))
+
+
+class LoadSeries(unittest.TestCase):
+    def test_threads_are_summed_not_averaged(self):
+        # Six threads of one container at 1 W each: the container draws 6 W.
+        # The old code averaged the entries and reported 1 W.
+        threads = [consumer(100 + i, 1.0, "srv") for i in range(6)]
+        path = write_json([entry(0, 0, [])] + [entry(t, 20, threads) for t in range(1, 12)])
+        r = se.compute_window_energy(path, "srv", 1.0, 11.0)
+        self.assertAlmostEqual(r["avg_power_w"], 6.0)
+        self.assertAlmostEqual(r["energy_j"], 60.0)
+        self.assertAlmostEqual(r["host_energy_j"], 200.0)
+
+    def test_other_containers_ignored(self):
+        cs = [consumer(1, 3.0, "srv"), consumer(2, 50.0, "other"), consumer(3, 7.0)]
+        path = write_json([entry(0, 0, [])] + [entry(t, 20, cs) for t in range(1, 5)])
+        r = se.compute_window_energy(path, "srv", 1.0, 4.0)
+        self.assertAlmostEqual(r["avg_power_w"], 3.0)
+
+    def test_first_empty_entry_skipped(self):
+        path = write_json([entry(0, 0, []), entry(1, 20, [consumer(1, 2.0, "srv")])])
+        series = se.load_power_series(path, "srv")
+        self.assertEqual(series[0][0], 1)
+
+    def test_cgroup_fallback(self):
+        # Scaphandre reports container=null: attribute by /proc/<pid>/cgroup.
+        # Use this test's own process and a substring of its own cgroup path.
+        me = os.getpid()
+        with open(f"/proc/{me}/cgroup") as fh:
+            cg = fh.read().strip().split("::")[-1]
+        token = cg.strip("/").split("/")[-1]
+        cs = [consumer(me, 4.0), consumer(999999, 9.0)]  # second pid does not exist
+        path = write_json([entry(0, 0, [])] + [entry(t, 20, cs) for t in range(1, 5)])
+        r = se.compute_window_energy(path, "srv", 1.0, 4.0, container_id=token)
+        self.assertAlmostEqual(r["avg_power_w"], 4.0)
+
+    def test_no_samples_returns_zero(self):
+        path = write_json([entry(0, 0, []), entry(1, 20, [])])
+        r = se.compute_window_energy(path, "srv", 0.0, 1.0)
+        self.assertEqual(r["energy_j"], 0.0)
+
+
+class ScaphandreArgs(unittest.TestCase):
+    def tearDown(self):
+        os.environ.pop("MEASURE_SCAPH_STEP_MS", None)
+        os.environ.pop("MEASURE_SCAPH_MAX_TOP", None)
+
+    def arg(self, a, name):
+        return a[a.index(name) + 1]
+
+    def test_default(self):
+        a = se.scaphandre_json_args("o.json")
+        self.assertEqual((self.arg(a, "--step"), self.arg(a, "--step-nano")), ("0", "500000000"))
+        self.assertEqual(self.arg(a, "--max-top-consumers"), "50")
+        self.assertEqual(self.arg(a, "-f"), "o.json")
+
+    def test_override_above_one_second(self):
+        os.environ["MEASURE_SCAPH_STEP_MS"] = "1500"
+        a = se.scaphandre_json_args("o.json")
+        self.assertEqual((self.arg(a, "--step"), self.arg(a, "--step-nano")), ("1", "500000000"))
+
+    def test_bad_values_fall_back(self):
+        os.environ["MEASURE_SCAPH_STEP_MS"] = "abc"
+        os.environ["MEASURE_SCAPH_MAX_TOP"] = "xyz"
+        a = se.scaphandre_json_args("o.json")
+        self.assertEqual(self.arg(a, "--step-nano"), "500000000")
+        self.assertEqual(self.arg(a, "--max-top-consumers"), "50")
+
+
+class ConnectionMode(unittest.TestCase):
+    def test_reuse_keeps_one_session_per_thread(self):
+        import threading
+        import measure_docker as m
+        seen = []
+
+        class FakeSession:
+            def get(self, url, timeout):
+                seen.append((threading.get_ident(), id(self)))
+                return type("R", (), {"status_code": 200, "content": b""})()
+
+        orig = m.requests.Session
+        m.requests.Session = FakeSession
+        try:
+            m._thread_local.__dict__.clear()
+            for _ in range(3):
+                m._get("http://x/", "reuse")
+            t = threading.Thread(target=lambda: m._get("http://x/", "reuse"))
+            t.start()
+            t.join()
+        finally:
+            m.requests.Session = orig
+        main_ids = {s for tid, s in seen if tid == threading.get_ident()}
+        other_ids = {s for tid, s in seen if tid != threading.get_ident()}
+        self.assertEqual(len(main_ids), 1)      # same session reused within a thread
+        self.assertEqual(len(other_ids), 1)
+        self.assertNotEqual(main_ids, other_ids)  # a separate session per thread
+
+    def test_per_request_uses_plain_get(self):
+        import measure_docker as m
+        calls = []
+        orig = m.requests.get
+        m.requests.get = lambda url, timeout: calls.append(url) or type("R", (), {"status_code": 200})()
+        try:
+            m._get("http://x/", "per-request")
+        finally:
+            m.requests.get = orig
+        self.assertEqual(calls, ["http://x/"])
+
+
+class CsvMigration(unittest.TestCase):
+    def test_websocket_old_header_is_migrated(self):
+        import measure_websocket as mw
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        with os.fdopen(fd, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["A", "B"])
+            w.writerow(["1", "2"])
+        mw.append_csv_row(path, ["A", "B", "C"], ["3", "4", "5"])
+        with open(path, newline="") as fh:
+            rows = list(csv.reader(fh))
+        self.assertEqual(rows, [["A", "B", "C"], ["1", "2", ""], ["3", "4", "5"]])
+
+    def test_websocket_same_header_appends(self):
+        import measure_websocket as mw
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        mw.append_csv_row(path, ["A"], ["1"])
+        mw.append_csv_row(path, ["A"], ["2"])
+        with open(path, newline="") as fh:
+            self.assertEqual(list(csv.reader(fh)), [["A"], ["1"], ["2"]])
+
+
+class AggregatorKeys(unittest.TestCase):
+    def run_agg(self, header, rows):
+        d = tempfile.mkdtemp()
+        src = os.path.join(d, "in.csv")
+        with open(src, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(header)
+            w.writerows(rows)
+        subprocess.run([sys.executable, os.path.join(ROOT, "tools", "aggregate_repeats.py"), src],
+                       check=True, capture_output=True)
+        with open(os.path.join(d, "in_summary.csv"), newline="") as fh:
+            return list(csv.DictReader(fh))
+
+    def test_connection_mode_splits_groups(self):
+        h = ["Container Name", "Total Requests", "HTTP Connection Mode", "Total Energy (J)"]
+        out = self.run_agg(h, [["s", "100", "reuse", "10"], ["s", "100", "reuse", "12"],
+                               ["s", "100", "per-request", "30"]])
+        self.assertEqual(len(out), 2)
+        by = {r["HTTP Connection Mode"]: r for r in out}
+        self.assertEqual(by["reuse"]["Repeats"], "2")
+        self.assertAlmostEqual(float(by["reuse"]["Total Energy (J) mean"]), 11.0)
+
+    def test_interval_is_a_key_not_averaged(self):
+        h = ["Container Name", "Pattern", "Interval (s)", "Total Energy (J)"]
+        out = self.run_agg(h, [["s", "burst", "0", "5"], ["s", "burst", "0.5", "9"]])
+        self.assertEqual(len(out), 2)
+        self.assertNotIn("Interval (s) mean", out[0])
+
+
+class Provenance(unittest.TestCase):
+    """Provenance is written once per measurement to metadata.json, not per CSV row."""
+
+    def setUp(self):
+        import run_metadata
+        self.rm = run_metadata
+        self.dir = tempfile.mkdtemp()
+        self.meta = os.path.join(self.dir, "metadata.json")
+
+    def load(self):
+        with open(self.meta) as fh:
+            return json.load(fh)
+
+    def test_start_records_software_machine_settings_state(self):
+        self.rm.write_start(self.meta, {"quick": "1"})
+        m = self.load()
+        self.assertEqual(m["measurement"], os.path.basename(self.dir))
+        for k in ("framework_version", "scaphandre_version", "docker_version", "python_version",
+                  "os", "kernel", "cpu_model", "logical_cpus", "memory_gb"):
+            self.assertIn(k, m["software_and_machine"])
+        self.assertEqual(m["settings"]["quick"], "1")
+        self.assertIn("scaphandre_step_ms", m["settings"])
+        for k in ("time_utc", "cpu_governor", "turbo", "cpu_max_freq_mhz", "ac_power",
+                  "cpu_package_temp_c", "load1"):
+            self.assertIn(k, m["machine_state_start"])
+        self.assertNotIn("finished_at_utc", m)       # not finished yet
+
+    def test_end_adds_state_images_and_stability(self):
+        self.rm.write_start(self.meta, {})
+        c = os.path.join(self.dir, "static", "x.csv")
+        os.makedirs(os.path.dirname(c))
+        with open(c, "w", newline="") as fh:
+            csv.writer(fh).writerows([["Container Name", "Total Energy (J)"], ["no-such-image-xyz", "1"]])
+        path, stable = self.rm.write_end(self.meta, self.rm.csvs_in(self.dir))
+        m = self.load()
+        self.assertIn("finished_at_utc", m)
+        self.assertIn("machine_state_end", m)
+        self.assertEqual(m["images"], {"no-such-image-xyz": ""})   # unknown image -> empty, not guessed
+        self.assertTrue(stable)
+
+    def test_changed_conditions_are_flagged(self):
+        self.rm.write_start(self.meta, {})
+        m = self.load()
+        m["machine_state_start"]["turbo"] = "changed"
+        with open(self.meta, "w") as fh:
+            json.dump(m, fh)
+        _, stable = self.rm.write_end(self.meta, [])
+        self.assertFalse(stable)
+        self.assertFalse(self.load()["conditions_stable"])
+
+    def test_repeat_metadata_named_after_csv(self):
+        p = os.path.join(self.dir, "server_2026_repeats_metadata.json")
+        self.rm.write_start(p, {})
+        with open(p) as fh:
+            self.assertEqual(json.load(fh)["measurement"], "server_2026_repeats")
+
+    def test_framework_version_marks_uncommitted_changes(self):
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"],
+                               capture_output=True, text=True, cwd=ROOT).stdout.strip()
+        self.assertEqual(self.rm.framework_version().endswith("-dirty"), bool(dirty))
+
+    def test_csv_rows_carry_no_provenance(self):
+        import measure_docker, measure_websocket, inspect
+        for mod in (measure_docker, measure_websocket):
+            self.assertNotIn("row_fields", inspect.getsource(mod))
+
+    def test_cli_start_end(self):
+        tool = os.path.join(ROOT, "tools", "run_metadata.py")
+        subprocess.run([sys.executable, tool, "start", self.dir, "--set", "a=b"], check=True, capture_output=True)
+        subprocess.run([sys.executable, tool, "end", self.dir], check=True, capture_output=True)
+        m = self.load()
+        self.assertEqual(m["settings"]["a"], "b")
+        self.assertIn("finished_at_utc", m)
+
+class BenchConfig(unittest.TestCase):
+    def parse(self, text):
+        import bench_config
+        return bench_config.parse(text)
+
+    def test_empty_file_gives_defaults(self):
+        import bench_config
+        cfg = self.parse("")
+        for k, spec in bench_config.SCHEMA.items():
+            default = spec["default"]
+            if k != "SHUFFLE_SEED":
+                self.assertEqual(cfg[k], default)
+        self.assertTrue(cfg["SHUFFLE_SEED"].isdigit())          # random seed filled in, so it can be recorded
+
+    def test_values_quotes_and_comments(self):
+        cfg = self.parse('REPEATS=7  # seven\nENV_TURBO="on"\n# a comment\n\nHTTP_MAX_WORKERS=System\nSHUFFLE_SEED=42')
+        self.assertEqual((cfg["REPEATS"], cfg["ENV_TURBO"], cfg["HTTP_MAX_WORKERS"], cfg["SHUFFLE_SEED"]),
+                         ("7", "on", "system", "42"))
+
+    def test_every_mistake_is_reported(self):
+        import bench_config
+        with self.assertRaises(bench_config.ConfigError) as cm:
+            self.parse("REPEATS=3\nREPEATS=4\nSHUFLE=1\nENV_TURBO=maybe\nREADY_MIN_WAIT_SECONDS=abc\nREPEATS2\nREPEATS=0")
+        msg = str(cm.exception)
+        for part in ("set twice", "did you mean SHUFFLE", "must be one of", "whole number", "expected KEY=VALUE"):
+            self.assertIn(part, msg)
+
+    def test_zero_repeats_rejected(self):
+        import bench_config
+        with self.assertRaises(bench_config.ConfigError):
+            self.parse("REPEATS=0")
+
+    def test_ready_max_below_min_rejected(self):
+        import bench_config
+        with self.assertRaises(bench_config.ConfigError):
+            self.parse("READY_MIN_WAIT_SECONDS=60\nREADY_MAX_WAIT_SECONDS=30")
+
+    def test_example_file_parses_to_defaults(self):
+        import bench_config
+        cfg = self.parse(bench_config.example())
+        self.assertEqual(cfg["REPEATS"], bench_config.SCHEMA["REPEATS"]["default"])
+
+    def test_committed_example_matches_schema(self):
+        import bench_config
+        with open(os.path.join(ROOT, "bench.config.example")) as fh:
+            self.assertEqual(fh.read().strip(), bench_config.example().strip())
+
+    def test_shell_output_is_safely_quoted(self):
+        tool = os.path.join(ROOT, "tools", "bench_config.py")
+        d = tempfile.mkdtemp(); c = os.path.join(d, "c")
+        with open(c, "w") as fh:
+            fh.write("ENV_KEEP_CONTAINERS=a,b\n")
+        out = subprocess.run([sys.executable, tool, c], capture_output=True, text=True, check=True).stdout
+        r = subprocess.run(["bash", "-c", out + '\necho "$CFG_ENV_KEEP_CONTAINERS|$CFG_REPEATS"'],
+                           capture_output=True, text=True, check=True)
+        self.assertEqual(r.stdout.strip(), "a,b|5")
+
+
+class EnvironmentVerify(unittest.TestCase):
+    def verify(self, *args):
+        tool = os.path.join(ROOT, "tools", "prepare_environment.py")
+        return subprocess.run([sys.executable, tool, "verify", *args], capture_output=True, text=True)
+
+    def test_unchanged_always_passes(self):
+        self.assertEqual(self.verify("--governor", "unchanged", "--turbo", "unchanged",
+                                     "--no-stop-containers").returncode, 0)
+
+    def test_mismatch_fails(self):
+        import run_metadata
+        wrong = "on" if run_metadata.turbo_state() == "off" else "off"
+        r = self.verify("--governor", "unchanged", "--turbo", wrong, "--no-stop-containers")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("NOT AS REQUESTED", r.stdout)
+
+
+class ReadyConfig(unittest.TestCase):
+    def test_checks_can_be_switched_off_and_are_range_checked(self):
+        import bench_config
+        cfg = bench_config.parse("READY_TEMP_MARGIN_C=\nREADY_CPU_BUSY_MARGIN_PERCENT=")
+        self.assertEqual((cfg["READY_TEMP_MARGIN_C"], cfg["READY_CPU_BUSY_MARGIN_PERCENT"]), ("", ""))
+        for bad in ("READY_CPU_BUSY_MARGIN_PERCENT=150", "READY_CPU_BUSY_REFERENCE_PERCENT=-3", "READY_TEMP_MARGIN_C=-1", "READY_ON_TIMEOUT=later",
+                    "READY_CHECK_EVERY_SECONDS=0", "SEED=1"):
+            with self.assertRaises(bench_config.ConfigError):
+                bench_config.parse(bad)
+
+
+class ReadinessGate(unittest.TestCase):
+    def setUp(self):
+        import readiness, run_metadata
+        self.r, self.m = readiness, run_metadata
+        self.orig = (run_metadata.cpu_package_temp_c, run_metadata.cpu_times, run_metadata.throttle_counters)
+        self.jiffies = [0, 0]           # busy, total; advanced by fake_times
+        self.busy_pct = 0
+        run_metadata.cpu_times = self.fake_times
+        run_metadata.throttle_counters = lambda: (0, 0)
+
+    def tearDown(self):
+        self.m.cpu_package_temp_c, self.m.cpu_times, self.m.throttle_counters = self.orig
+
+    def fake_times(self):
+        self.jiffies[0] += self.busy_pct
+        self.jiffies[1] += 100
+        return tuple(self.jiffies)
+
+    def args(self, **kw):
+        import argparse
+        d = dict(temp_reference=40.0, temp_margin=2.0, cpu_reference=0.0, cpu_margin=5.0, no_throttling=1,
+                 check_every=0.01, consecutive=2, min_wait=0, max_wait=0.3, on_timeout="wait")
+        d.update(kw)
+        return argparse.Namespace(**d)
+
+    def test_ready_when_all_checks_pass(self):
+        self.m.cpu_package_temp_c = lambda: 41.0
+        self.assertEqual(self.r.wait(self.args())[1], "yes")
+
+    def test_each_check_can_fail(self):
+        prev = {"busy": 0, "total": 0, "throttle": 0, "temp": 50}
+        self.m.cpu_package_temp_c = lambda: 45.0            # above 40 + 2
+        self.busy_pct = 20                                   # 20% above 5%
+        self.m.throttle_counters = lambda: (3, 10)           # 3 new throttle events
+        _, fails = self.r.check_once(prev, self.args())
+        text = "; ".join(fails)
+        for part in ("temperature 45.0 C > 42.0 C", "CPU busy 20.0% > 5%", "throttling (3 new events)"):
+            self.assertIn(part, text)
+
+    def test_switched_off_checks_are_ignored(self):
+        prev = {"busy": 0, "total": 0, "throttle": 0, "temp": 50}
+        self.m.cpu_package_temp_c = lambda: 90.0
+        self.busy_pct = 90
+        self.m.throttle_counters = lambda: (5, 10)
+        _, fails = self.r.check_once(prev, self.args(temp_margin=None, cpu_margin=None, no_throttling=0))
+        self.assertEqual(fails, [])
+
+    def test_min_wait_is_respected(self):
+        self.m.cpu_package_temp_c = lambda: 41.0
+        waited, _ = self.r.wait(self.args(min_wait=0.2))
+        self.assertGreaterEqual(waited, 0.2)
+
+    def test_timeout_measure_records_reason(self):
+        self.m.cpu_package_temp_c = lambda: 60.0
+        waited, ready = self.r.wait(self.args(on_timeout="measure"))
+        self.assertTrue(ready.startswith("no: temperature 60.0 C > 42.0 C"), ready)
+        self.assertGreaterEqual(waited, 0.3)
+
+    def test_timeout_stop_exits_2(self):
+        self.m.cpu_package_temp_c = lambda: 60.0
+        with self.assertRaises(SystemExit) as cm:
+            self.r.wait(self.args(on_timeout="stop"))
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_timeout_wait_keeps_waiting_until_cool(self):
+        temps = iter([60.0] * 60 + [41.0] * 100)             # hot for longer than max_wait, then cool
+        self.m.cpu_package_temp_c = lambda: next(temps)
+        waited, ready = self.r.wait(self.args(on_timeout="wait", max_wait=0.1))
+        self.assertEqual(ready, "yes")
+        self.assertGreater(waited, 0.1)
+
+    def test_short_dip_does_not_count(self):
+        # Readings: prev, then 41 (pass), 60 (fail, resets), 41, 41 -> ready on the 4th check.
+        temps = iter([50.0, 41.0, 60.0, 41.0, 41.0, 41.0, 41.0])
+        self.m.cpu_package_temp_c = lambda: next(temps)
+        self.r.wait(self.args(max_wait=10))
+        self.assertEqual(list(temps), [41.0, 41.0])          # exactly 5 readings were used
+
+
+class ThermalColumns(unittest.TestCase):
+    def test_fields(self):
+        import argparse, measure_docker
+        a = argparse.Namespace(waited_s=12.5, ready_check="yes")
+        f = measure_docker.thermal_fields((45.0, 100), (52.0, 130), a, (3.0, "yes"))
+        self.assertEqual(f, {"CPU Temp Start (C)": 45.0, "CPU Temp End (C)": 52.0, "Throttled (ms)": 30,
+                             "Waited Before Start (s)": 12.5, "Waited Before Load (s)": 3.0,
+                             "Ready Check": "yes"})
+
+    def test_without_gate_says_not_checked(self):
+        import argparse, measure_websocket
+        a = argparse.Namespace(waited_s=None, ready_check="not checked")
+        f = measure_websocket.thermal_fields(("", ""), ("", ""), a)
+        self.assertEqual((f["Throttled (ms)"], f["Waited Before Start (s)"], f["Waited Before Load (s)"],
+                          f["Ready Check"]), ("", "", "", "not checked"))
+
+    def test_ready_check_names_the_failing_check(self):
+        import readiness
+        self.assertEqual(readiness.combine("yes", "no: temperature 61.0 C > 59.5 C"),
+                         "no: before load: temperature 61.0 C > 59.5 C")
+        self.assertEqual(readiness.combine("no: CPU busy 9% > 5%", "yes"), "no: before start: CPU busy 9% > 5%")
+
+
+class PreLoadGate(unittest.TestCase):
+    KEYS = ("MEASURE_READY_TEMP_REFERENCE_C", "MEASURE_READY_TEMP_MARGIN_C", "MEASURE_READY_NO_THROTTLING",
+            "MEASURE_READY_CHECK_EVERY_SECONDS", "MEASURE_READY_CONSECUTIVE_CHECKS",
+            "MEASURE_READY_MAX_WAIT_SECONDS", "MEASURE_READY_ON_TIMEOUT")
+
+    def setUp(self):
+        import readiness, run_metadata
+        self.r, self.m = readiness, run_metadata
+        self.orig_temp = run_metadata.cpu_package_temp_c
+        self.saved = {k: os.environ.pop(k, None) for k in self.KEYS}
+
+    def tearDown(self):
+        self.m.cpu_package_temp_c = self.orig_temp
+        for k, v in self.saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+    def set_env(self, on_timeout="wait"):
+        os.environ.update({"MEASURE_READY_TEMP_REFERENCE_C": "40", "MEASURE_READY_TEMP_MARGIN_C": "2",
+                           "MEASURE_READY_NO_THROTTLING": "1", "MEASURE_READY_CHECK_EVERY_SECONDS": "0.01",
+                           "MEASURE_READY_CONSECUTIVE_CHECKS": "2", "MEASURE_READY_MAX_WAIT_SECONDS": "0.2",
+                           "MEASURE_READY_ON_TIMEOUT": on_timeout})
+
+    def test_off_without_config(self):
+        self.assertEqual(self.r.pre_load_gate(), (None, "not checked"))
+
+    def test_waits_for_temperature_after_boot(self):
+        self.set_env()
+        temps = iter([60.0] * 5 + [41.0] * 20)               # warm after boot, then cools
+        self.m.cpu_package_temp_c = lambda: next(temps)
+        waited, ready = self.r.pre_load_gate()
+        self.assertEqual(ready, "yes")
+        self.assertGreater(waited, 0)
+
+    def test_ignores_cpu_busy(self):
+        self.set_env()
+        self.m.cpu_package_temp_c = lambda: 41.0
+        orig = self.m.cpu_times
+        n = [0]
+        def busy():                                          # 100% busy the whole time
+            n[0] += 100
+            return n[0], n[0]
+        self.m.cpu_times = busy
+        try:
+            self.assertEqual(self.r.pre_load_gate()[1], "yes")
+        finally:
+            self.m.cpu_times = orig
+
+    def test_stop_mode_exits(self):
+        self.set_env("stop")
+        self.m.cpu_package_temp_c = lambda: 60.0
+        with self.assertRaises(SystemExit):
+            self.r.pre_load_gate()
+
+class TemperatureReference(unittest.TestCase):
+    def test_config_accepts_empty_or_number(self):
+        import bench_config
+        self.assertEqual(bench_config.parse("")["READY_TEMP_REFERENCE_C"], "")
+        self.assertEqual(bench_config.parse("READY_TEMP_REFERENCE_C=50")["READY_TEMP_REFERENCE_C"], "50.0")
+        with self.assertRaises(bench_config.ConfigError):
+            bench_config.parse("READY_TEMP_REFERENCE_C=warm")
+
+    def test_fixed_limit_reference_50_margin_0(self):
+        import argparse, readiness
+        a = argparse.Namespace(temp_reference=50.0, temp_margin=0.0, cpu_reference=None, cpu_margin=None, no_throttling=0)
+        prev = {"busy": 0, "total": 0, "throttle": 0, "temp": 0}
+        orig = readiness.run_metadata.cpu_package_temp_c
+        try:
+            readiness.run_metadata.cpu_package_temp_c = lambda: 50.0
+            self.assertEqual(readiness.check_once(prev, a)[1], [])          # 50 is allowed
+            readiness.run_metadata.cpu_package_temp_c = lambda: 51.0
+            self.assertEqual(readiness.check_once(prev, a)[1], ["temperature 51.0 C > 50.0 C"])
+        finally:
+            readiness.run_metadata.cpu_package_temp_c = orig
+
+
+class CpuReference(unittest.TestCase):
+    def check(self, busy_pct, reference, margin):
+        import argparse, readiness
+        a = argparse.Namespace(temp_reference=None, temp_margin=None, cpu_reference=reference,
+                               cpu_margin=margin, no_throttling=0)
+        prev = {"busy": 0, "total": 0, "throttle": 0, "temp": 0}
+        orig = readiness.run_metadata.cpu_times
+        readiness.run_metadata.cpu_times = lambda: (busy_pct, 100)
+        try:
+            return readiness.check_once(prev, a)[1]
+        finally:
+            readiness.run_metadata.cpu_times = orig
+
+    def test_fixed_reference_0_margin_5_is_a_plain_5_percent_limit(self):
+        self.assertEqual(self.check(5, 0.0, 5.0), [])
+        self.assertEqual(self.check(6, 0.0, 5.0), ["CPU busy 6.0% > 5%"])
+
+    def test_measured_reference_adds_the_margin(self):
+        self.assertEqual(self.check(19, 15.0, 5.0), [])                 # shared machine resting at 15%
+        self.assertEqual(self.check(21, 15.0, 5.0), ["CPU busy 21.0% > 20%"])
+
+    def test_limit_never_above_100(self):
+        self.assertEqual(self.check(100, 98.0, 5.0), [])
+
+    def test_empty_margin_switches_the_check_off(self):
+        self.assertEqual(self.check(100, 0.0, None), [])
+
+    def test_resting_state_reports_temperature_and_cpu(self):
+        import readiness
+        temp, cpu = readiness.resting_state(seconds=0.2, every=0.1)
+        self.assertIsInstance(cpu, float)
+        self.assertTrue(0.0 <= cpu <= 100.0)
+
+
+class RestingMeasureSeconds(unittest.TestCase):
+    def test_window_length_and_reading_count(self):
+        import readiness, time
+        calls = []
+        orig = readiness.run_metadata.cpu_package_temp_c
+        readiness.run_metadata.cpu_package_temp_c = lambda: calls.append(1) or 45.0
+        try:
+            t0 = time.monotonic()
+            temp, _ = readiness.resting_state(seconds=0.5, every=0.1)
+            took = time.monotonic() - t0
+        finally:
+            readiness.run_metadata.cpu_package_temp_c = orig
+        self.assertEqual(len(calls), 6)                  # both ends included: 0.0, 0.1, ... 0.5
+        self.assertGreaterEqual(took, 0.5)
+        self.assertEqual(temp, 45.0)
+
+    def test_config_default_and_check(self):
+        import bench_config
+        self.assertEqual(bench_config.parse("")["RESTING_MEASURE_SECONDS"], "10")
+        with self.assertRaises(bench_config.ConfigError):
+            bench_config.parse("RESTING_MEASURE_SECONDS=0")
+
+
+class MeasurementFailure(unittest.TestCase):
+    def setUp(self):
+        import measure_failure
+        self.mf = measure_failure
+        self.reason = os.path.join(tempfile.mkdtemp(), "reason")
+        os.environ["MEASURE_FAILURE_REASON_FILE"] = self.reason
+        self.orig_cleanup = measure_failure._cleanup
+        self.cleaned = []
+        measure_failure._cleanup = lambda: self.cleaned.append(True)
+
+    def tearDown(self):
+        os.environ.pop("MEASURE_FAILURE_REASON_FILE", None)
+        self.mf._cleanup = self.orig_cleanup
+
+    def test_fail_writes_reason_cleans_up_and_exits_1(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.mf.fail("health check failed: no HTTP 200")
+        self.assertEqual(cm.exception.code, 1)
+        with open(self.reason) as fh:
+            self.assertEqual(fh.read(), "health check failed: no HTTP 200")
+        self.assertEqual(self.cleaned, [True])
+
+    def test_unexpected_error_becomes_a_recorded_failure(self):
+        def boom():
+            raise RuntimeError("Container failed to start")
+        with self.assertRaises(SystemExit) as cm:
+            self.mf.run(boom)
+        self.assertEqual(cm.exception.code, 1)
+        with open(self.reason) as fh:
+            self.assertEqual(fh.read(), "RuntimeError: Container failed to start")
+
+    def test_deliberate_exit_codes_pass_through(self):
+        for code in (0, 2, 3):
+            with self.assertRaises(SystemExit) as cm:
+                self.mf.run(lambda: sys.exit(code))
+            self.assertEqual(cm.exception.code, code)
+        self.assertFalse(os.path.exists(self.reason))
+
+    def test_success_writes_nothing(self):
+        self.mf.run(lambda: None)
+        self.assertFalse(os.path.exists(self.reason))
+
+
+class ResumeInfo(unittest.TestCase):
+    def folder(self, finished=False, config=True, args="--super-quick --config /tmp/x.config static"):
+        import run_metadata
+        d = tempfile.mkdtemp()
+        meta = {"settings": {"arguments": args, "shuffle_seed": "77"}}
+        if finished:
+            meta["finished_at_utc"] = "2026-01-01T00:00:00+00:00"
+        with open(os.path.join(d, "metadata.json"), "w") as fh:
+            json.dump(meta, fh)
+        if config:
+            open(os.path.join(d, "bench.config"), "w").close()
+        return d, run_metadata.resume_info(d)
+
+    def run_bash(self, text):
+        r = subprocess.run(["bash", "-c", text + '\necho "P=$RESUME_PROBLEMS|S=$RESUME_SEED|A=$*"'],
+                           capture_output=True, text=True, check=True)
+        return r.stdout.strip()
+
+    def test_unfinished_uses_saved_config_seed_and_arguments(self):
+        d, info = self.folder()
+        out = self.run_bash(info)
+        self.assertEqual(out, f"P=|S=77|A=--config {d}/bench.config --super-quick static")
+
+    def test_finished_is_refused(self):
+        _, info = self.folder(finished=True)
+        self.assertIn("already finished", self.run_bash(info))
+
+    def test_without_config_is_refused(self):
+        _, info = self.folder(config=False)
+        self.assertIn("no bench.config", self.run_bash(info))
+
+
+class RawData(unittest.TestCase):
+    def setUp(self):
+        self.saved = {k: os.environ.pop(k, None) for k in ("MEASURE_RAW_DIR", "MEASURE_RAW_DATA")}
+        self.dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+    def make(self, mode):
+        os.environ["MEASURE_RAW_DIR"] = os.path.join(self.dir, "raw")
+        os.environ["MEASURE_RAW_DATA"] = mode
+        p = se.raw_json_path("srv", "static")
+        with open(p, "w") as fh:
+            json.dump([{"x": 1}], fh)
+        return p
+
+    def test_path_inside_results_folder_and_named_after_run(self):
+        p = self.make("keep")
+        self.assertEqual(os.path.dirname(p), os.path.join(self.dir, "raw"))
+        self.assertRegex(os.path.basename(p), r"^srv_static_\d{8}T\d{6}Z\.json$")
+
+    def test_keep_leaves_the_plain_file_untouched(self):
+        p = self.make("keep")
+        out = se.finish_raw(p, {"container_name": "srv"})
+        self.assertEqual(out, p)
+        with open(out) as fh:
+            self.assertEqual(json.load(fh), [{"x": 1}])
+        self.assertTrue(os.path.exists(se.window_path(p)))
+
+    def test_delete_removes_it(self):
+        p = self.make("delete")
+        self.assertEqual(se.finish_raw(p), "")
+        self.assertFalse(os.path.exists(p))
+
+    def test_without_config_nothing_changes(self):
+        p = se.raw_json_path("srv", "static")
+        self.assertTrue(p.startswith("output" + os.sep))
+        self.assertEqual(se.finish_raw("/nonexistent.json"), "/nonexistent.json")
+
+
+class Statistics(AggregatorKeys):
+    def test_describe_known_values(self):
+        import aggregate_repeats as ag
+        st = dict(zip(ag.STATS, ag.describe([78, 80, 81, 79, 82])))
+        self.assertEqual((st["mean"], st["median"], st["Q1"], st["Q3"], st["IQR"], st["min"], st["max"]),
+                         (80, 80, 79, 81, 2, 78, 82))
+        self.assertAlmostEqual(st["sd"], 1.5811, places=4)
+        self.assertAlmostEqual(st["+/-95%"], 1.9632, places=4)      # t(4) = 2.776
+        self.assertAlmostEqual(st["CV%"], 1.9764, places=4)
+
+    def test_single_run_has_no_spread(self):
+        import aggregate_repeats as ag
+        st = dict(zip(ag.STATS, ag.describe([42.0])))
+        self.assertEqual((st["mean"], st["median"], st["min"], st["max"]), (42.0, 42.0, 42.0, 42.0))
+        self.assertEqual((st["sd"], st["+/-95%"], st["IQR"], st["CV%"]), ("", "", "", ""))
+
+    def test_full_columns_and_clear_outlier_names(self):
+        h = ["Container Name", "Total Requests", "Total Energy (J)"]
+        out = self.run_agg(h, [["s", "100", v] for v in ("78", "80", "81", "79", "82", "120")])
+        r = out[0]
+        for stat in ("mean", "sd", "+/-95%", "median", "Q1", "Q3", "IQR", "min", "max", "CV%"):
+            self.assertIn(f"Total Energy (J) {stat}", r)
+        self.assertEqual(r["Total Energy (J) runs dropped, IQR rule"], "1")      # the 120 J run
+        self.assertAlmostEqual(float(r["Total Energy (J) mean, IQR-filtered"]), 80.0)
+        self.assertNotIn("Energy IQR mean", r)                                   # old misleading name gone
+
+    def test_several_csvs_into_one_summary(self):
+        d = tempfile.mkdtemp()
+        for name, rows in (("a.csv", [["a", "100", "10"], ["a", "100", "12"]]),
+                           ("b.csv", [["b", "100", "20"], ["b", "100", "22"]])):
+            with open(os.path.join(d, name), "w", newline="") as fh:
+                csv.writer(fh).writerows([["Container Name", "Total Requests", "Total Energy (J)"]] + rows)
+        out = os.path.join(d, "summary.csv")
+        subprocess.run([sys.executable, os.path.join(ROOT, "tools", "aggregate_repeats.py"),
+                        os.path.join(d, "a.csv"), os.path.join(d, "b.csv"), "--output", out],
+                       check=True, capture_output=True)
+        rows = {r["Container Name"]: r for r in csv.DictReader(open(out))}
+        self.assertEqual((rows["a"]["Total Energy (J) mean"], rows["b"]["Total Energy (J) mean"]), ("11.0", "21.0"))
+
+
+class WorkloadConfig(unittest.TestCase):
+    def test_defaults_equal_the_built_in_lists(self):
+        import bench_config, re
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            sh = fh.read()
+        def built_in(name):
+            return re.search(rf"^{name}=\(?([^)\n]*)\)?$", sh, re.M).group(1).strip()
+        cfg = bench_config.parse("")
+        for key, var in (("HTTP_REQUESTS", "full_http_requests"), ("WS_BURST_CLIENTS", "full_ws_burst_clients"),
+                         ("WS_BURST_SIZES_KB", "full_ws_burst_sizes"), ("WS_BURST_BURSTS", "full_ws_burst_bursts"),
+                         ("WS_STREAM_CLIENTS", "full_ws_stream_clients"), ("WS_STREAM_SIZES_KB", "full_ws_stream_sizes"),
+                         ("WS_STREAM_RATE_PER_SECOND", "full_ws_stream_rates"),
+                         ("WS_STREAM_DURATION_SECONDS", "full_ws_stream_durations"),
+                         ("WS_CONCURRENCY_CLIENTS", "concurrency_clients"), ("WS_CONCURRENCY_SIZE_KB", "concurrency_size"),
+                         ("WS_PAYLOAD_CLIENTS", "payload_clients"), ("WS_PAYLOAD_SIZES_KB", "payload_sizes"),
+                         ("WS_BURST_INTERVAL_SECONDS", "WS_BURST_INTERVAL")):
+            self.assertEqual(cfg[key], built_in(var), key)
+
+    def test_lists_are_checked(self):
+        import bench_config
+        self.assertEqual(bench_config.parse("HTTP_REQUESTS=200  300")["HTTP_REQUESTS"], "200 300")
+        for bad in ("HTTP_REQUESTS=100,200", "HTTP_REQUESTS=", "WS_BURST_SIZES_KB=8 big", "WS_BURST_INTERVAL_SECONDS=-1"):
+            with self.assertRaises(bench_config.ConfigError):
+                bench_config.parse(bad)
+
+
+class RecomputeCommand(unittest.TestCase):
+    """Runs the documented command itself, not just the function (the function test missed a bug)."""
+    def test_command_line_recompute(self):
+        d = tempfile.mkdtemp()
+        raw = os.path.join(d, "srv_static_20260101T000000Z.json")
+        entries = [entry(0, 0, [])] + [entry(t, 10, [consumer(7, 2.0)]) for t in range(1, 6)]
+        with open(raw, "w") as fh:
+            json.dump(entries, fh)
+        with open(se.window_path(raw), "w") as fh:
+            json.dump({"container_name": "srv", "container_id": "", "load_start_epoch": 1,
+                       "load_end_epoch": 4, "pids": [7]}, fh)
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "scaphandre_energy.py"), "recompute", raw],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("container energy 6.000000 J", r.stdout)     # 2 W for 3 s
+        self.assertIn("host energy 30.000000 J", r.stdout)         # 10 W for 3 s
+
+
+if __name__ == "__main__":
+    unittest.main()
