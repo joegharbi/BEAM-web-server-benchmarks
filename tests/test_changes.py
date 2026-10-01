@@ -881,5 +881,28 @@ exec "$@"
         self.assertIn("make resume RESUME=results/", text)
 
 
+class RunPlanCount(unittest.TestCase):
+    """The progress counter and time estimate use the configured number of HTTP load levels."""
+    def test_http_steps_follow_the_config(self):
+        d = tempfile.mkdtemp()
+        cfg = os.path.join(d, "c.config")
+        with open(cfg, "w") as fh:
+            fh.write("HTTP_REQUESTS=1000 20000 80000\n")
+        sh = os.path.join(ROOT, "scripts", "run_benchmarks.sh")
+        with open(sh) as fh:
+            src = fh.read()
+        func = src[src.index("bench_http_steps_per_container() {"):]
+        func = func[:func.index("\n}\n") + 3]
+        script = (f'cd "{ROOT}"\nPYTHON_PATH="{sys.executable}"\nSUPER_QUICK_BENCH=0; QUICK_BENCH=0\n'
+                  'full_http_requests=(100 1000 5000 8000 10000 15000 20000 30000 40000 50000 60000 70000 80000)\n'
+                  'echo "default=$(bench_http_steps_per_container)"\n'
+                  f'eval "$("$PYTHON_PATH" ./tools/bench_config.py "{cfg}")"\n'
+                  'read -r -a full_http_requests <<< "$CFG_HTTP_REQUESTS"\n'
+                  'echo "config=$(bench_http_steps_per_container)"\n')
+        r = subprocess.run(["bash", "-c", func + "\n" + script], capture_output=True, text=True)
+        self.assertIn("default=13", r.stdout, r.stderr)
+        self.assertIn("config=3", r.stdout, r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

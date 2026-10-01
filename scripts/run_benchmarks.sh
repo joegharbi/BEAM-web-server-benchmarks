@@ -178,9 +178,9 @@ print_section() {
 }
 
 bench_http_steps_per_container() {
-    if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then echo 1
-    elif [[ $QUICK_BENCH -eq 1 ]]; then echo 3
-    else echo 13
+    if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then echo ${#super_quick_http_requests[@]}
+    elif [[ $QUICK_BENCH -eq 1 ]]; then echo ${#quick_http_requests[@]}
+    else echo ${#full_http_requests[@]}   # the config's HTTP_REQUESTS when one is used
     fi
 }
 
