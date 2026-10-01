@@ -130,12 +130,24 @@ run: check-env ## Run all benchmarks (log: run plan, [PROGRESS] lines, tail -f l
 	done; \
 	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh $(CONFIG_ARG)
 
-resume: check-env ## Continue an unfinished measurement: make resume RESUME=results/<folder>
-	@if [ -z "$(RESUME)" ]; then echo "Usage: make resume RESUME=results/<folder>"; exit 1; fi
+resume: check-env ## Continue an unfinished measurement (the newest one, or RESUME=results/<folder>)
+	@R="$(RESUME)"; \
+	if [ -z "$$R" ]; then \
+		R=$$(python3 tools/run_metadata.py latest-unfinished results); \
+		if [ -z "$$R" ]; then echo "No unfinished measurement in results/ to resume."; exit 1; fi; \
+		echo "Resuming the most recent unfinished measurement: $$R"; \
+	fi; \
+	for v in ./*/bin/activate; do \
+		if [ -f "$$v" ]; then . "$$v"; break; fi; \
+	done; \
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --resume "$$R"
+
+reproduce: check-env ## Measure an earlier measurement again in a new folder: make reproduce FROM=results/<folder>
+	@if [ -z "$(FROM)" ]; then echo "Usage: make reproduce FROM=results/<folder>"; exit 1; fi
 	@for v in ./*/bin/activate; do \
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
-	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --resume $(RESUME)
+	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --reproduce "$(FROM)"
 
 run-single: check-env ## Run a single server (e.g. make run-single SERVER=dy-erlang-pure-27)
 	@for v in ./*/bin/activate; do \
@@ -298,7 +310,8 @@ help:  ## Show this help message
 	@printf "  %-22s %s\n" "example" "make run BENCH_DIR=benchmarks"
 	@printf "  %-22s %s\n" "example" "make run HTTP_MAX_WORKERS=70  # default is 100; HTTP only"
 	@printf "  %-22s %s\n" "example" "make run CONFIG=bench.config  # repeats, rest, machine settings (see bench.config.example)"
-	@printf "  %-22s %s\n" "example" "make resume RESUME=results/<folder>  # continue an interrupted measurement"
+	@printf "  %-22s %s\n" "example" "make resume [RESUME=results/<folder>]  # continue an interrupted measurement (default: the newest)"
+	@printf "  %-22s %s\n" "example" "make reproduce FROM=results/<folder>  # measure an earlier measurement again, new folder"
 	@printf "  %-22s %s\n" "example" "make run HTTP_MAX_WORKERS=system  # override to Python default (None)"
 	@printf "  %-22s %s\n" "example" "make run BENCH_MEASURE_QUIET=0  # verbose logs"
 	@printf "  %-22s %s\n" "example" "make run BENCH_MEASURE_QUIET=1 MEASURE_HEARTBEAT_SEC=60  # compact mode for both"

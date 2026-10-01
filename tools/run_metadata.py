@@ -313,29 +313,98 @@ def write_start(path, settings):
         "settings": {**settings, **tool_settings()},
         "machine_state_start": machine_state(),
     }
+    original = settings.get("reproduces")
+    if original:
+        # A reproduction: say which measurement it repeats and what is different this time
+        meta["reproduces"] = original
+        try:
+            with open(os.path.join(original, FILENAME), encoding="utf-8") as fh:
+                diffs = differences(json.load(fh))
+            meta["differences_from_original"] = [{"what": w, "then": t, "now": n} for w, t, n in diffs]
+        except (OSError, ValueError):
+            meta["differences_from_original"] = "original metadata.json not readable"
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2)
     return path
+
+
+# What must be the same to continue a measurement in the same folder (resume), and what is
+# reported when a measurement is made again (reproduce).
+COMPARED = ("framework_version", "scaphandre_version", "scaphandre_package_version", "docker_version",
+            "python_version", "os", "kernel", "cpu_model", "logical_cpus", "memory_gb")
+LABELS = {"framework_version": "Framework (git commit)", "scaphandre_version": "Scaphandre",
+          "scaphandre_package_version": "Scaphandre package", "docker_version": "Docker",
+          "python_version": "Python", "os": "Operating system", "kernel": "Kernel", "cpu_model": "CPU",
+          "logical_cpus": "Logical CPUs", "memory_gb": "Memory (GB)"}
+
+
+def write_images(path, names):
+    """Record the ID of every image the measurement will use, before the first run."""
+    with open(path, encoding="utf-8") as fh:
+        meta = json.load(fh)
+    meta["images_at_start"] = {n: image_id(n) for n in sorted(set(names))}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, indent=2)
+    return path
+
+
+def differences(meta):
+    """[(what, then, now)] for software, machine and images that differ from `meta` (a metadata.json)."""
+    then = meta.get("software_and_machine", {})
+    now = software_and_machine()
+    diffs = [(LABELS[k], then.get(k, ""), now.get(k, "")) for k in COMPARED
+             if k in then and str(then.get(k, "")) != str(now.get(k, ""))]
+    for name, old in sorted((meta.get("images_at_start") or {}).items()):
+        new = image_id(name)
+        if new != old:
+            diffs.append((f"Image {name}", old, new or "missing"))
+    return diffs
+
+
+def differences_text(diffs):
+    width = max(len(d[0]) for d in diffs)
+    return "\n".join(f"  {what:<{width}}  {then or '?'}  ->  {now or '?'}" for what, then, now in diffs)
 
 
 def write_resume(path, settings):
     """Record that an unfinished measurement was resumed (the original start record is kept)."""
     with open(path, encoding="utf-8") as fh:
         meta = json.load(fh)
+    diffs = differences(meta)
     meta.setdefault("resumes", []).append({
         "resumed_at_utc": _now(),
         "settings": settings,
         "machine_state": machine_state(),
+        # Only non-empty when the resume was forced with RESUME_ANYWAY=1
+        "differences_from_start": [{"what": w, "then": t, "now": n} for w, t, n in diffs],
     })
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2)
     return path
 
 
+def _original_args(settings, config):
+    """The measurement's original arguments, with its --config replaced by `config` and any
+    --config/--resume/--reproduce of the original dropped."""
+    import shlex
+    args, out, skip = shlex.split(settings.get("arguments", "")), [], False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a in ("--config", "--resume", "--reproduce"):
+            skip = True
+            continue
+        out.append(a)
+    return ["--config", config] + out
+
+
 def resume_info(folder):
     """Shell assignments to resume `folder`: original arguments, seed, and whether it can be resumed.
 
     The original --config is replaced by the copy saved in the folder; any --resume is dropped.
+    A measurement is only continued with the same software, machine and images it started with,
+    unless RESUME_ANYWAY=1 (the differences are then recorded in metadata.json).
     """
     import shlex
     path = os.path.join(folder, FILENAME)
@@ -350,19 +419,56 @@ def resume_info(folder):
             problems.append("this measurement already finished")
     if not os.path.isfile(os.path.join(folder, "bench.config")):
         problems.append("no bench.config in the folder (only measurements made with --config can be resumed)")
+    if meta and not problems and os.environ.get("RESUME_ANYWAY") != "1":
+        diffs = differences(meta)
+        if diffs:
+            problems.append("these changed since the measurement started:\n" + differences_text(diffs) +
+                            "\nResults made with different tools must not share one folder. Start a new "
+                            "measurement, or continue anyway with RESUME_ANYWAY=1 (the differences are then "
+                            "recorded in metadata.json).")
     settings = meta.get("settings", {})
-    args, out, skip = shlex.split(settings.get("arguments", "")), [], False
-    for i, a in enumerate(args):
-        if skip:
-            skip = False
-            continue
-        if a in ("--config", "--resume"):
-            skip = True
-            continue
-        out.append(a)
-    out = ["--config", os.path.join(folder, "bench.config")] + out
+    out = _original_args(settings, os.path.join(folder, "bench.config"))
     lines = [f"RESUME_PROBLEMS={shlex.quote('; '.join(problems))}",
              f"RESUME_SEED={shlex.quote(str(settings.get('shuffle_seed', '')))}",
+             "set -- " + " ".join(shlex.quote(a) for a in out)]
+    return "\n".join(lines)
+
+
+def latest_unfinished(results_root):
+    """The most recently started measurement under `results_root` that can be resumed, or ""."""
+    found = []
+    for path in glob.glob(os.path.join(results_root, "*", FILENAME)):
+        folder = os.path.dirname(path)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                meta = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if "finished_at_utc" not in meta and os.path.isfile(os.path.join(folder, "bench.config")):
+            found.append((meta.get("started_at_utc", ""), folder))
+    return max(found)[1] if found else ""
+
+
+def reproduce_info(folder):
+    """Shell assignments to measure `folder` again in a new folder: every setting as it was used
+    (bench.config.resolved, shuffle seed included) and the original arguments. The differences
+    from the original are printed (REPRODUCE_DIFFERENCES) and recorded in the new metadata.json."""
+    import shlex
+    path = os.path.join(folder, FILENAME)
+    resolved = os.path.join(folder, "bench.config.resolved")
+    problems, meta = [], {}
+    if not os.path.isfile(path):
+        problems.append(f"{path} not found")
+    else:
+        with open(path, encoding="utf-8") as fh:
+            meta = json.load(fh)
+    if not os.path.isfile(resolved):
+        problems.append("no bench.config.resolved in the folder (only measurements made with --config "
+                        "can be reproduced)")
+    diffs = differences(meta) if meta else []
+    out = _original_args(meta.get("settings", {}), resolved)
+    lines = [f"REPRODUCE_PROBLEMS={shlex.quote('; '.join(problems))}",
+             f"REPRODUCE_DIFFERENCES={shlex.quote(differences_text(diffs) if diffs else '')}",
              "set -- " + " ".join(shlex.quote(a) for a in out)]
     return "\n".join(lines)
 
@@ -384,21 +490,34 @@ def write_end(path, csv_paths):
 
 def main():
     ap = argparse.ArgumentParser(description="Write the provenance of one measurement to <folder>/metadata.json.")
-    ap.add_argument("phase", choices=["start", "end", "resume", "resume-info", "temp"],
-                    help="start/end/resume of a measurement, resume-info: shell assignments to resume a folder, "
+    ap.add_argument("phase", choices=["start", "end", "resume", "resume-info", "reproduce-info", "images",
+                                      "latest-unfinished", "temp"],
+                    help="start/end/resume of a measurement, images: record the image IDs at the start, "
+                         "resume-info/reproduce-info: shell assignments to resume or reproduce a folder, "
+                         "latest-unfinished: print the newest folder that can be resumed, "
                          "temp: print the CPU package temperature")
     ap.add_argument("folder", nargs="?", help="Results folder of the measurement (start/end)")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="Extra setting to record at start (repeatable)")
+    ap.add_argument("names", nargs="*", help="Image names (images)")
     args = ap.parse_args()
     if args.phase == "temp":
         print(cpu_package_temp_c())
+        return
+    if args.phase == "latest-unfinished":
+        print(latest_unfinished(args.folder or "results"))
         return
     if not args.folder:
         ap.error("start/end need the results folder")
     path = os.path.join(args.folder, FILENAME)
     if args.phase == "resume-info":
         print(resume_info(args.folder))
+        return
+    if args.phase == "reproduce-info":
+        print(reproduce_info(args.folder))
+        return
+    if args.phase == "images":
+        write_images(path, args.names)
         return
     if args.phase == "resume":
         settings = dict(s.split("=", 1) for s in args.set if "=" in s)

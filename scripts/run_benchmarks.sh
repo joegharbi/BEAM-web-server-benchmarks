@@ -454,6 +454,29 @@ if [ -n "$RESUME_DIR" ]; then
     ORIGINAL_ARGS="$*"
 fi
 
+# --reproduce DIR: make a finished (or unfinished) measurement again, in a new folder, with every
+# setting it used (bench.config.resolved, shuffle seed included) and its original arguments.
+REPRODUCE_DIR=""
+for ((_i = 1; _i <= $#; _i++)); do
+    if [ "${!_i}" = "--reproduce" ]; then _j=$((_i + 1)); REPRODUCE_DIR="${!_j:-}"; fi
+done
+if [ -n "$REPRODUCE_DIR" ]; then
+    REPRODUCE_DIR="${REPRODUCE_DIR%/}"
+    eval "$("$PYTHON_PATH" "$REPO_ROOT/tools/run_metadata.py" reproduce-info "$REPRODUCE_DIR")"
+    if [ -n "$REPRODUCE_PROBLEMS" ]; then
+        echo "[ERROR] Cannot reproduce $REPRODUCE_DIR: $REPRODUCE_PROBLEMS"
+        exit 1
+    fi
+    echo "[INFO] Reproducing $REPRODUCE_DIR in a new folder, with the settings and arguments it used"
+    if [ -n "$REPRODUCE_DIFFERENCES" ]; then
+        echo "[INFO] Different from the original (recorded in metadata.json):"
+        echo "$REPRODUCE_DIFFERENCES"
+    else
+        echo "[INFO] Same software, machine and images as the original"
+    fi
+    ORIGINAL_ARGS="$*"
+fi
+
 RESULTS_PARENT_DIR="results"
 TIMESTAMP=$(date +"%Y-%m-%d_%H%M%S")
 RESULTS_DIR="${RESUME_DIR:-$RESULTS_PARENT_DIR/$TIMESTAMP}"
@@ -1267,6 +1290,7 @@ main() {
         --set env_turbo="$CFG_ENV_TURBO" --set env_stop_containers="$CFG_ENV_STOP_CONTAINERS" \
         --set http_connection="$CFG_HTTP_CONNECTION" --set failures_stop_after="$CFG_FAILURES_STOP_AFTER" \
         --set idle_s="${CFG_IDLE_SECONDS:-0}" --set warmup_s="${CFG_WARMUP_SECONDS:-0}" \
+        --set reproduces="${REPRODUCE_DIR:-}" \
         --set env_screen_brightness="${CFG_ENV_SCREEN_BRIGHTNESS:-}" --set env_keyboard_light="${CFG_ENV_KEYBOARD_LIGHT:-}" \
         --set env_wifi="${CFG_ENV_WIFI:-}" --set env_bluetooth="${CFG_ENV_BLUETOOTH:-}" --set on_battery="${CFG_ON_BATTERY:-}" \
         || print_status "WARNING" "Could not write $RESULTS_DIR/metadata.json"
@@ -1278,6 +1302,12 @@ main() {
         print_status "INFO" "HTTP client max workers: System default (column \"HTTP Max Workers\" in static/dynamic CSVs; set HTTP_MAX_WORKERS=100 for reproducible runs)"
     fi
     bench_init_run_plan
+    # The ID of every image before the first run, so a resume can tell whether one was rebuilt since
+    if [ -z "$RESUME_DIR" ]; then
+        "$PYTHON_PATH" ./tools/run_metadata.py images "$RESULTS_DIR" \
+            "${BENCH_PLAN_STATIC[@]}" "${BENCH_PLAN_DYNAMIC[@]}" "${BENCH_PLAN_WEBSOCKET[@]}" \
+            || print_status "WARNING" "Could not record the image IDs in metadata.json"
+    fi
     BENCH_TOTAL_STEPS=$(( BENCH_TOTAL_STEPS * CFG_REPEATS ))
     if [ "$CFG_REPEATS" -gt 1 ]; then
         print_status "INFO" "Repeats: $CFG_REPEATS passes (shuffle=$CFG_SHUFFLE seed=$CFG_SHUFFLE_SEED), $BENCH_TOTAL_STEPS measurements in total"

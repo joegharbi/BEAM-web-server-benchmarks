@@ -1107,5 +1107,94 @@ class OnBattery(ReadinessGate):
                 os.environ["MEASURE_ON_BATTERY"] = saved
 
 
+class SafeResumeAndReproduce(unittest.TestCase):
+    """Resume only with the same tools; reproduce in a new folder and report what is different."""
+    START = {"framework_version": "abc123", "scaphandre_version": "1.0.2",
+             "scaphandre_package_version": "1.0.2-4+b1", "docker_version": "26.1", "python_version": "3.13.5",
+             "os": "Debian 13", "kernel": "6.12", "cpu_model": "i7", "logical_cpus": 8, "memory_gb": 15.3}
+
+    def setUp(self):
+        import run_metadata
+        self.m = run_metadata
+        self.saved = (run_metadata.software_and_machine, run_metadata.image_id, os.environ.pop("RESUME_ANYWAY", None))
+        self.now = dict(self.START)
+        self.ids = {"st-a": "111111111111", "st-b": "222222222222"}
+        run_metadata.software_and_machine = lambda: dict(self.now)
+        run_metadata.image_id = lambda n: self.ids.get(n, "")
+
+    def tearDown(self):
+        self.m.software_and_machine, self.m.image_id, anyway = self.saved
+        os.environ.pop("RESUME_ANYWAY", None)
+        if anyway is not None:
+            os.environ["RESUME_ANYWAY"] = anyway
+
+    def folder(self, finished=False):
+        d = tempfile.mkdtemp()
+        meta = {"started_at_utc": "2026-10-01T10:00:00+00:00", "software_and_machine": dict(self.START),
+                "images_at_start": {"st-a": "111111111111", "st-b": "222222222222"},
+                "settings": {"arguments": "--config /tmp/x.config static", "shuffle_seed": "77"}}
+        if finished:
+            meta["finished_at_utc"] = "2026-10-01T12:00:00+00:00"
+        with open(os.path.join(d, "metadata.json"), "w") as fh:
+            json.dump(meta, fh)
+        for f in ("bench.config", "bench.config.resolved"):
+            open(os.path.join(d, f), "w").close()
+        return d
+
+    def test_same_tools_resume(self):
+        self.assertEqual(self.m.differences(json.load(open(os.path.join(self.folder(), "metadata.json")))), [])
+        self.assertIn("RESUME_PROBLEMS=''", self.m.resume_info(self.folder()))
+
+    def test_new_scaphandre_or_rebuilt_image_is_refused(self):
+        self.now["scaphandre_package_version"] = "1.0.3-2"
+        self.ids["st-b"] = "999999999999"
+        info = self.m.resume_info(self.folder())
+        for part in ("these changed since the measurement started", "Scaphandre package", "1.0.2-4+b1  ->  1.0.3-2",
+                     "Image st-b", "222222222222  ->  999999999999", "RESUME_ANYWAY=1"):
+            self.assertIn(part, info)
+
+    def test_resume_anyway_records_the_differences(self):
+        self.now["kernel"] = "6.13"
+        d = self.folder()
+        os.environ["RESUME_ANYWAY"] = "1"
+        self.assertIn("RESUME_PROBLEMS=''", self.m.resume_info(d))
+        self.m.write_resume(os.path.join(d, "metadata.json"), {})
+        rec = json.load(open(os.path.join(d, "metadata.json")))["resumes"][-1]
+        self.assertEqual(rec["differences_from_start"], [{"what": "Kernel", "then": "6.12", "now": "6.13"}])
+
+    def test_latest_unfinished(self):
+        root = tempfile.mkdtemp()
+        for name, started, finished in (("old", "2026-10-01T08:00", False), ("new", "2026-10-01T09:00", False),
+                                        ("done", "2026-10-01T10:00", True)):
+            d = os.path.join(root, name)
+            os.makedirs(d)
+            meta = {"started_at_utc": started}
+            if finished:
+                meta["finished_at_utc"] = "x"
+            json.dump(meta, open(os.path.join(d, "metadata.json"), "w"))
+            open(os.path.join(d, "bench.config"), "w").close()
+        self.assertEqual(self.m.latest_unfinished(root), os.path.join(root, "new"))
+        self.assertEqual(self.m.latest_unfinished(tempfile.mkdtemp()), "")
+
+    def test_reproduce_uses_resolved_settings_and_reports_differences(self):
+        self.now["cpu_model"] = "Ryzen 7"
+        d = self.folder(finished=True)
+        info = self.m.reproduce_info(d)
+        r = subprocess.run(["bash", "-c", info + '\necho "P=$REPRODUCE_PROBLEMS|A=$*"; echo "$REPRODUCE_DIFFERENCES"'],
+                           capture_output=True, text=True, check=True)
+        self.assertIn(f"P=|A=--config {d}/bench.config.resolved static", r.stdout)
+        self.assertIn("CPU  i7  ->  Ryzen 7", r.stdout)
+        new = tempfile.mkdtemp()
+        self.m.write_start(os.path.join(new, "metadata.json"), {"reproduces": d})
+        meta = json.load(open(os.path.join(new, "metadata.json")))
+        self.assertEqual(meta["reproduces"], d)
+        self.assertEqual(meta["differences_from_original"], [{"what": "CPU", "then": "i7", "now": "Ryzen 7"}])
+
+    def test_reproduce_needs_a_config_measurement(self):
+        d = self.folder()
+        os.remove(os.path.join(d, "bench.config.resolved"))
+        self.assertIn("only measurements made with --config can be reproduced", self.m.reproduce_info(d))
+
+
 if __name__ == "__main__":
     unittest.main()
