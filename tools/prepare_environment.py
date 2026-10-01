@@ -28,6 +28,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 DEFAULT_STATE = os.path.join(tempfile.gettempdir(), "wseb_env_state.json")
 GOV_GLOB = "/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor"
@@ -83,17 +84,36 @@ def set_brightness(pattern, percent, label, saved):
     print(f"{label}: {percent}%")
 
 
+def _radios(kind):
+    return [r for r in sorted(glob.glob(RFKILL_GLOB)) if read(os.path.join(r, "type")) == kind]
+
+
 def radio_off(kind, label, saved):
-    """Block every radio of `kind` ('wlan' or 'bluetooth') in software, like airplane mode."""
-    radios = [r for r in sorted(glob.glob(RFKILL_GLOB)) if read(os.path.join(r, "type")) == kind]
+    """Block every radio of `kind` ('wlan' or 'bluetooth') in software, like airplane mode.
+
+    Saved per kind, not per device: switching a radio off can remove a device (e.g. the Bluetooth
+    chip behind a laptop's Bluetooth switch), and it comes back under a new rfkill number.
+    """
+    radios = _radios(kind)
     if not radios:
         print(f"{label}: not available, skipped")
         return
+    saved[kind] = "0" if any(read(os.path.join(r, "soft")) == "0" for r in radios) else "1"
     for r in radios:
-        path = os.path.join(r, "soft")
-        saved[path] = read(path)
-        write(path, "1")
+        if os.path.exists(os.path.join(r, "soft")):     # may already be gone, removed by the switch before it
+            write(os.path.join(r, "soft"), "1")
     print(f"{label}: off")
+
+
+def radios_restore(saved):
+    """Unblock (or block) every radio of each saved kind, as it was before; devices that reappear
+    when a switch is unblocked are handled in a second round."""
+    for _ in range(2):
+        for kind, prev in saved.items():
+            for r in _radios(kind):
+                if read(os.path.join(r, "soft")) != prev:
+                    write(os.path.join(r, "soft"), prev)
+        time.sleep(1)
 
 
 def _route_dev(ip):
@@ -118,7 +138,7 @@ def remote_over_wifi(env=None):
 
 def do_apply(args):
     require_root()
-    state = {"governors": {}, "turbo": None, "stopped_containers": [], "files": {}}
+    state = {"governors": {}, "turbo": None, "stopped_containers": [], "files": {}, "radios": {}}
 
     gov_files = sorted(glob.glob(GOV_GLOB))
     if args.governor == "unchanged":
@@ -151,9 +171,9 @@ def do_apply(args):
     if args.keyboard_light == "off":
         set_brightness(KBD_LIGHT_GLOB, 0, "Keyboard light", state["files"])
     if args.wifi == "off":
-        radio_off("wlan", "Wi-Fi", state["files"])
+        radio_off("wlan", "Wi-Fi", state["radios"])
     if args.bluetooth == "off":
-        radio_off("bluetooth", "Bluetooth", state["files"])
+        radio_off("bluetooth", "Bluetooth", state["radios"])
 
     keep = {n.strip() for n in (args.keep or "").split(",") if n.strip()}
     to_stop = [n for n in docker_running() if n not in keep] if args.stop_containers else []
@@ -190,7 +210,11 @@ def do_restore(args):
     files = state.get("files") or {}
     restored = sum(1 for path, prev in files.items() if prev is not None and write(path, prev))
     if files:
-        print(f"Screen, keyboard light and radios: restored {restored} setting(s)")
+        print(f"Screen and keyboard light: restored {restored} setting(s)")
+    radios = state.get("radios") or {}
+    if radios:
+        radios_restore(radios)
+        print(f"Radios restored: {', '.join({'wlan': 'Wi-Fi', 'bluetooth': 'Bluetooth'}[k] for k in radios)}")
 
     stopped = state.get("stopped_containers") or []
     if stopped:

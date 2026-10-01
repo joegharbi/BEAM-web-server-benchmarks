@@ -59,7 +59,8 @@ def idle_fields(raw_json, container_name, container_id, window, warmup_s):
               "Idle Avg Power (W)": "", "Idle Host Avg Power (W)": ""}
     if window is None:
         return fields
-    e = compute_window_energy(raw_json, container_name, window[0], window[1], container_id=container_id)
+    e = compute_window_energy(raw_json, container_name, window[0], window[1], container_id=container_id,
+                              zero_is_normal=True)
     fields.update({"Idle Time (s)": round(window[1] - window[0], 3),
                    "Idle Energy (J)": round(e["energy_j"], 6),
                    "Idle Avg Power (W)": round(e["avg_power_w"], 6),

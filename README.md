@@ -82,6 +82,8 @@ With a config, a measurement:
 2. **Keeps the machine awake.** Sleep and lid-close suspend are blocked while it runs. A laptop must run
    on its charger (`ON_BATTERY`): by default it waits for the charger before measuring, and a run during
    which the charger was unplugged is recorded as failed.
+   It also stops cleanly (resumable) before the disk fills up: below 2 GB free (`BENCH_MIN_FREE_GB`).
+   Kept raw data takes about 45 KB per second of measuring, a few GB for a full campaign.
 3. **Measures the resting state** of the machine (CPU temperature and CPU use) after a settle period.
 4. **Repeats every measurement** `REPEATS` times. Each repeat is a full pass over all servers in a
    shuffled order (`SHUFFLE`, `SHUFFLE_SEED`), so slow drift such as heat is spread evenly.

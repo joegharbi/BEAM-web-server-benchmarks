@@ -206,11 +206,12 @@ def integrate_window(series, t0, t1):
     return cont_j, host_j, n, covered / (t1 - t0)
 
 
-def compute_window_energy(file_name, container_name, t0, t1, container_id=None, pids=None):
+def compute_window_energy(file_name, container_name, t0, t1, container_id=None, pids=None, zero_is_normal=False):
     """Energy of the container and of the host over [t0, t1] (wall-clock epoch seconds).
 
     Returns a dict: energy_j, avg_power_w, host_energy_j, host_avg_power_w, samples,
     coverage, step_ms, and pids (the process IDs that were counted as the container).
+    `zero_is_normal`: no warning for 0 J (an idle server can use no CPU at all).
     """
     matched = set()
     series = load_power_series(file_name, container_name, container_id, pids=pids, matched=matched)
@@ -219,7 +220,7 @@ def compute_window_energy(file_name, container_name, t0, t1, container_id=None, 
     if coverage < 0.99:
         logger.warning("Scaphandre samples cover only %.0f%% of the load window; energy is underestimated.",
                        coverage * 100)
-    if n == 0 or cont_j == 0:
+    if n == 0 or (cont_j == 0 and not zero_is_normal):
         logger.warning("No energy samples found for container '%s' in %s", container_name, file_name)
     return {
         "energy_j": cont_j,

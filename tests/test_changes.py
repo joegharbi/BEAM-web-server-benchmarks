@@ -1256,5 +1256,63 @@ class ConfigFingerprint(SafeResumeAndReproduce):
         self.assertEqual(meta["config_sha256"], self.m.file_sha256(os.path.join(d, "bench.config")))
 
 
+class FixesFromTheRealCheck(LaptopSettings):
+    def test_bluetooth_chip_that_disappears_is_restored(self):
+        """Switching Bluetooth off removes the chip's rfkill device; it comes back with a new number."""
+        import types
+        real_time = self.pe.time
+        self.pe.time = types.SimpleNamespace(sleep=lambda s: None)              # only inside prepare_environment
+        self.addCleanup(setattr, self.pe, "time", real_time)
+        args = self.args(screen_brightness="unchanged", keyboard_light="unchanged", wifi="unchanged")
+        self.pe.do_apply(args)
+        shutil.rmtree(os.path.join(self.root, "rfkill", "rfkill2"))                 # the chip disappears
+        os.makedirs(os.path.join(self.root, "rfkill", "rfkill3"))                   # and comes back, renumbered
+        for name, value in (("type", "bluetooth"), ("soft", "1"), ("hard", "0")):
+            with open(os.path.join(self.root, "rfkill", "rfkill3", name), "w") as fh:
+                fh.write(value)
+        self.pe.do_restore(args)
+        self.assertEqual((self.read("rfkill/rfkill1/soft"), self.read("rfkill/rfkill3/soft")), ("0", "0"))
+        self.assertEqual(self.read("rfkill/rfkill0/soft"), "0")                     # Wi-Fi untouched
+
+    def test_idle_zero_is_not_a_warning(self):
+        import load_phases
+        # As on this laptop: Scaphandre lists other processes only (the idle server used no CPU), and the
+        # container is found by its cgroup (container ID given); PID 1 is not in that container
+        path = write_json([entry(0, 0, [])] + [entry(t, 5, [consumer(1, 0.5)]) for t in range(1, 8)])
+        with self.assertNoLogs(level="WARNING"):
+            f = load_phases.idle_fields(path, "srv", "0123456789abcdef", (1, 6), 0)
+        self.assertEqual(f["Idle Energy (J)"], 0.0)
+
+    def test_full_disk_stops_before_measuring(self):
+        d = tempfile.mkdtemp()
+        bench = os.path.join(d, "bench")
+        for fam in ("static", "dynamic", "websocket"):
+            os.makedirs(os.path.join(bench, fam))
+        cfg = os.path.join(d, "c.config")
+        with open(cfg, "w") as fh:
+            fh.write("ENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\n"
+                     "ENV_KEYBOARD_LIGHT=unchanged\nENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n")
+        before = set(os.listdir(os.path.join(ROOT, "results")))
+        env = dict(os.environ, PATH=os.path.join(ROOT, "tests", "fakes") + os.pathsep + os.environ["PATH"],
+                   BENCH_MIN_FREE_GB="999999")
+        out_file = os.path.join(d, "out.txt")
+        try:
+            # Output to a file, not a pipe: the sudo keepalive's `sleep 60` would hold a pipe open
+            with open(out_file, "w") as fh:
+                r = subprocess.run(["bash", "scripts/run_benchmarks.sh", "--super-quick", "--bench", bench, "--config",
+                                    cfg, "static"], cwd=ROOT, env=env, stdout=fh, stderr=subprocess.STDOUT, timeout=60)
+        finally:
+            for name in set(os.listdir(os.path.join(ROOT, "results"))) - before:
+                shutil.rmtree(os.path.join(ROOT, "results", name), ignore_errors=True)
+        with open(out_file) as fh:
+            out = fh.read()
+        log = out.split("Logging to ", 1)[1].split()[0] if "Logging to " in out else ""
+        if log and os.path.isfile(os.path.join(ROOT, log)):
+            os.remove(os.path.join(ROOT, log))
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("stopping before it fills up", out)
+        self.assertNotIn("Letting the machine settle", out)
+
+
 if __name__ == "__main__":
     unittest.main()

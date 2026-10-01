@@ -1011,9 +1011,27 @@ BENCH_GATE_ARGS=()
 # temperature reference + margin, the machine is not busy and the CPU is not throttling, checked
 # every READY_CHECK_EVERY_SECONDS (see tools/readiness.py). The result goes into the
 # CSV row of the run ("Waited (s)", "Ready Check").
+# Free disk space (GB) where the results are written
+bench_free_gb() {
+    df -Pk "$RESULTS_DIR" | awk 'NR == 2 { printf "%.1f", $4 / 1048576 }'
+}
+
+# Stop cleanly (machine restored, resumable) before a full disk breaks Docker or the CSV files.
+# The raw Scaphandre data kept with RAW_DATA=keep is about 45 KB per second of measuring.
+BENCH_MIN_FREE_GB="${BENCH_MIN_FREE_GB:-2}"
+bench_check_disk() {
+    local free
+    free=$(bench_free_gb)
+    if awk -v f="$free" -v m="$BENCH_MIN_FREE_GB" 'BEGIN { exit !(f < m) }'; then
+        print_status "ERROR" "Only ${free} GB free on the disk (minimum ${BENCH_MIN_FREE_GB} GB); stopping before it fills up. Free some space, then: make resume RESUME=$RESULTS_DIR"
+        exit 1
+    fi
+}
+
 bench_ready_gate() {
     BENCH_GATE_ARGS=()
     [ -n "${CONFIG_FILE:-}" ] || return 0
+    bench_check_disk
     local result="$RESULTS_DIR/.ready.json" rc=0
     "$PYTHON_PATH" ./tools/readiness.py wait --result "$result" \
         --temp-reference "$BENCH_TEMP_REFERENCE" --temp-margin "$CFG_READY_TEMP_MARGIN_C" \
@@ -1233,7 +1251,11 @@ main() {
     trap bench_on_exit EXIT
     trap 'BENCH_INTERRUPTED=1; exit 130' INT TERM
     bench_block_sleep
-    [ -n "${CONFIG_FILE:-}" ] && bench_wait_for_charger
+    if [ -n "${CONFIG_FILE:-}" ]; then
+        bench_wait_for_charger
+        bench_check_disk
+        print_status "INFO" "Free disk space: $(bench_free_gb) GB (raw data kept: ~45 KB per second of measuring; RAW_DATA=$CFG_RAW_DATA)"
+    fi
     bench_apply_environment
     if [ -n "${CONFIG_FILE:-}" ]; then
         if [ "$CFG_SETTLE_SECONDS" -gt 0 ]; then
