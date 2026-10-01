@@ -24,3 +24,4 @@ _build/
 # Legacy path (replaced by benchmarks/websocket/)
 web-socket/
 TODObench.config
+bench.config
