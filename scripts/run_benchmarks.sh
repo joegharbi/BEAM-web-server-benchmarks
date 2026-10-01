@@ -461,7 +461,8 @@ mkdir -p "$RESULTS_DIR/static" "$RESULTS_DIR/dynamic" "$RESULTS_DIR/websocket" l
 
 LOG_FILE="logs/run_${TIMESTAMP}.log"
 echo "Logging to $LOG_FILE"
-exec > >(tee -a "$LOG_FILE") 2>&1
+# tee ignores Ctrl-C, so the log keeps working while the script restores the machine after Ctrl-C
+exec > >(trap '' INT TERM; exec tee -a "$LOG_FILE") 2>&1
 
 QUICK_BENCH=0
 SUPER_QUICK_BENCH=0
@@ -1110,7 +1111,15 @@ bench_restore_environment() {
 }
 
 bench_on_exit() {
+    # A closed terminal must not stop the restore (a write to it would end the script)
+    trap '' PIPE
     bench_restore_environment
+    if [ "${BENCH_INTERRUPTED:-0}" = "1" ]; then
+        print_status "WARNING" "Stopped (Ctrl-C). Finished measurements are kept in $RESULTS_DIR"
+        if [ -n "${CONFIG_FILE:-}" ]; then
+            print_status "INFO" "To continue where it stopped: make resume RESUME=$RESULTS_DIR"
+        fi
+    fi
     cleanup_sudo_keepalive
 }
 
@@ -1145,7 +1154,7 @@ main() {
     start_sudo_keepalive
     # Restore machine settings on any exit (normal end, error, Ctrl-C), then stop the sudo keepalive.
     trap bench_on_exit EXIT
-    trap 'exit 130' INT TERM
+    trap 'BENCH_INTERRUPTED=1; exit 130' INT TERM
     bench_apply_environment
     if [ -n "${CONFIG_FILE:-}" ]; then
         if [ "$CFG_SETTLE_SECONDS" -gt 0 ]; then

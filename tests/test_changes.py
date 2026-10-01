@@ -6,6 +6,7 @@ Needs no sudo, Docker or Scaphandre.
 import csv
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -818,6 +819,66 @@ class RecomputeCommand(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("container energy 6.000000 J", r.stdout)     # 2 W for 3 s
         self.assertIn("host energy 30.000000 J", r.stdout)         # 10 W for 3 s
+
+
+class CtrlC(unittest.TestCase):
+    """Ctrl-C during a controlled run must still restore the machine and say how to continue.
+
+    Before the fix, Ctrl-C also stopped the log writer (tee); the first message of the clean-up
+    then hit a closed pipe and killed the script before it restored anything.
+    """
+    def test_ctrl_c_restores_the_machine(self):
+        import signal, time
+        d = tempfile.mkdtemp()
+        fakes = os.path.join(d, "bin")
+        os.makedirs(fakes)
+        calls = os.path.join(d, "sudo_calls.log")
+        with open(os.path.join(fakes, "sudo"), "w") as fh:      # records machine-setting calls, runs the rest
+            fh.write(f"""#!/bin/sh
+while [ $# -gt 0 ]; do case "$1" in -*) shift ;; *) break ;; esac; done
+[ $# -eq 0 ] && exit 0
+case "$*" in *prepare_environment.py*) echo "$*" >> {calls}; exit 0 ;; esac
+exec "$@"
+""")
+        with open(os.path.join(fakes, "docker"), "w") as fh:    # no other containers running
+            fh.write("#!/bin/sh\nexit 0\n")
+        for f in ("sudo", "docker"):
+            os.chmod(os.path.join(fakes, f), 0o755)
+        bench = os.path.join(d, "bench")
+        for fam in ("static", "dynamic", "websocket"):
+            os.makedirs(os.path.join(bench, fam))
+        cfg = os.path.join(d, "c.config")
+        with open(cfg, "w") as fh:
+            fh.write("SETTLE_SECONDS=60\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_STOP_CONTAINERS=1\n")
+        before = set(os.listdir(os.path.join(ROOT, "results"))) if os.path.isdir(os.path.join(ROOT, "results")) else set()
+        env = dict(os.environ, PATH=fakes + os.pathsep + os.environ["PATH"])
+        p = subprocess.Popen(["bash", "scripts/run_benchmarks.sh", "--super-quick", "--bench", bench, "--config", cfg, "static"],
+                             cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                             start_new_session=True)
+        out = []
+        try:
+            for line in p.stdout:                       # wait until the machine settings are applied
+                out.append(line)
+                if "Letting the machine settle" in line:
+                    break
+            os.killpg(p.pid, signal.SIGINT)              # Ctrl-C reaches the whole process group
+            out.append(p.stdout.read())
+            p.wait(timeout=30)
+        finally:
+            if p.poll() is None:
+                os.killpg(p.pid, signal.SIGKILL)
+            p.stdout.close()
+            for name in set(os.listdir(os.path.join(ROOT, "results"))) - before:
+                shutil.rmtree(os.path.join(ROOT, "results", name), ignore_errors=True)
+        text = "".join(out)
+        log = text.split("Logging to ", 1)[1].split()[0] if "Logging to " in text else ""
+        if log and os.path.isfile(os.path.join(ROOT, log)):
+            os.remove(os.path.join(ROOT, log))
+        self.assertEqual(p.returncode, 130, text)                       # not killed by a broken pipe (-13)
+        self.assertIn("Restoring machine settings", text)
+        with open(calls) as fh:
+            self.assertIn("restore", fh.read())
+        self.assertIn("make resume RESUME=results/", text)
 
 
 if __name__ == "__main__":
