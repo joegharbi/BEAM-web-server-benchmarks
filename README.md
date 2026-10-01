@@ -158,8 +158,8 @@ Each directory containing a `Dockerfile` under `benchmarks/` is one benchmark. T
 
 Any server in any language can be measured. It only has to:
 
-- **HTTP** (`static/`, `dynamic/`): answer `GET /` with status 200 on the port it exposes, and support
-  HTTP/1.1 keep-alive (the client reuses connections).
+- **HTTP** (`static/`, `dynamic/`): answer `GET /` with status 200 on the port it exposes, and
+  should support HTTP/1.1 keep-alive (the client reuses connections).
 - **WebSocket** (`websocket/`): accept a WebSocket on `/ws` and echo every message back.
 
 Steps:
