@@ -462,6 +462,8 @@ if [ -n "$RESUME_DIR" ]; then
         echo "[ERROR] Cannot resume $RESUME_DIR: $RESUME_PROBLEMS"
         exit 1
     fi
+    # The machine profile as it was at the start: the copy kept in the results folder
+    [ -f "$RESUME_DIR/machine.config" ] && export BENCH_MACHINE_FILE="$RESUME_DIR/machine.config"
     ORIGINAL_ARGS="$*"
 fi
 
@@ -1394,9 +1396,11 @@ main() {
         echo "resumed: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$RESULTS_DIR/schedule.txt"
     elif [ -n "${CONFIG_FILE:-}" ]; then
         cp "$CONFIG_FILE" "$RESULTS_DIR/bench.config"
-        # Every key with the value actually used (defaults and the drawn seed included)
-        { echo "# Values used by this measurement (defaults filled in), from $CONFIG_FILE"
-          printf '%s\n' "$cfg_out" | sed 's/^CFG_//'; } > "$RESULTS_DIR/bench.config.resolved"
+        # The machine profile it used (MACHINE=...), kept so a resume uses exactly this one
+        [ -n "${BENCH_MACHINE_FILE:-}" ] && cp "$BENCH_MACHINE_FILE" "$RESULTS_DIR/machine.config"
+        # Every key with the value actually used (defaults, machine profile and the drawn seed included)
+        { echo "# Values used by this measurement (defaults, machine profile ${BENCH_MACHINE_FILE:-none} and $CONFIG_FILE)"
+          printf '%s\n' "$cfg_out" | grep '^CFG_' | sed 's/^CFG_//'; } > "$RESULTS_DIR/bench.config.resolved"
     fi
     "$PYTHON_PATH" ./tools/run_metadata.py "$meta_phase" "$RESULTS_DIR" \
         --set quick="$QUICK_BENCH" --set super_quick="$SUPER_QUICK_BENCH" \
@@ -1417,6 +1421,7 @@ main() {
         --set idle_s="${CFG_IDLE_SECONDS:-0}" --set warmup_s="${CFG_WARMUP_SECONDS:-0}" \
         --set reproduces="${REPRODUCE_DIR:-}" \
         --set measure="${CFG_MEASURE:-}" --set servers="${CFG_SERVERS:-}" \
+        --set machine="${CFG_MACHINE:-}" --set machine_file="${BENCH_MACHINE_FILE:-}" \
         --set env_screen_brightness="${CFG_ENV_SCREEN_BRIGHTNESS:-}" --set env_keyboard_light="${CFG_ENV_KEYBOARD_LIGHT:-}" \
         --set env_wifi="${CFG_ENV_WIFI:-}" --set env_bluetooth="${CFG_ENV_BLUETOOTH:-}" --set on_battery="${CFG_ON_BATTERY:-}" \
         || print_status "WARNING" "Could not write $RESULTS_DIR/metadata.json"

@@ -52,42 +52,47 @@ make run BENCHMARKS_DIR=benchmarks
 
 ## Controlled measurements with a config file
 
-For repeatable measurements, describe the whole campaign in one file and run it with one command.
-Three ready-made profiles are in `configs/`:
+For repeatable measurements, describe the measurement in one short file and run it with one command:
+
+```
+# my.config
+MACHINE=minimal                            # how the machine is prepared (a profile, below)
+MEASURE=static dynamic                     # kinds: static dynamic websocket concurrency payload (default: all)
+SERVERS=st-erlang-cowboy-28-4-3 static:my-nginx   # empty (default) = every server found in BENCHMARKS_DIR
+HTTP_REQUESTS=1000 20000 80000             # the load levels
+REPEATS=5
+```
+
+```bash
+make run CONFIG=my.config
+```
+
+Every line is optional; `bench.config.example` lists every setting of a measurement file with a one-line
+comment, and [docs/CONFIG.md](docs/CONFIG.md) explains each one in full (both are generated from the code).
+
+**Machine profiles** (`MACHINE=`) hold how the machine is prepared, so a measurement file stays short. They
+are in `configs/machine/`:
 
 | Profile | For | Machine settings |
 |---|---|---|
-| `configs/minimal.config` | A laptop or desktop you control, left alone while it measures (published results) | CPU at a fixed speed, turbo off, other containers stopped, screen at 1%, keyboard light, Wi-Fi and Bluetooth off |
-| `configs/tolerable.config` | The same, but reached over the network or needing to stay online | As minimal, but Wi-Fi stays on |
-| `configs/untouched.config` | A machine you do not control (shared server, cloud) | Nothing is changed; if the machine never becomes calm, it measures anyway and records why |
+| `minimal` (default) | A laptop or desktop you control, left alone while it measures (published results) | CPU at a fixed speed, turbo off, other containers stopped, screen at 1%, keyboard light, Wi-Fi and Bluetooth off |
+| `tolerable` | The same, but reached over the network or needing to stay online | As minimal, but Wi-Fi stays on |
+| `untouched` | A machine you do not control (shared server, cloud) | Nothing is changed; if the machine never becomes calm, it measures anyway and records why |
 
-```bash
-make run CONFIG=configs/minimal.config          # or: make run-static CONFIG=configs/minimal.config
-cp configs/minimal.config my.config             # your own: add lines such as REPEATS=10
-```
+Values come from the defaults, then the profile, then the measurement file, which can override any
+machine setting for one measurement (for example `ENV_WIFI=unchanged`). `MACHINE` can also be the path of
+your own profile file. The results folder keeps a copy of both files (`bench.config`, `machine.config`)
+and every value actually used (`bench.config.resolved`). A run started over SSH through Wi-Fi refuses to
+switch Wi-Fi off, since that would cut its own connection; use the tolerable profile there.
 
-### What to measure
+**What to measure.** A name in `SERVERS` is a server folder (its place, `static/`, `dynamic/` or
+`websocket/`, gives its type), or `TYPE:IMAGE` for an image built on this machine without a folder (its
+port is read from the image). `BENCHMARKS_DIR` sets the folder searched (default `benchmarks/`). Every name
+must exist and every image must be built, or the measurement stops before it starts. A type or names on the
+command line (`make run-static ...`) take precedence over `MEASURE` and `SERVERS`.
 
-The config also says what is measured, so one file describes the whole measurement:
-
-```
-MEASURE=static dynamic                     # kinds: static dynamic websocket concurrency payload (default: all)
-SERVERS=st-erlang-cowboy-28-4-3 static:my-nginx   # empty (default) = every server found in BENCHMARKS_DIR
-BENCHMARKS_DIR=benchmarks                  # the folder searched for servers (default: benchmarks/)
-HTTP_REQUESTS=1000 20000 80000             # the load levels
-```
-
-A name in `SERVERS` is a server folder (its place, `static/`, `dynamic/` or `websocket/`, gives its type), or
-`TYPE:IMAGE` for an image built on this machine without a folder (its port is read from the image). Every
-name must exist and every image must be built, or the measurement stops before it starts. A type or names
-on the command line (`make run-static ...`) take precedence over `MEASURE` and `SERVERS`.
-
-Every setting is optional; an empty file uses the defaults, which are the minimal profile.
-`bench.config.example` explains every setting, in two parts: the few you usually change (repeats, load
-levels, idle, warm-up, failures, raw data), and the advanced ones, whose defaults are the recommended
-values. A run started over SSH through Wi-Fi refuses to switch Wi-Fi off, since that would cut its own
-connection; use the tolerable profile there. Without `CONFIG` the framework behaves as
-before: one pass, no waiting between runs, machine settings untouched.
+Without `CONFIG` the framework behaves as before: one pass, no waiting between runs, machine settings
+untouched.
 
 With a config, a measurement:
 
@@ -149,7 +154,7 @@ This continues in the same folder with the same config, arguments and shuffle or
 measurements that already finished. The measurement that was running when it stopped is done again.
 
 A measurement is only continued with the tools it started with. If the framework (git commit),
-Scaphandre, Docker, Python, OS, kernel, CPU, memory, a server image, or the config copy in the folder
+Scaphandre, Docker, Python, OS, kernel, CPU, memory, a server image, or the config copies in the folder
 changed in between, resume refuses and lists what changed, because results made with different tools
 must not share one folder.
 `RESUME_ANYWAY=1 make resume ...` continues anyway and records the differences in `metadata.json`.

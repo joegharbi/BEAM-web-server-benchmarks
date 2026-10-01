@@ -1,280 +1,72 @@
-# Benchmark configuration for:  make run CONFIG=bench.config
-# Copy this file to bench.config and edit it. Every key is optional; the value
-# shown is the default. Lines starting with # are comments.
+# Measurement file:  make run CONFIG=bench.config
+# Every line is optional; the value shown is the default. Every setting is explained in
+# docs/CONFIG.md. The machine settings (CPU, turbo, screen, radios, readiness check) come from
+# the MACHINE profile; any of them written here overrides the profile for this measurement.
 
-##############################################################################
-# PART 1: settings you usually change
-##############################################################################
+# ===== Machine profile =====
+# machine profile: minimal, tolerable, untouched (configs/machine/), a .config file, or none
+MACHINE=minimal
 
 # ===== What to measure =====
-
-# Which kinds of measurement to run. static/dynamic: HTTP load levels (HTTP_REQUESTS) on the
-# static and dynamic HTTP servers; websocket: burst and stream tests; concurrency and payload:
-# the WebSocket client-count and message-size sweeps. A type on the command line
-# (make run-static ...) takes precedence over this setting.
-# Unit: kinds, separated by spaces: static dynamic websocket concurrency payload
+# kinds: static dynamic websocket concurrency payload
 MEASURE=static dynamic websocket concurrency payload
-
-# Which servers to measure. Empty = every server found in BENCHMARKS_DIR (a folder with a
-# Dockerfile; its place, static/, dynamic/ or websocket/, gives its type). A name is a server
-# folder name, e.g. st-erlang-cowboy-28-4-3. An image built on this machine without a folder is
-# given with its type: static:my-nginx, dynamic:my-app, websocket:my-ws (port from the image).
-# Every name must exist and every image must be built, or the measurement does not start.
-# Unit: names separated by spaces, or empty = all servers found
+# server folder names, or TYPE:IMAGE; empty = every server found
 SERVERS=
-
-# The folder searched for servers. Empty = benchmarks/ (or BENCHMARKS_DIR from the environment).
-# --bench on the command line takes precedence.
-# Unit: folder path, or empty = benchmarks/
+# folder searched for servers; empty = benchmarks/
 BENCHMARKS_DIR=
 
-# ===== How to measure =====
-
-# How many times every measurement is repeated. Each repeat is one full pass over all servers.
-# Unit: runs, 1 or more
+# ===== How much =====
+# runs of every measurement (each repeat = one pass over all servers)
 REPEATS=5
-
-# Load levels of the static and dynamic HTTP measurements, measured in this order.
-# Unit: request counts, separated by spaces
+# HTTP load levels (request counts)
 HTTP_REQUESTS=100 1000 5000 8000 10000 15000 20000 30000 40000 50000 60000 70000 80000
-
-# Measure every server doing nothing for this long, right before its load. Gives its idle
-# energy and power (Idle ... columns in the CSV). 0 = off, as in the published results.
-# Adds this many seconds to every measurement.
-# Unit: seconds, 0 = off
+# measure each server idle this long before its load; 0 = off
 IDLE_SECONDS=0
-
-# Unmeasured traffic of the same kind as the load (HTTP requests or WebSocket echo messages)
-# for this long after the server starts, so the measurement does not include its very first
-# requests. The readiness check afterwards lets the CPU cool down again. 0 = off, as in the
-# published results.
-# Unit: seconds, 0 = off
+# unmeasured traffic this long after the server starts; 0 = off
 WARMUP_SECONDS=0
 
-# What to do when a measurement fails (server did not start, health check failed, ...).
-# Every failure is written to failures.csv.
-# Options:
-#   1  stop at the first failure
-#   N  keep going, but stop after N failures in a row, because then something is broken (default 5)
-#   0  never stop; measure everything that works
+# ===== Failures and raw data =====
+# stop after this many failed measurements in a row (1 = first failure, 0 = never)
 FAILURES_STOP_AFTER=5
-
-# Scaphandre's raw power log of each run, after its energy has been calculated.
-# Options:
-#   keep    keep it as it is (plain JSON) in <results>/raw/ (energy can be recalculated later; recommended)
-#   delete  delete it (saves disk space)
+# Scaphandre's raw power logs: keep | delete
 RAW_DATA=keep
 
-##############################################################################
-# PART 2: advanced. The defaults are the recommended values; change them only for a reason
-##############################################################################
-
 # ===== Order of the runs =====
-
-# Shuffle the order of the servers in every repeat, so no server always runs first on a cool machine.
-# Options:
-#   1  shuffle (recommended)
-#   0  same order in every repeat
+# 1 = shuffle the server order in every repeat, 0 = same order
 SHUFFLE=1
-
-# Number that decides the shuffled order. Empty = random; the number used is saved in
-# metadata.json and schedule.txt. Put it here to rerun exactly the same order (same servers).
-# Unit: whole number, or empty
+# number that decides the order; empty = random (saved, to rerun the same order)
 SHUFFLE_SEED=
 
-# ===== Machine settings (applied before, restored after) =====
-
-# CPU frequency governor during the measurement.
-# Options:
-#   performance   CPU stays at its highest allowed frequency (steadiest, recommended)
-#   powersave     CPU lowers its frequency when it can (Linux default on Intel laptops)
-#   schedutil     frequency follows the load (only with some CPU drivers, e.g. AMD)
-#   ondemand      frequency jumps up under load (only with some CPU drivers)
-#   conservative  frequency rises slowly under load (only with some CPU drivers)
-#   unchanged     leave the machine's current setting
-ENV_GOVERNOR=performance
-
-# Turbo boost: the CPU briefly running above its base frequency when it is cool enough.
-# Options:
-#   off        no turbo; slower but much steadier results (recommended)
-#   on         turbo allowed; faster, closer to everyday use, but more variation
-#   unchanged  leave the machine's current setting
-ENV_TURBO=off
-
-# Other Docker containers running during the measurement.
-# Options:
-#   1  stop them before, restart them after (recommended)
-#   0  leave them running
-ENV_STOP_CONTAINERS=1
-
-# Containers that must keep running even when ENV_STOP_CONTAINERS=1.
-# Unit: container names, comma-separated, or empty
-ENV_KEEP_CONTAINERS=
-
-# Screen brightness during the measurement (restored after). 1 = dimmest that is still on (0 switches
-# the backlight off on some laptops, and a brightness key pressed then would change it mid-run).
-# It does not change the container's energy (the screen is not part of the CPU), only the whole
-# machine's. The desktop may still dim or switch off the screen by itself. Machines without a
-# screen are not affected.
-# Unit: percent 0-100, or 'unchanged'
-ENV_SCREEN_BRIGHTNESS=1
-
-# Keyboard backlight during the measurement.
-# Options:
-#   off        switch it off, restored after (recommended)
-#   unchanged  leave it as it is
-ENV_KEYBOARD_LIGHT=off
-
-# Wi-Fi radio during the measurement. Off removes background network traffic and updates.
-# The measurement needs no network. A run started over SSH through Wi-Fi refuses to switch it off
-# (it would cut its own connection); set 'unchanged' there.
-# Options:
-#   off        switch it off, restored after (recommended)
-#   unchanged  leave it as it is
-ENV_WIFI=off
-
-# Bluetooth radio during the measurement.
-# Options:
-#   off        switch it off, restored after (recommended)
-#   unchanged  leave it as it is
-ENV_BLUETOOTH=off
-
-# A laptop not on its charger: the CPU can run under other power limits on battery. Checked at
-# the start and before every run; a run during which the charger was unplugged counts as failed.
-# Machines without a battery are never affected.
-# Options:
-#   wait    do not measure on battery; wait until the charger is back (recommended)
-#   stop    stop the measurement; continue later with make resume
-#   ignore  measure anyway
-ON_BATTERY=wait
-
-# Wait after applying the machine settings, before the resting state is measured.
-# Unit: seconds
-SETTLE_SECONDS=60
-
-# How long the resting temperature and CPU use are measured, after SETTLE_SECONDS. Longer = a more
-# trustworthy resting value on a noisy machine. Used as the reference by the readiness checks.
-# Unit: seconds, 1 or more (one reading per second)
-RESTING_MEASURE_SECONDS=10
-
-# ===== Readiness check before every run =====
-
-# While waiting for the machine to be ready, how often it is checked again.
-# Unit: seconds, 1 or more
-READY_CHECK_EVERY_SECONDS=5
-
-# Temperature the CPU is compared to. Empty = the resting temperature, measured automatically
-# for RESTING_MEASURE_SECONDS (middle value of the readings). A number = use this fixed temperature.
-# Unit: degrees Celsius, or empty = measured automatically
-READY_TEMP_REFERENCE_C=
-
-# Ready when CPU temperature <= READY_TEMP_REFERENCE_C + this margin.
-# Examples: reference empty + margin 3 = back within 3 C of today's resting temperature;
-# reference 50 + margin 0 = never start above 50 C. The sensor reads in steps of 1 C.
-# Unit: degrees Celsius, or empty = no temperature check
-READY_TEMP_MARGIN_C=3
-
-# CPU use the whole machine is compared to. Empty = the resting CPU use, measured automatically
-# (average over RESTING_MEASURE_SECONDS). A number = use this fixed value.
-# Unit: percent 0-100, or empty = measured automatically
-READY_CPU_BUSY_REFERENCE_PERCENT=
-
-# Ready when whole-machine CPU use <= READY_CPU_BUSY_REFERENCE_PERCENT + this margin.
-# Examples: reference empty + margin 5 = within 5% of the machine's resting use (shared machines);
-# reference 0 + margin 5 = never start above 5% (your own quiet machine).
-# Unit: percent 0-100, or empty = no CPU check
-READY_CPU_BUSY_MARGIN_PERCENT=5
-
-# Thermal throttling: the CPU slowing itself down because it is too hot.
-# Options:
-#   1  not ready while the CPU is throttling (recommended)
-#   0  ignore throttling
-READY_NO_THROTTLING=1
-
-# All checks must pass this many times in a row, so a short dip does not count.
-# Unit: checks, 1 or more
-READY_CONSECUTIVE_CHECKS=2
-
-# Always wait at least this long before a run, even if the machine already looks ready
-# (lets the previous container stop and its connections close).
-# Unit: seconds
-READY_MIN_WAIT_SECONDS=10
-
-# After this long without being ready, READY_ON_TIMEOUT decides what happens.
-# Unit: seconds, at least READY_MIN_WAIT_SECONDS
-READY_MAX_WAIT_SECONDS=300
-
-# What to do when the machine is still not ready after READY_MAX_WAIT_SECONDS.
-# Options:
-#   wait     keep waiting; never measure in a bad state; prints every minute what fails (recommended)
-#   stop     stop the whole measurement with an error
-#   measure  measure anyway and write the reason in the CSV (cloud or shared servers)
-READY_ON_TIMEOUT=wait
-
 # ===== Load and energy measurement =====
-
-# How many requests the HTTP client sends in parallel. 'system' = Python's default (differs per machine).
-# Unit: threads, 1 or more, or 'system'
+# parallel HTTP requests (threads), or system
 HTTP_MAX_WORKERS=100
-
-# How the HTTP client uses TCP connections.
-# Options:
-#   reuse        one kept-alive connection per worker, like browsers (recommended)
-#   per-request  a new connection for every request, as in the published results;
-#                fails above ~28,000 requests when the client runs out of ports
+# reuse = one kept-alive connection per worker, per-request = a new one each time
 HTTP_CONNECTION=reuse
-
-# How often Scaphandre reads the power. Smaller = more detail but Scaphandre itself uses more power.
-# Unit: milliseconds, 10 or more
+# Scaphandre sampling step (ms)
 SCAPH_STEP_MS=500
 
 # ===== WebSocket workloads (full runs; --quick and --super-quick keep their short lists) =====
-
-# WebSocket burst: how many clients connect at once.
-# Unit: client counts, separated by spaces
+# burst test: client counts
 WS_BURST_CLIENTS=5 50 100
-
-# WebSocket burst: message sizes.
-# Unit: KB per message, separated by spaces
+# burst test: message sizes (KB)
 WS_BURST_SIZES_KB=8 1024 65536
-
-# WebSocket burst: how many bursts each client sends.
-# Unit: bursts per client, separated by spaces
+# burst test: bursts per client
 WS_BURST_BURSTS=3
-
-# Pause between bursts, also used by the concurrency and payload tests. 0.5 = as in the published
-# results; 0 = back-to-back bursts (as fast as possible, like the Green Metrics Tool).
-# Unit: seconds, 0 or more
+# pause between bursts (s); 0 = back to back
 WS_BURST_INTERVAL_SECONDS=0.5
-
-# WebSocket stream: how many clients send at the same time.
-# Unit: client counts, separated by spaces
+# stream test: client counts
 WS_STREAM_CLIENTS=5 50 100
-
-# WebSocket stream: message sizes.
-# Unit: KB per message, separated by spaces
+# stream test: message sizes (KB)
 WS_STREAM_SIZES_KB=8 1024 65536
-
-# WebSocket stream: sending rate.
-# Unit: messages per second per client, separated by spaces
+# stream test: messages per second per client
 WS_STREAM_RATE_PER_SECOND=10
-
-# WebSocket stream: how long each client sends.
-# Unit: seconds, separated by spaces
+# stream test: seconds each client sends
 WS_STREAM_DURATION_SECONDS=5
-
-# WebSocket concurrency test: numbers of simultaneous clients.
-# Unit: client counts, separated by spaces
+# concurrency test: client counts
 WS_CONCURRENCY_CLIENTS=100 1000 5000
-
-# WebSocket concurrency test: message size.
-# Unit: KB per message
+# concurrency test: message size (KB)
 WS_CONCURRENCY_SIZE_KB=8
-
-# WebSocket payload test: number of clients.
-# Unit: clients
+# payload test: client count
 WS_PAYLOAD_CLIENTS=5
-
-# WebSocket payload test: message sizes.
-# Unit: KB per message, separated by spaces
+# payload test: message sizes (KB)
 WS_PAYLOAD_SIZES_KB=8 1024 65536

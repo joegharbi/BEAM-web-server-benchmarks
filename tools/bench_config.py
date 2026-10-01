@@ -9,11 +9,17 @@ to a default.
 File format: one KEY=VALUE per line; blank lines and lines starting with # are
 ignored; a value may be quoted; " # comment" after a value is ignored.
 
+Two layers: a measurement file (what to measure, and how much) names a machine profile with
+MACHINE=minimal (how the machine is prepared: configs/machine/minimal.config). Values come from
+the defaults, then the machine profile, then the measurement file, which can override anything.
+
 Usage:
   python3 tools/bench_config.py bench.config        # checked shell assignments
-  python3 tools/bench_config.py --example           # a commented example file
+  python3 tools/bench_config.py --example           # the short example measurement file
+  python3 tools/bench_config.py --docs              # docs/CONFIG.md: every setting explained
 """
 import difflib
+import os
 import re
 import secrets
 import shlex
@@ -91,6 +97,12 @@ def _servers(v):
     return " ".join(out)
 
 
+def _machine(v):
+    if v == "none" or re.fullmatch(r"[A-Za-z0-9_-]+", v) or v.endswith(".config"):
+        return v
+    raise ValueError("must be a profile name (minimal, tolerable, untouched), a .config file, or none")
+
+
 def _path(v):
     if any(c.isspace() for c in v):
         raise ValueError("must be a folder path without spaces")
@@ -152,6 +164,12 @@ def _optional_margin(v):
 # or the options of a choice (each with a short meaning). bench.config.example is
 # generated from this, so the documentation always matches the code.
 SCHEMA = {
+    # --- Machine profile ---
+    "MACHINE": dict(default="minimal", check=_machine, unit="profile name, .config file, or none",
+        help="How the machine is prepared: a profile in configs/machine/ (minimal, tolerable, untouched) or\n"
+             "the path of a profile file. Any machine setting written in the measurement file overrides the\n"
+             "profile. none = no profile, only the built-in defaults (which equal minimal)."),
+
     # --- What to measure ---
     "MEASURE": dict(default=" ".join(MEASUREMENT_KINDS), check=_list(_kind, "measurement kind"),
         unit="kinds, separated by spaces: static dynamic websocket concurrency payload",
@@ -331,38 +349,20 @@ SCHEMA = {
              "published results."),
 }
 
-# How bench.config.example is laid out: the settings people usually change first, the rest after.
-LAYOUT = [
-    ("PART 1: settings you usually change", [
-        ("What to measure", ["MEASURE", "SERVERS", "BENCHMARKS_DIR"]),
-        ("How to measure", ["REPEATS", "HTTP_REQUESTS", "IDLE_SECONDS", "WARMUP_SECONDS", "FAILURES_STOP_AFTER",
-                            "RAW_DATA"]),
-    ]),
-    ("PART 2: advanced. The defaults are the recommended values; change them only for a reason", [
-        ("Order of the runs", ["SHUFFLE", "SHUFFLE_SEED"]),
-        ("Machine settings (applied before, restored after)",
-         ["ENV_GOVERNOR", "ENV_TURBO", "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "ENV_SCREEN_BRIGHTNESS",
-          "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH", "ON_BATTERY", "SETTLE_SECONDS",
-          "RESTING_MEASURE_SECONDS"]),
-        ("Readiness check before every run",
-         ["READY_CHECK_EVERY_SECONDS", "READY_TEMP_REFERENCE_C", "READY_TEMP_MARGIN_C",
-          "READY_CPU_BUSY_REFERENCE_PERCENT", "READY_CPU_BUSY_MARGIN_PERCENT", "READY_NO_THROTTLING",
-          "READY_CONSECUTIVE_CHECKS", "READY_MIN_WAIT_SECONDS", "READY_MAX_WAIT_SECONDS", "READY_ON_TIMEOUT"]),
-        ("Load and energy measurement", ["HTTP_MAX_WORKERS", "HTTP_CONNECTION", "SCAPH_STEP_MS"]),
-        ("WebSocket workloads (full runs; --quick and --super-quick keep their short lists)",
-         ["WS_BURST_CLIENTS", "WS_BURST_SIZES_KB", "WS_BURST_BURSTS", "WS_BURST_INTERVAL_SECONDS",
-          "WS_STREAM_CLIENTS", "WS_STREAM_SIZES_KB", "WS_STREAM_RATE_PER_SECOND", "WS_STREAM_DURATION_SECONDS",
-          "WS_CONCURRENCY_CLIENTS", "WS_CONCURRENCY_SIZE_KB", "WS_PAYLOAD_CLIENTS", "WS_PAYLOAD_SIZES_KB"]),
-    ]),
-]
+
+
+# Settings that describe how the machine is prepared; the only ones a machine profile may contain
+MACHINE_KEYS = [k for k in SCHEMA if k.startswith(("ENV_", "READY_"))] + [
+    "ON_BATTERY", "SETTLE_SECONDS", "RESTING_MEASURE_SECONDS"]
+PROFILES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "machine")
 
 
 class ConfigError(Exception):
     pass
 
 
-def parse(text):
-    """Return {key: checked value} with defaults filled in. Raises ConfigError."""
+def _read(text, allowed=None, where=""):
+    """{key: (line, checked value)} of the keys set in `text`, and the errors."""
     seen = {}
     errors = []
     for n, raw in enumerate(text.splitlines(), 1):
@@ -378,16 +378,29 @@ def parse(text):
             value = value[1:-1]
         if key not in SCHEMA:
             hint = difflib.get_close_matches(key, SCHEMA, n=1)
-            errors.append(f"line {n}: unknown key '{key}'" + (f" (did you mean {hint[0]}?)" if hint else ""))
+            errors.append(f"{where}line {n}: unknown key '{key}'" + (f" (did you mean {hint[0]}?)" if hint else ""))
+            continue
+        if allowed is not None and key not in allowed:
+            errors.append(f"{where}line {n}: {key} is not a machine setting; put it in the measurement file")
             continue
         if key in seen:
-            errors.append(f"line {n}: {key} is set twice (first on line {seen[key][0]})")
+            errors.append(f"{where}line {n}: {key} is set twice (first on line {seen[key][0]})")
             continue
         try:
             seen[key] = (n, SCHEMA[key]["check"](value))
         except ValueError as e:
-            errors.append(f"line {n}: {key}={value} {e}")
-    cfg = {k: seen[k][1] if k in seen else SCHEMA[k]["default"] for k in SCHEMA}
+            errors.append(f"{where}line {n}: {key}={value} {e}")
+    return seen, errors
+
+
+def parse(text, machine_text=""):
+    """Return {key: checked value}: the defaults, then the machine profile `machine_text`, then
+    the measurement file `text`. Raises ConfigError."""
+    machine, errors = _read(machine_text, allowed=MACHINE_KEYS, where="machine profile ")
+    seen, more = _read(text)
+    errors += more
+    cfg = {k: seen[k][1] if k in seen else machine[k][1] if k in machine else SCHEMA[k]["default"]
+           for k in SCHEMA}
     if not errors and int(cfg["READY_MAX_WAIT_SECONDS"]) < int(cfg["READY_MIN_WAIT_SECONDS"]):
         errors.append("READY_MAX_WAIT_SECONDS must be at least READY_MIN_WAIT_SECONDS")
     if errors:
@@ -397,26 +410,159 @@ def parse(text):
     return cfg
 
 
+def machine_file(machine, config_path):
+    """The profile file MACHINE refers to ("" for none). BENCH_MACHINE_FILE (set when resuming) wins:
+    a resumed measurement uses the copy kept in its results folder."""
+    override = os.environ.get("BENCH_MACHINE_FILE")
+    if override:
+        return override
+    if machine == "none":
+        return ""
+    if machine.endswith(".config"):
+        here = os.path.join(os.path.dirname(os.path.abspath(config_path)), machine)
+        return here if os.path.isfile(here) else machine
+    return os.path.join(PROFILES_DIR, f"{machine}.config")
+
+
+def load(path):
+    """Read the measurement file at `path` and its machine profile; returns (cfg, profile path)."""
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    seen, _ = _read(text)
+    machine = seen["MACHINE"][1] if "MACHINE" in seen else SCHEMA["MACHINE"]["default"]
+    profile = machine_file(machine, path)
+    machine_text = ""
+    if profile:
+        try:
+            with open(profile, encoding="utf-8") as fh:
+                machine_text = fh.read()
+        except OSError:
+            names = sorted(f[:-7] for f in os.listdir(PROFILES_DIR) if f.endswith(".config")) \
+                if os.path.isdir(PROFILES_DIR) else []
+            raise ConfigError(f"MACHINE={machine}: no profile {profile}" +
+                              (f" (profiles: {', '.join(names)})" if names else ""))
+    return parse(text, machine_text), profile
+
+
+# One line per setting, for the example files (the full text is in docs/CONFIG.md)
+SHORT = {
+    "MACHINE": "machine profile: minimal, tolerable, untouched (configs/machine/), a .config file, or none",
+    "MEASURE": "kinds: static dynamic websocket concurrency payload",
+    "SERVERS": "server folder names, or TYPE:IMAGE; empty = every server found",
+    "BENCHMARKS_DIR": "folder searched for servers; empty = benchmarks/",
+    "REPEATS": "runs of every measurement (each repeat = one pass over all servers)",
+    "SHUFFLE": "1 = shuffle the server order in every repeat, 0 = same order",
+    "SHUFFLE_SEED": "number that decides the order; empty = random (saved, to rerun the same order)",
+    "ENV_GOVERNOR": "CPU governor: performance | powersave | schedutil | ondemand | conservative | unchanged",
+    "ENV_TURBO": "turbo boost: off | on | unchanged",
+    "ENV_STOP_CONTAINERS": "1 = stop other Docker containers (restarted after), 0 = leave them",
+    "ENV_KEEP_CONTAINERS": "containers to keep running anyway, comma-separated",
+    "ENV_SCREEN_BRIGHTNESS": "screen brightness in % (1 = dimmest still on), or unchanged",
+    "ENV_KEYBOARD_LIGHT": "keyboard light: off | unchanged",
+    "ENV_WIFI": "Wi-Fi: off | unchanged (off cuts a remote SSH-over-Wi-Fi session, so it refuses then)",
+    "ENV_BLUETOOTH": "Bluetooth: off | unchanged",
+    "ON_BATTERY": "laptop on battery: wait | stop | ignore",
+    "SETTLE_SECONDS": "seconds to let the machine settle after the settings are applied",
+    "RESTING_MEASURE_SECONDS": "seconds the resting temperature and CPU use are measured",
+    "READY_CHECK_EVERY_SECONDS": "seconds between readiness checks",
+    "READY_TEMP_REFERENCE_C": "reference temperature in C; empty = the measured resting temperature",
+    "READY_TEMP_MARGIN_C": "ready when CPU temperature <= reference + this (C); empty = no check",
+    "READY_CPU_BUSY_REFERENCE_PERCENT": "reference CPU use in %; empty = the measured resting use",
+    "READY_CPU_BUSY_MARGIN_PERCENT": "ready when CPU use <= reference + this (%); empty = no check",
+    "READY_NO_THROTTLING": "1 = not ready while the CPU throttles, 0 = ignore",
+    "READY_CONSECUTIVE_CHECKS": "checks that must pass in a row",
+    "READY_MIN_WAIT_SECONDS": "always wait at least this long before a run",
+    "READY_MAX_WAIT_SECONDS": "after this long not ready, READY_ON_TIMEOUT decides",
+    "READY_ON_TIMEOUT": "still not ready: wait | stop | measure (and record why)",
+    "FAILURES_STOP_AFTER": "stop after this many failed measurements in a row (1 = first failure, 0 = never)",
+    "RAW_DATA": "Scaphandre's raw power logs: keep | delete",
+    "HTTP_REQUESTS": "HTTP load levels (request counts)",
+    "WS_BURST_CLIENTS": "burst test: client counts",
+    "WS_BURST_SIZES_KB": "burst test: message sizes (KB)",
+    "WS_BURST_BURSTS": "burst test: bursts per client",
+    "WS_BURST_INTERVAL_SECONDS": "pause between bursts (s); 0 = back to back",
+    "WS_STREAM_CLIENTS": "stream test: client counts",
+    "WS_STREAM_SIZES_KB": "stream test: message sizes (KB)",
+    "WS_STREAM_RATE_PER_SECOND": "stream test: messages per second per client",
+    "WS_STREAM_DURATION_SECONDS": "stream test: seconds each client sends",
+    "WS_CONCURRENCY_CLIENTS": "concurrency test: client counts",
+    "WS_CONCURRENCY_SIZE_KB": "concurrency test: message size (KB)",
+    "WS_PAYLOAD_CLIENTS": "payload test: client count",
+    "WS_PAYLOAD_SIZES_KB": "payload test: message sizes (KB)",
+    "HTTP_MAX_WORKERS": "parallel HTTP requests (threads), or system",
+    "HTTP_CONNECTION": "reuse = one kept-alive connection per worker, per-request = a new one each time",
+    "SCAPH_STEP_MS": "Scaphandre sampling step (ms)",
+    "IDLE_SECONDS": "measure each server idle this long before its load; 0 = off",
+    "WARMUP_SECONDS": "unmeasured traffic this long after the server starts; 0 = off",
+}
+
+# The example measurement file; machine settings live in the profiles (configs/machine/)
+EXAMPLE_LAYOUT = [
+    ("Machine profile", ["MACHINE"]),
+    ("What to measure", ["MEASURE", "SERVERS", "BENCHMARKS_DIR"]),
+    ("How much", ["REPEATS", "HTTP_REQUESTS", "IDLE_SECONDS", "WARMUP_SECONDS"]),
+    ("Failures and raw data", ["FAILURES_STOP_AFTER", "RAW_DATA"]),
+    ("Order of the runs", ["SHUFFLE", "SHUFFLE_SEED"]),
+    ("Load and energy measurement", ["HTTP_MAX_WORKERS", "HTTP_CONNECTION", "SCAPH_STEP_MS"]),
+    ("WebSocket workloads (full runs; --quick and --super-quick keep their short lists)",
+     ["WS_BURST_CLIENTS", "WS_BURST_SIZES_KB", "WS_BURST_BURSTS", "WS_BURST_INTERVAL_SECONDS",
+      "WS_STREAM_CLIENTS", "WS_STREAM_SIZES_KB", "WS_STREAM_RATE_PER_SECOND", "WS_STREAM_DURATION_SECONDS",
+      "WS_CONCURRENCY_CLIENTS", "WS_CONCURRENCY_SIZE_KB", "WS_PAYLOAD_CLIENTS", "WS_PAYLOAD_SIZES_KB"]),
+]
+
+# docs/CONFIG.md: every setting, the machine ones grouped as in the profiles
+DOCS_LAYOUT = EXAMPLE_LAYOUT[:2] + [
+    ("Machine settings (configs/machine/ profiles)",
+     ["ENV_GOVERNOR", "ENV_TURBO", "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "ENV_SCREEN_BRIGHTNESS",
+      "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH", "ON_BATTERY", "SETTLE_SECONDS", "RESTING_MEASURE_SECONDS"]),
+    ("Readiness check before every run (configs/machine/ profiles)",
+     ["READY_CHECK_EVERY_SECONDS", "READY_TEMP_REFERENCE_C", "READY_TEMP_MARGIN_C",
+      "READY_CPU_BUSY_REFERENCE_PERCENT", "READY_CPU_BUSY_MARGIN_PERCENT", "READY_NO_THROTTLING",
+      "READY_CONSECUTIVE_CHECKS", "READY_MIN_WAIT_SECONDS", "READY_MAX_WAIT_SECONDS", "READY_ON_TIMEOUT"]),
+] + EXAMPLE_LAYOUT[2:]
+
+
 def example():
-    out = ["# Benchmark configuration for:  make run CONFIG=bench.config",
-           "# Copy this file to bench.config and edit it. Every key is optional; the value",
-           "# shown is the default. Lines starting with # are comments.", ""]
-    for part, sections in LAYOUT:
-        out += ["#" * 78, f"# {part}", "#" * 78, ""]
-        for title, keys in sections:
-            if title:
-                out += [f"# ===== {title} =====", ""]
-            for key in keys:
-                spec = SCHEMA[key]
-                out += ["# " + line for line in spec["help"].split("\n")]
-                if "options" in spec:
-                    width = max(len(o) for o in spec["options"])
-                    out.append("# Options:")
-                    out += [f"#   {o:<{width}}  {meaning}" for o, meaning in spec["options"].items()]
-                else:
-                    out.append(f"# Unit: {spec['unit']}")
-                out += [f"{key}={spec['default']}", ""]
+    out = ["# Measurement file:  make run CONFIG=bench.config",
+           "# Every line is optional; the value shown is the default. Every setting is explained in",
+           "# docs/CONFIG.md. The machine settings (CPU, turbo, screen, radios, readiness check) come from",
+           "# the MACHINE profile; any of them written here overrides the profile for this measurement.", ""]
+    for title, keys in EXAMPLE_LAYOUT:
+        out += [f"# ===== {title} ====="]
+        for key in keys:
+            out += [f"# {SHORT[key]}", f"{key}={SCHEMA[key]['default']}"]
+        out.append("")
     return "\n".join(out).rstrip()
+
+
+def docs():
+    out = ["# Benchmark configuration", "",
+           "<!-- Generated by: python3 tools/bench_config.py --docs > docs/CONFIG.md (do not edit by hand) -->", "",
+           "A measurement is described by a short **measurement file** (`make run CONFIG=my.config`) that names a "
+           "**machine profile**:", "",
+           "```", "MACHINE=minimal", "MEASURE=static", "HTTP_REQUESTS=1000 20000 80000", "```", "",
+           "Values come from the built-in defaults, then the machine profile (`configs/machine/<name>.config`), "
+           "then the measurement file, which can override any setting. Every value actually used is written to "
+           "`bench.config.resolved` in the results folder.", "",
+           "| Profile | For |", "|---|---|",
+           "| `minimal` | A machine you control, left alone while it measures: CPU at a fixed speed, turbo off, other "
+           "containers stopped, screen at 1%, keyboard light, Wi-Fi and Bluetooth off |",
+           "| `tolerable` | As minimal, but Wi-Fi stays on (reached over the network, or must stay online) |",
+           "| `untouched` | A machine you do not control: nothing is changed; if it never becomes calm, it measures "
+           "anyway and records why |", ""]
+    for title, keys in DOCS_LAYOUT:
+        out += [f"## {title}", ""]
+        for key in keys:
+            spec = SCHEMA[key]
+            out += [f"### `{key}`", "", f"Default: `{spec['default'] or '(empty)'}`", ""]
+            out += [" ".join(spec["help"].split("\n")), ""]
+            if "options" in spec:
+                out += ["| Option | Meaning |", "|---|---|"]
+                out += [f"| `{o}` | {' '.join(m.replace('#', '').split())} |" for o, m in spec["options"].items()]
+                out.append("")
+            else:
+                out += [f"Unit: {spec['unit']}", ""]
+    return "\n".join(out).rstrip() + "\n"
 
 
 def main():
@@ -425,15 +571,18 @@ def main():
     if sys.argv[1] == "--example":
         print(example())
         return
+    if sys.argv[1] == "--docs":
+        print(docs(), end="")
+        return
     try:
-        with open(sys.argv[1], encoding="utf-8") as fh:
-            cfg = parse(fh.read())
+        cfg, profile = load(sys.argv[1])
     except OSError as e:
         sys.exit(f"Config: cannot read {sys.argv[1]}: {e}")
     except ConfigError as e:
         sys.exit(f"Config {sys.argv[1]} is invalid:\n{e}")
     for k, v in cfg.items():
         print(f"CFG_{k}={shlex.quote(v)}")
+    print(f"BENCH_MACHINE_FILE={shlex.quote(profile)}")
 
 
 if __name__ == "__main__":

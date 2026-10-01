@@ -936,13 +936,21 @@ class RunPlanCount(unittest.TestCase):
 
 
 class IdleAndWarmup(unittest.TestCase):
-    def test_every_key_is_in_the_example_once(self):
+    def test_every_key_documented_once_and_example_short(self):
         import bench_config
-        laid_out = [k for _, sections in bench_config.LAYOUT for _, keys in sections for k in keys]
-        self.assertEqual(sorted(laid_out), sorted(bench_config.SCHEMA))
-        example = bench_config.example()
+        docs, example = bench_config.docs(), bench_config.example()
         for key in bench_config.SCHEMA:
-            self.assertEqual(example.count(f"\n{key}="), 1, key)
+            self.assertEqual(docs.count(f"### `{key}`"), 1, key)                 # every setting explained
+            self.assertIn(key, bench_config.SHORT)
+            in_example = example.count(f"\n{key}=")
+            self.assertEqual(in_example, 0 if key in bench_config.MACHINE_KEYS else 1, key)   # machine keys: profiles
+        self.assertLess(len(example.splitlines()), 80)
+
+    def test_generated_files_are_up_to_date(self):
+        import bench_config
+        for path, text in (("bench.config.example", bench_config.example() + "\n"), ("docs/CONFIG.md", bench_config.docs())):
+            with open(os.path.join(ROOT, path)) as fh:
+                self.assertEqual(fh.read(), text, f"{path} is out of date: regenerate it with tools/bench_config.py")
 
     def test_off_by_default(self):
         import bench_config, load_phases
@@ -1208,8 +1216,8 @@ class MinimalDefaultsAndProfiles(unittest.TestCase):
 
     def profile(self, name):
         import bench_config
-        with open(os.path.join(ROOT, "configs", f"{name}.config")) as fh:
-            return bench_config.parse(fh.read())
+        with open(os.path.join(ROOT, "configs", "machine", f"{name}.config")) as fh:
+            return bench_config.parse("", fh.read())
 
     def test_profiles(self):
         import bench_config
@@ -1409,6 +1417,71 @@ class WhatToMeasure(unittest.TestCase):
                             'get_container_port_mapping my-img 8001; get_container_port_mapping st-a 8001'],
                            capture_output=True, text=True, env=dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"]))
         self.assertEqual(r.stdout.split(), ["8001:8080", "8001:80"])
+
+
+class TwoLayerConfig(unittest.TestCase):
+    """Defaults < machine profile (MACHINE=...) < measurement file."""
+    def write(self, d, name, text):
+        path = os.path.join(d, name)
+        with open(path, "w") as fh:
+            fh.write(text)
+        return path
+
+    def test_layers(self):
+        import bench_config
+        d = tempfile.mkdtemp()
+        self.write(d, "lab.config", "ENV_WIFI=unchanged\nREADY_TEMP_MARGIN_C=5\n")
+        path = self.write(d, "m.config", "MACHINE=lab.config\nMEASURE=static\nREADY_TEMP_MARGIN_C=2\n")
+        cfg, profile = bench_config.load(path)
+        self.assertEqual(profile, os.path.join(d, "lab.config"))
+        self.assertEqual(cfg["ENV_WIFI"], "unchanged")                 # from the profile
+        self.assertEqual(cfg["READY_TEMP_MARGIN_C"], "2.0")            # the measurement file overrides it
+        self.assertEqual(cfg["ENV_BLUETOOTH"], "off")                  # default
+        self.assertEqual(cfg["MEASURE"], "static")
+
+    def test_named_profiles_and_none(self):
+        import bench_config
+        d = tempfile.mkdtemp()
+        cfg, profile = bench_config.load(self.write(d, "m.config", "MACHINE=untouched\n"))
+        self.assertTrue(profile.endswith(os.path.join("configs", "machine", "untouched.config")))
+        self.assertEqual((cfg["ENV_GOVERNOR"], cfg["READY_ON_TIMEOUT"]), ("unchanged", "measure"))
+        cfg, profile = bench_config.load(self.write(d, "n.config", "MACHINE=none\n"))
+        self.assertEqual((profile, cfg["ENV_GOVERNOR"]), ("", "performance"))
+
+    def test_unknown_profile_and_wrong_key_in_profile(self):
+        import bench_config
+        d = tempfile.mkdtemp()
+        with self.assertRaises(bench_config.ConfigError) as e:
+            bench_config.load(self.write(d, "m.config", "MACHINE=lab\n"))
+        self.assertIn("minimal", str(e.exception))                      # lists the profiles there are
+        self.write(d, "bad.config", "REPEATS=3\n")
+        with self.assertRaises(bench_config.ConfigError) as e:
+            bench_config.load(self.write(d, "m2.config", "MACHINE=bad.config\n"))
+        self.assertIn("REPEATS is not a machine setting", str(e.exception))
+
+    def test_resume_uses_the_copy_in_the_results_folder(self):
+        import bench_config
+        d = tempfile.mkdtemp()
+        copy = self.write(d, "machine.config", "ENV_WIFI=unchanged\n")
+        path = self.write(d, "bench.config", "MACHINE=minimal\n")
+        os.environ["BENCH_MACHINE_FILE"] = copy
+        try:
+            cfg, profile = bench_config.load(path)
+        finally:
+            del os.environ["BENCH_MACHINE_FILE"]
+        self.assertEqual((profile, cfg["ENV_WIFI"]), (copy, "unchanged"))
+
+    def test_edited_machine_copy_stops_a_resume(self):
+        import run_metadata
+        d = tempfile.mkdtemp()
+        for name in ("bench.config", "machine.config"):
+            self.write(d, name, "x\n")
+        run_metadata.write_start(os.path.join(d, "metadata.json"), {})
+        meta = json.load(open(os.path.join(d, "metadata.json")))
+        self.assertTrue(meta["machine_config_sha256"])
+        self.write(d, "machine.config", "ENV_WIFI=unchanged\n")
+        diffs = [w for w, _, _ in run_metadata.differences(meta, d)]
+        self.assertIn("Config (machine.config in the folder, edited)", diffs)
 
 
 if __name__ == "__main__":

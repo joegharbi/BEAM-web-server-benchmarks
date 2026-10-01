@@ -314,9 +314,10 @@ def write_start(path, settings):
         "machine_state_start": machine_state(),
     }
     # Fingerprint of the config copy kept in the folder, so a resume can tell if it was edited since
-    config_copy = os.path.join(os.path.dirname(os.path.abspath(path)), "bench.config")
-    if os.path.isfile(config_copy):
-        meta["config_sha256"] = file_sha256(config_copy)
+    folder = os.path.dirname(os.path.abspath(path))
+    for key, name in (("config_sha256", "bench.config"), ("machine_config_sha256", "machine.config")):
+        if os.path.isfile(os.path.join(folder, name)):
+            meta[key] = file_sha256(os.path.join(folder, name))
     original = settings.get("reproduces")
     if original:
         # A reproduction: say which measurement it repeats and what is different this time
@@ -375,11 +376,12 @@ def differences(meta, folder=None):
         new = image_id(name)
         if new != old:
             diffs.append((f"Image {name}", old, new or "missing"))
-    recorded = meta.get("config_sha256")
-    if folder and recorded:
-        now_sha = file_sha256(os.path.join(folder, "bench.config"))
-        if now_sha != recorded:
-            diffs.append(("Config (bench.config in the folder, edited)", recorded[:12], now_sha[:12] or "missing"))
+    for key, name in (("config_sha256", "bench.config"), ("machine_config_sha256", "machine.config")):
+        recorded = meta.get(key)
+        if folder and recorded:
+            now_sha = file_sha256(os.path.join(folder, name))
+            if now_sha != recorded:
+                diffs.append((f"Config ({name} in the folder, edited)", recorded[:12], now_sha[:12] or "missing"))
     return diffs
 
 
