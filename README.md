@@ -27,7 +27,8 @@ make init → make build → make check-health → make run → make graph
 - **Python 3.8+** and **python3-venv** (`sudo apt install python3 python3-venv`)
 - **Docker** (`sudo apt install docker.io`)
 - **Make**
-- **Scaphandre** (optional, for energy): `cargo install scaphandre`
+- **Scaphandre** (for energy): `sudo apt install scaphandre` on Debian 13. Version 1.0.3 prints `1.0.2` with `--version`
+  (released with the old version number), so `metadata.json` also records the package version.
 
 Verify: `make check-tools`
 
@@ -49,6 +50,96 @@ Benchmark root can be overridden (default remains `benchmarks/`):
 make run BENCHMARKS_DIR=benchmarks
 ```
 
+## Controlled measurements with a config file
+
+For repeatable measurements, describe the whole campaign in one file and run it with one command:
+
+```bash
+cp bench.config.example bench.config     # every setting is explained in the file
+make run CONFIG=bench.config             # or: make run-static CONFIG=bench.config
+```
+
+Every setting is optional; an empty file uses the recommended defaults. The file has two parts: the
+few settings you usually change (repeats, load levels, idle, warm-up, failures, raw data), and the
+advanced ones, whose defaults are the recommended values. Without `CONFIG` the framework behaves as
+before: one pass, no waiting between runs, machine settings untouched.
+
+With a config, a measurement:
+
+1. **Applies the machine settings** (CPU governor, turbo off, other Docker containers stopped), checks
+   that they took effect, and refuses to measure if they did not. They are restored at the end, also
+   after an error or Ctrl-C.
+2. **Keeps the machine awake.** Sleep and lid-close suspend are blocked while it runs. A laptop must run
+   on its charger: the measurement does not start on battery, and waits if the charger is unplugged.
+3. **Measures the resting state** of the machine (CPU temperature and CPU use) after a settle period.
+4. **Repeats every measurement** `REPEATS` times. Each repeat is a full pass over all servers in a
+   shuffled order (`SHUFFLE`, `SHUFFLE_SEED`), so slow drift such as heat is spread evenly.
+5. **Waits until the machine is ready before every run**: CPU temperature back within a margin of the
+   resting temperature, CPU use within a margin of the resting use, no thermal throttling, on the
+   charger. It checks again after the server has started, right before the load, because starting a
+   server warms the CPU. `READY_ON_TIMEOUT` decides what happens if the machine does not become ready
+   (keep waiting, stop, or measure and record why).
+6. **Optionally warms the server up and measures it idle** (`WARMUP_SECONDS`, `IDLE_SECONDS`, both off
+   by default). Order: start, warm-up (not measured), readiness check, idle window, load window.
+7. **Records failed measurements** in `failures.csv` and continues; `FAILURES_STOP_AFTER` decides when
+   to stop (1 = at the first failure).
+8. **Writes statistics per configuration** at the end.
+
+### Before leaving a long measurement alone
+
+Connect the charger, close other programs, and keep the screen brightness, Wi-Fi and Bluetooth as they
+are for the whole run. Their state is recorded at the start and end in `metadata.json`. They do not
+affect the container's energy, which is its share of the CPU's power, but they do affect the whole
+machine's energy (`Host Energy (J)`).
+
+### What a results folder contains
+
+| File | Content |
+|---|---|
+| `static/`, `dynamic/`, `websocket/` `*.csv` | One row per run: the columns of earlier releases, plus whole-machine energy, CPU temperature at the start and end of the load, throttling, readiness waits and result, and the warm-up and idle columns |
+| `<family>/summary.csv`, `*_summary.csv` | Per configuration: n, mean, sd, 95% confidence interval, median, Q1, Q3, IQR, min, max, CV%, and the energy mean after the IQR and Hampel outlier rules |
+| `metadata.json` | How the measurement was made: framework version, Scaphandre (program and package version), Docker, Python, OS, kernel, CPU, memory, all settings, machine state at the start and end (governor, turbo, charger, battery, screen brightness, Wi-Fi, Bluetooth, temperature), and the exact ID of every image measured |
+| `bench.config`, `bench.config.resolved` | The config used, and every setting with the value actually used (defaults included) |
+| `schedule.txt` | Shuffle seed and the order of the servers in every pass |
+| `progress.txt` | Finished measurements, used to resume |
+| `failures.csv` | Failed measurements and why (only if any failed) |
+| `raw/` | Scaphandre's raw power logs (plain JSON) with the load and idle windows of each run (`RAW_DATA=keep`) |
+
+### Stopping and resuming
+
+Ctrl-C stops the measurement, restores the machine settings and prints the command to continue. A full
+campaign can take days; after Ctrl-C, a crash or a reboot:
+
+```bash
+make resume RESUME=results/<folder>
+```
+
+This continues in the same folder with the same config, arguments and shuffle order, and skips the
+measurements that already finished. The measurement that was running when it stopped is done again.
+
+### Recalculating energy from the raw logs
+
+```bash
+python3 tools/scaphandre_energy.py recompute results/<folder>/raw/<run>.json
+```
+
+### Energy calculation
+
+Container energy is Scaphandre's power of all processes and threads of the server container, summed
+per sample and integrated over exactly the load window (500 ms sampling by default, `SCAPH_STEP_MS`).
+The container is found by its cgroup, not by process name, so any server works, whatever its language.
+The HTTP client keeps one connection per worker (`HTTP_CONNECTION=reuse`); `per-request` reproduces the
+client of earlier releases.
+
+### Checking a setup
+
+```bash
+python3 tools/check_environment.py                 # read-only report of the machine state
+bash tests/real_sensor_check.sh                    # one short measurement with the real sensor
+bash tests/config_check.sh                         # a small controlled campaign, checked end to end (sudo)
+srv/bin/python -m unittest tests/test_changes.py   # unit tests, no sudo needed
+```
+
 ## Directory Structure
 
 ```
@@ -64,6 +155,14 @@ results/              # Output CSVs (results/<timestamp>/{static,dynamic,websock
 Each directory containing a `Dockerfile` under `benchmarks/` is one benchmark. The **directory name** is the Docker image name (use unified naming: `<type>-<language>-<framework>-<version>`, e.g. `st-erlang-cowboy-27`). Type is inferred from the path (`benchmarks/websocket/...` → WebSocket test). See [docs/MINIMAL_BASES_AND_UNIFICATION.md](docs/MINIMAL_BASES_AND_UNIFICATION.md) for base images and Dockerfile structure.
 
 ## Adding a Server
+
+Any server in any language can be measured. It only has to:
+
+- **HTTP** (`static/`, `dynamic/`): answer `GET /` with status 200 on the port it exposes, and support
+  HTTP/1.1 keep-alive (the client reuses connections).
+- **WebSocket** (`websocket/`): accept a WebSocket on `/ws` and echo every message back.
+
+Steps:
 
 1. Create `benchmarks/<type>/<lang>/<framework>/<container>/` with a `Dockerfile`.
 2. Add `EXPOSE 80` (or your port). Ensure ulimit 100000 (health check enforces this).
