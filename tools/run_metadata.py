@@ -313,6 +313,10 @@ def write_start(path, settings):
         "settings": {**settings, **tool_settings()},
         "machine_state_start": machine_state(),
     }
+    # Fingerprint of the config copy kept in the folder, so a resume can tell if it was edited since
+    config_copy = os.path.join(os.path.dirname(os.path.abspath(path)), "bench.config")
+    if os.path.isfile(config_copy):
+        meta["config_sha256"] = file_sha256(config_copy)
     original = settings.get("reproduces")
     if original:
         # A reproduction: say which measurement it repeats and what is different this time
@@ -338,6 +342,16 @@ LABELS = {"framework_version": "Framework (git commit)", "scaphandre_version": "
           "logical_cpus": "Logical CPUs", "memory_gb": "Memory (GB)"}
 
 
+def file_sha256(path):
+    """Fingerprint of a file's exact content, or "" when it does not exist."""
+    import hashlib
+    try:
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return ""
+
+
 def write_images(path, names):
     """Record the ID of every image the measurement will use, before the first run."""
     with open(path, encoding="utf-8") as fh:
@@ -348,8 +362,11 @@ def write_images(path, names):
     return path
 
 
-def differences(meta):
-    """[(what, then, now)] for software, machine and images that differ from `meta` (a metadata.json)."""
+def differences(meta, folder=None):
+    """[(what, then, now)] for software, machine and images that differ from `meta` (a metadata.json).
+
+    With `folder` (resume), the folder's own copy of the config must also be unchanged since the start.
+    """
     then = meta.get("software_and_machine", {})
     now = software_and_machine()
     diffs = [(LABELS[k], then.get(k, ""), now.get(k, "")) for k in COMPARED
@@ -358,6 +375,11 @@ def differences(meta):
         new = image_id(name)
         if new != old:
             diffs.append((f"Image {name}", old, new or "missing"))
+    recorded = meta.get("config_sha256")
+    if folder and recorded:
+        now_sha = file_sha256(os.path.join(folder, "bench.config"))
+        if now_sha != recorded:
+            diffs.append(("Config (bench.config in the folder, edited)", recorded[:12], now_sha[:12] or "missing"))
     return diffs
 
 
@@ -370,7 +392,7 @@ def write_resume(path, settings):
     """Record that an unfinished measurement was resumed (the original start record is kept)."""
     with open(path, encoding="utf-8") as fh:
         meta = json.load(fh)
-    diffs = differences(meta)
+    diffs = differences(meta, os.path.dirname(os.path.abspath(path)))
     meta.setdefault("resumes", []).append({
         "resumed_at_utc": _now(),
         "settings": settings,
@@ -420,7 +442,7 @@ def resume_info(folder):
     if not os.path.isfile(os.path.join(folder, "bench.config")):
         problems.append("no bench.config in the folder (only measurements made with --config can be resumed)")
     if meta and not problems and os.environ.get("RESUME_ANYWAY") != "1":
-        diffs = differences(meta)
+        diffs = differences(meta, folder)
         if diffs:
             problems.append("these changed since the measurement started:\n" + differences_text(diffs) +
                             "\nResults made with different tools must not share one folder. Start a new "
@@ -468,6 +490,7 @@ def reproduce_info(folder):
     diffs = differences(meta) if meta else []
     out = _original_args(meta.get("settings", {}), resolved)
     lines = [f"REPRODUCE_PROBLEMS={shlex.quote('; '.join(problems))}",
+             f"REPRODUCE_CONFIG={shlex.quote(meta.get('settings', {}).get('config_file', ''))}",
              f"REPRODUCE_DIFFERENCES={shlex.quote(differences_text(diffs) if diffs else '')}",
              "set -- " + " ".join(shlex.quote(a) for a in out)]
     return "\n".join(lines)

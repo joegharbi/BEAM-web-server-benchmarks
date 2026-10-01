@@ -151,20 +151,23 @@ SCHEMA = {
         options={"1": "stop them before, restart them after (recommended)", "0": "leave them running"}),
     "ENV_KEEP_CONTAINERS": dict(default="", check=_names, unit="container names, comma-separated, or empty",
         help="Containers that must keep running even when ENV_STOP_CONTAINERS=1."),
-    "ENV_SCREEN_BRIGHTNESS": dict(default="unchanged", check=_brightness, unit="percent 0-100, or 'unchanged'",
-        help="Screen brightness during the measurement. It does not change the container's energy (the screen\n"
-             "is not part of the CPU), only the whole machine's. The desktop may still dim or switch off the\n"
-             "screen by itself. 'unchanged' on machines without a screen or where you have no control."),
-    "ENV_KEYBOARD_LIGHT": dict(default="unchanged", check=_choice("unchanged", "off"),
+    "ENV_SCREEN_BRIGHTNESS": dict(default="1", check=_brightness, unit="percent 0-100, or 'unchanged'",
+        help="Screen brightness during the measurement (restored after). 1 = dimmest that is still on (0 switches\n"
+             "the backlight off on some laptops, and a brightness key pressed then would change it mid-run).\n"
+             "It does not change the container's energy (the screen is not part of the CPU), only the whole\n"
+             "machine's. The desktop may still dim or switch off the screen by itself. Machines without a\n"
+             "screen are not affected."),
+    "ENV_KEYBOARD_LIGHT": dict(default="off", check=_choice("off", "unchanged"),
         help="Keyboard backlight during the measurement.",
-        options={"unchanged": "leave it as it is", "off": "switch it off (restored after)"}),
-    "ENV_WIFI": dict(default="unchanged", check=_choice("unchanged", "off"),
+        options={"off": "switch it off, restored after (recommended)", "unchanged": "leave it as it is"}),
+    "ENV_WIFI": dict(default="off", check=_choice("off", "unchanged"),
         help="Wi-Fi radio during the measurement. Off removes background network traffic and updates.\n"
-             "Careful: off cuts a remote (SSH) connection over Wi-Fi.",
-        options={"unchanged": "leave it as it is", "off": "switch it off (restored after)"}),
-    "ENV_BLUETOOTH": dict(default="unchanged", check=_choice("unchanged", "off"),
+             "The measurement needs no network. A run started over SSH through Wi-Fi refuses to switch it off\n"
+             "(it would cut its own connection); set 'unchanged' there.",
+        options={"off": "switch it off, restored after (recommended)", "unchanged": "leave it as it is"}),
+    "ENV_BLUETOOTH": dict(default="off", check=_choice("off", "unchanged"),
         help="Bluetooth radio during the measurement.",
-        options={"unchanged": "leave it as it is", "off": "switch it off (restored after)"}),
+        options={"off": "switch it off, restored after (recommended)", "unchanged": "leave it as it is"}),
     "ON_BATTERY": dict(default="wait", check=_choice("wait", "stop", "ignore"),
         help="A laptop not on its charger: the CPU can run under other power limits on battery. Checked at\n"
              "the start and before every run; a run during which the charger was unplugged counts as failed.\n"

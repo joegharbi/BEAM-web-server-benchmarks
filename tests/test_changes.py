@@ -860,7 +860,9 @@ exec "$@"
             os.makedirs(os.path.join(bench, fam))
         cfg = os.path.join(d, "c.config")
         with open(cfg, "w") as fh:
-            fh.write("SETTLE_SECONDS=60\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_STOP_CONTAINERS=1\n")
+            fh.write("SETTLE_SECONDS=60\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_STOP_CONTAINERS=1\n"
+                     "ENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\nENV_WIFI=unchanged\n"
+                     "ENV_BLUETOOTH=unchanged\n")
         before = set(os.listdir(os.path.join(ROOT, "results"))) if os.path.isdir(os.path.join(ROOT, "results")) else set()
         env = dict(os.environ, PATH=fakes + os.pathsep + os.environ["PATH"])
         p = subprocess.Popen(["bash", "scripts/run_benchmarks.sh", "--super-quick", "--bench", bench, "--config", cfg, "static"],
@@ -1194,6 +1196,64 @@ class SafeResumeAndReproduce(unittest.TestCase):
         d = self.folder()
         os.remove(os.path.join(d, "bench.config.resolved"))
         self.assertIn("only measurements made with --config can be reproduced", self.m.reproduce_info(d))
+
+
+class MinimalDefaultsAndProfiles(unittest.TestCase):
+    def test_defaults_are_minimal(self):
+        import bench_config
+        cfg = bench_config.parse("")
+        self.assertEqual([cfg[k] for k in ("ENV_SCREEN_BRIGHTNESS", "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH")],
+                         ["1", "off", "off", "off"])
+
+    def profile(self, name):
+        import bench_config
+        with open(os.path.join(ROOT, "configs", f"{name}.config")) as fh:
+            return bench_config.parse(fh.read())
+
+    def test_profiles(self):
+        import bench_config
+        minimal, tolerable, untouched = (self.profile(n) for n in ("minimal", "tolerable", "untouched"))
+        self.assertEqual(minimal, {**bench_config.parse(""), "SHUFFLE_SEED": minimal["SHUFFLE_SEED"]})   # = defaults
+        self.assertEqual({k for k in minimal if minimal[k] != tolerable[k] and k != "SHUFFLE_SEED"}, {"ENV_WIFI"})
+        self.assertEqual(tolerable["ENV_WIFI"], "unchanged")
+        for key in ("ENV_GOVERNOR", "ENV_TURBO", "ENV_SCREEN_BRIGHTNESS", "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH"):
+            self.assertEqual(untouched[key], "unchanged", key)
+        self.assertEqual((untouched["ENV_STOP_CONTAINERS"], untouched["READY_ON_TIMEOUT"]), ("0", "measure"))
+
+    def test_ssh_over_wifi_is_detected(self):
+        import prepare_environment as pe
+        saved = (pe._route_dev, pe._is_wireless)
+        try:
+            pe._route_dev = lambda ip: {"10.0.0.5": "wlp0s20f3", "10.0.1.5": "enp0s31f6"}.get(ip, "")
+            pe._is_wireless = lambda dev: dev.startswith("wl")
+            self.assertFalse(pe.remote_over_wifi({}))                                          # local session
+            self.assertTrue(pe.remote_over_wifi({"SSH_CONNECTION": "10.0.0.5 51000 10.0.0.2 22"}))
+            self.assertFalse(pe.remote_over_wifi({"SSH_CONNECTION": "10.0.1.5 51000 10.0.1.2 22"}))  # cable
+        finally:
+            pe._route_dev, pe._is_wireless = saved
+
+
+class ConfigFingerprint(SafeResumeAndReproduce):
+    def test_resume_refuses_an_edited_config(self):
+        d = self.folder()
+        with open(os.path.join(d, "bench.config"), "w") as fh:
+            fh.write("REPEATS=5\n")
+        meta_path = os.path.join(d, "metadata.json")
+        meta = json.load(open(meta_path))
+        meta["config_sha256"] = self.m.file_sha256(os.path.join(d, "bench.config"))
+        json.dump(meta, open(meta_path, "w"))
+        self.assertIn("RESUME_PROBLEMS=''", self.m.resume_info(d))                # unchanged: resumes
+        with open(os.path.join(d, "bench.config"), "a") as fh:
+            fh.write("REPEATS=3\n")
+        self.assertIn("Config (bench.config in the folder, edited)", self.m.resume_info(d))
+
+    def test_start_records_the_fingerprint(self):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "bench.config"), "w") as fh:
+            fh.write("REPEATS=5\n")
+        self.m.write_start(os.path.join(d, "metadata.json"), {})
+        meta = json.load(open(os.path.join(d, "metadata.json")))
+        self.assertEqual(meta["config_sha256"], self.m.file_sha256(os.path.join(d, "bench.config")))
 
 
 if __name__ == "__main__":

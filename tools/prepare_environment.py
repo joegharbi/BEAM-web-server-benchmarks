@@ -96,6 +96,26 @@ def radio_off(kind, label, saved):
     print(f"{label}: off")
 
 
+def _route_dev(ip):
+    """Network interface the machine uses to reach `ip` (e.g. wlp0s20f3), or ""."""
+    try:
+        out = subprocess.run(["ip", "-o", "route", "get", ip], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    parts = out.split()
+    return parts[parts.index("dev") + 1] if "dev" in parts else ""
+
+
+def _is_wireless(dev):
+    return bool(dev) and os.path.isdir(f"/sys/class/net/{dev}/wireless")
+
+
+def remote_over_wifi(env=None):
+    """True when this session came in over SSH through a Wi-Fi interface (switching Wi-Fi off would cut it)."""
+    conn = (env if env is not None else os.environ).get("SSH_CONNECTION", "").split()
+    return bool(conn) and _is_wireless(_route_dev(conn[0]))
+
+
 def do_apply(args):
     require_root()
     state = {"governors": {}, "turbo": None, "stopped_containers": [], "files": {}}

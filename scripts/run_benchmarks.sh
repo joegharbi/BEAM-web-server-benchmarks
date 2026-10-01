@@ -468,6 +468,7 @@ if [ -n "$REPRODUCE_DIR" ]; then
         exit 1
     fi
     echo "[INFO] Reproducing $REPRODUCE_DIR in a new folder, with the settings and arguments it used"
+    echo "[INFO] The original was made with the config: ${REPRODUCE_CONFIG:-unknown} (every value is in its bench.config.resolved)"
     if [ -n "$REPRODUCE_DIFFERENCES" ]; then
         echo "[INFO] Different from the original (recorded in metadata.json):"
         echo "$REPRODUCE_DIFFERENCES"
@@ -1122,6 +1123,11 @@ bench_apply_environment() {
         --screen-brightness "$CFG_ENV_SCREEN_BRIGHTNESS" --keyboard-light "$CFG_ENV_KEYBOARD_LIGHT"
         --wifi "$CFG_ENV_WIFI" --bluetooth "$CFG_ENV_BLUETOOTH")
     [ "$CFG_ENV_STOP_CONTAINERS" = "0" ] && env_args+=(--no-stop-containers)
+    # Checked here, not under sudo: sudo drops SSH_CONNECTION
+    if [ "$CFG_ENV_WIFI" = "off" ] && ! "$PYTHON_PATH" -c 'import sys; sys.path.insert(0, "tools"); import prepare_environment as p; sys.exit(1 if p.remote_over_wifi() else 0)'; then
+        print_status "ERROR" "This session is connected over SSH through Wi-Fi; ENV_WIFI=off would cut it. Set ENV_WIFI=unchanged in the config."
+        exit 1
+    fi
     BENCH_ENV_STATE="$RESULTS_DIR/.environment_state.json"
     print_status "INFO" "Machine settings: governor=$CFG_ENV_GOVERNOR turbo=$CFG_ENV_TURBO stop_containers=$CFG_ENV_STOP_CONTAINERS screen=$CFG_ENV_SCREEN_BRIGHTNESS keyboard_light=$CFG_ENV_KEYBOARD_LIGHT wifi=$CFG_ENV_WIFI bluetooth=$CFG_ENV_BLUETOOTH"
     sudo "$PYTHON_PATH" ./tools/prepare_environment.py apply "${env_args[@]}" --state "$BENCH_ENV_STATE"

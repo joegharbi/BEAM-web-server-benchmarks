@@ -52,16 +52,25 @@ make run BENCHMARKS_DIR=benchmarks
 
 ## Controlled measurements with a config file
 
-For repeatable measurements, describe the whole campaign in one file and run it with one command:
+For repeatable measurements, describe the whole campaign in one file and run it with one command.
+Three ready-made profiles are in `configs/`:
+
+| Profile | For | Machine settings |
+|---|---|---|
+| `configs/minimal.config` | A laptop or desktop you control, left alone while it measures (published results) | CPU at a fixed speed, turbo off, other containers stopped, screen at 1%, keyboard light, Wi-Fi and Bluetooth off |
+| `configs/tolerable.config` | The same, but reached over the network or needing to stay online | As minimal, but Wi-Fi stays on |
+| `configs/untouched.config` | A machine you do not control (shared server, cloud) | Nothing is changed; if the machine never becomes calm, it measures anyway and records why |
 
 ```bash
-cp bench.config.example bench.config     # every setting is explained in the file
-make run CONFIG=bench.config             # or: make run-static CONFIG=bench.config
+make run CONFIG=configs/minimal.config          # or: make run-static CONFIG=configs/minimal.config
+cp configs/minimal.config my.config             # your own: add lines such as REPEATS=10
 ```
 
-Every setting is optional; an empty file uses the recommended defaults. The file has two parts: the
-few settings you usually change (repeats, load levels, idle, warm-up, failures, raw data), and the
-advanced ones, whose defaults are the recommended values. Without `CONFIG` the framework behaves as
+Every setting is optional; an empty file uses the defaults, which are the minimal profile.
+`bench.config.example` explains every setting, in two parts: the few you usually change (repeats, load
+levels, idle, warm-up, failures, raw data), and the advanced ones, whose defaults are the recommended
+values. A run started over SSH through Wi-Fi refuses to switch Wi-Fi off, since that would cut its own
+connection; use the tolerable profile there. Without `CONFIG` the framework behaves as
 before: one pass, no waiting between runs, machine settings untouched.
 
 With a config, a measurement:
@@ -89,9 +98,9 @@ With a config, a measurement:
 
 ### Before leaving a long measurement alone
 
-Connect the charger and close other programs. Set the screen, keyboard light, Wi-Fi and Bluetooth in
-the config (`ENV_SCREEN_BRIGHTNESS`, `ENV_KEYBOARD_LIGHT`, `ENV_WIFI`, `ENV_BLUETOOTH`), or leave them
-alone for the whole run. Their state is recorded at the start and end in `metadata.json`. They do not
+Connect the charger and close other programs. The minimal profile dims the screen and switches the
+keyboard light, Wi-Fi and Bluetooth off (`ENV_SCREEN_BRIGHTNESS`, `ENV_KEYBOARD_LIGHT`, `ENV_WIFI`,
+`ENV_BLUETOOTH`); otherwise leave them alone for the whole run. Their state is recorded at the start and end in `metadata.json`. They do not
 affect the container's energy, which is its share of the CPU's power, but they do affect the whole
 machine's energy (`Host Energy (J)`). The desktop may still dim or switch off the screen by itself.
 
@@ -122,8 +131,9 @@ This continues in the same folder with the same config, arguments and shuffle or
 measurements that already finished. The measurement that was running when it stopped is done again.
 
 A measurement is only continued with the tools it started with. If the framework (git commit),
-Scaphandre, Docker, Python, OS, kernel, CPU, memory or a server image changed in between, resume refuses
-and lists what changed, because results made with different tools must not share one folder.
+Scaphandre, Docker, Python, OS, kernel, CPU, memory, a server image, or the config copy in the folder
+changed in between, resume refuses and lists what changed, because results made with different tools
+must not share one folder.
 `RESUME_ANYWAY=1 make resume ...` continues anyway and records the differences in `metadata.json`.
 
 ### Reproducing a measurement
@@ -134,8 +144,8 @@ make reproduce FROM=results/<folder>
 
 This makes the measurement again in a new folder, with every setting it used (`bench.config.resolved`,
 shuffle seed included) and its original arguments. It prints what is different from the original
-(framework, Scaphandre, Docker, OS, kernel, CPU, images) and records it in the new `metadata.json`
-together with the folder it reproduces. Server images are rebuilt from their Dockerfiles, so a base image
+(framework, Scaphandre, Docker, OS, kernel, CPU, images) and which config the original used, and records
+the differences in the new `metadata.json` together with the folder it reproduces. Server images are rebuilt from their Dockerfiles, so a base image
 that received updates under the same name gives a different image ID; this is reported, not hidden.
 
 ### Recalculating energy from the raw logs

@@ -87,30 +87,33 @@ ENV_STOP_CONTAINERS=1
 # Unit: container names, comma-separated, or empty
 ENV_KEEP_CONTAINERS=
 
-# Screen brightness during the measurement. It does not change the container's energy (the screen
-# is not part of the CPU), only the whole machine's. The desktop may still dim or switch off the
-# screen by itself. 'unchanged' on machines without a screen or where you have no control.
+# Screen brightness during the measurement (restored after). 1 = dimmest that is still on (0 switches
+# the backlight off on some laptops, and a brightness key pressed then would change it mid-run).
+# It does not change the container's energy (the screen is not part of the CPU), only the whole
+# machine's. The desktop may still dim or switch off the screen by itself. Machines without a
+# screen are not affected.
 # Unit: percent 0-100, or 'unchanged'
-ENV_SCREEN_BRIGHTNESS=unchanged
+ENV_SCREEN_BRIGHTNESS=1
 
 # Keyboard backlight during the measurement.
 # Options:
+#   off        switch it off, restored after (recommended)
 #   unchanged  leave it as it is
-#   off        switch it off (restored after)
-ENV_KEYBOARD_LIGHT=unchanged
+ENV_KEYBOARD_LIGHT=off
 
 # Wi-Fi radio during the measurement. Off removes background network traffic and updates.
-# Careful: off cuts a remote (SSH) connection over Wi-Fi.
+# The measurement needs no network. A run started over SSH through Wi-Fi refuses to switch it off
+# (it would cut its own connection); set 'unchanged' there.
 # Options:
+#   off        switch it off, restored after (recommended)
 #   unchanged  leave it as it is
-#   off        switch it off (restored after)
-ENV_WIFI=unchanged
+ENV_WIFI=off
 
 # Bluetooth radio during the measurement.
 # Options:
+#   off        switch it off, restored after (recommended)
 #   unchanged  leave it as it is
-#   off        switch it off (restored after)
-ENV_BLUETOOTH=unchanged
+ENV_BLUETOOTH=off
 
 # A laptop not on its charger: the CPU can run under other power limits on battery. Checked at
 # the start and before every run; a run during which the charger was unplugged counts as failed.
