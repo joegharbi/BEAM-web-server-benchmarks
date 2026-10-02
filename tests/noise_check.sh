@@ -30,9 +30,9 @@ def show(col):
     v = [float(r[col]) for r in rows]
     m = st.mean(v); cv = 100 * st.stdev(v) / m
     print(f"  {col:<22} mean {m:9.2f}  CV {cv:5.1f}%  runs {[round(x, 2) for x in v]}")
-for c in ("Total Energy (J)", "Avg Power (W)", "Avg CPU (%)", "Execution Time (s)", "Host Avg Power (W)"):
+for c in ("Container Energy (J)", "Container Avg Power (W)", "Container Avg CPU (%)", "Execution Time (s)", "Host Avg Power (W)"):
     show(c)
-v = [float(r["Total Energy (J)"]) for r in rows]
+v = [float(r["Container Energy (J)"]) for r in rows]
 cv = st.stdev(v) / st.mean(v)
 print(f"\n  repeats needed for a +/-5% 95% CI at this CV: about {max(3, round((2.1 * cv / 0.05) ** 2))}")
 print(f"  files: {sys.argv[1]}")

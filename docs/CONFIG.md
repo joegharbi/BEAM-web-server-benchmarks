@@ -56,6 +56,17 @@ Measure every selected server also with other container settings, in the same sh
 
 Unit: NAME:VAR=value[|VAR=value], several separated by ;
 
+### `VARIANT_ORDER`
+
+Default: `separate`
+
+With VARIANTS: the order of the servers and their variants within each repeat.
+
+| Option | Meaning |
+|---|---|
+| `separate` | all servers as built, then all of the first variant, ...; which group goes first rotates from repeat to repeat, so each group runs early and late equally often |
+| `mixed` | servers and variants shuffled together |
+
 ### `BENCHMARKS_DIR`
 
 Default: `(empty)`

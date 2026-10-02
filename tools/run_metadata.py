@@ -26,6 +26,7 @@ import glob
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -366,6 +367,38 @@ def file_sha256(path):
             return hashlib.sha256(fh.read()).hexdigest()
     except OSError:
         return ""
+
+
+def stale_images(benchmarks_dir, names):
+    """[(image, newest changed file)] for images built before their recipe folder last changed.
+
+    A server whose Dockerfile, code or configuration changed after its image was built would be
+    measured in its old form; `make build` brings it up to date. Images without a folder (variants,
+    images built elsewhere) are not checked.
+    """
+    folders = {}
+    for root, dirs, files in os.walk(benchmarks_dir):
+        if "Dockerfile" in files and os.path.basename(root) in names:
+            folders[os.path.basename(root)] = root
+    stale = []
+    for name, folder in sorted(folders.items()):
+        created = _run(["docker", "image", "inspect", "--format", "{{.Created}}", name])
+        if not created:
+            continue
+        try:
+            # e.g. 2026-10-01T14:41:14.175731853+02:00: drop the fraction (nanoseconds), keep the zone
+            built = datetime.datetime.fromisoformat(re.sub(r"\.\d+", "", created).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        newest, newest_file = 0.0, ""
+        for root, _, files in os.walk(folder):
+            for f in files:
+                t = os.path.getmtime(os.path.join(root, f))
+                if t > newest:
+                    newest, newest_file = t, os.path.relpath(os.path.join(root, f), benchmarks_dir)
+        if newest > built + 1:
+            stale.append((name, newest_file))
+    return stale
 
 
 def write_images(path, names):

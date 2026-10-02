@@ -700,6 +700,7 @@ fi
 # What to measure, from the config (MEASURE, SERVERS) when the command line does not choose.
 # Resolved and checked here, before anything starts: every name must exist, every image be built.
 BENCH_DO_STATIC=1; BENCH_DO_DYNAMIC=1; BENCH_DO_WS=1; BENCH_DO_CONC=1; BENCH_DO_PAYLOAD=1
+declare -A BENCH_VARIANT_OF=()     # variant image -> variant name (the "Variant" column)
 BENCH_SELECTED=0
 SELECT_STATIC=(); SELECT_DYNAMIC=(); SELECT_WEBSOCKET=()
 
@@ -739,6 +740,7 @@ bench_add_variants() {
                 bench_stop_early
             fi
             out+=("$img-$name")
+            BENCH_VARIANT_OF["$img-$name"]="$name"
         done
     done
     _list=("${out[@]}")
@@ -787,6 +789,16 @@ bench_select_from_config() {
     done
     if [ ${#missing[@]} -gt 0 ]; then
         echo -e "${RED}[ERROR]${NC} These images are not built: ${missing[*]}. Build them first (make build)."
+        bench_stop_early
+    fi
+    # An image built before its recipe last changed would be measured in its old form
+    local stale
+    stale=$("$PYTHON_PATH" -c 'import sys; sys.path.insert(0, "tools"); import run_metadata as m
+for name, f in m.stale_images(sys.argv[1], sys.argv[2:]): print(f"  {name}: {f} changed after the image was built")' \
+        "$BENCHMARKS_DIR" "${SELECT_STATIC[@]}" "${SELECT_DYNAMIC[@]}" "${SELECT_WEBSOCKET[@]}")
+    if [ -n "$stale" ]; then
+        echo -e "${RED}[ERROR]${NC} These images are older than their recipe. Rebuild them first (make build):"
+        echo "$stale"
         bench_stop_early
     fi
     if [ -n "${CFG_VARIANTS:-}" ]; then
@@ -1283,6 +1295,8 @@ bench_measure() {
             || true
     fi
     local t_start=$SECONDS
+    export MEASURE_VARIANT="${BENCH_VARIANT_OF[$m_server]:-}" MEASURE_REPEAT="${BENCH_PASS:-}" \
+        MEASURE_SESSION="${BENCH_SESSION:-}"
     bench_ready_gate
     local reason_file="$RESULTS_DIR/.failure_reason" rc=0
     rm -f "$reason_file"
@@ -1338,6 +1352,26 @@ bench_report_failures() {
 }
 
 # Deterministic shuffle of the arguments for one pass (seed + pass number).
+# VARIANT_ORDER=separate: within a pass, all servers of one variant, then all of the next ("as
+# built" counts as the first group). Which group goes first rotates from pass to pass, so every
+# group runs early and late equally often. The order inside each group stays as shuffled.
+bench_group_variants() {
+    local pass=$1 item g
+    shift
+    local -a groups=("")
+    local -a _vs
+    IFS=';' read -r -a _vs <<< "$CFG_VARIANTS"
+    for g in "${_vs[@]}"; do groups+=("${g%%:*}"); done
+    local n=${#groups[@]} k
+    for ((k = 0; k < n; k++)); do
+        g="${groups[$(( (k + pass - 1) % n ))]}"
+        for item in "$@"; do
+            [ "${BENCH_VARIANT_OF[$item]:-}" = "$g" ] && echo "$item"
+        done
+    done
+    return 0
+}
+
 bench_shuffle() {
     local pass=$1
     shift
@@ -1547,6 +1581,7 @@ main() {
         --set idle_s="${CFG_IDLE_SECONDS:-0}" --set warmup_s="${CFG_WARMUP_SECONDS:-0}" \
         --set reproduces="${REPRODUCE_DIR:-}" \
         --set measure="${CFG_MEASURE:-}" --set servers="${CFG_SERVERS:-}" --set variants="${CFG_VARIANTS:-}" \
+        --set variant_order="${CFG_VARIANT_ORDER:-}" \
         --set machine="${CFG_MACHINE:-}" --set machine_file="${BENCH_MACHINE_FILE:-}" \
         --set env_screen_brightness="${CFG_ENV_SCREEN_BRIGHTNESS:-}" --set env_keyboard_light="${CFG_ENV_KEYBOARD_LIGHT:-}" \
         --set env_wifi="${CFG_ENV_WIFI:-}" --set env_bluetooth="${CFG_ENV_BLUETOOTH:-}" --set on_battery="${CFG_ON_BATTERY:-}" \
@@ -1558,6 +1593,12 @@ main() {
     else
         print_status "INFO" "HTTP client max workers: System default (column \"HTTP Max Workers\" in static/dynamic CSVs; set HTTP_MAX_WORKERS=100 for reproducible runs)"
     fi
+    # Session: 1 for the first start, 2 after the first resume, ... (the "Session" column)
+    BENCH_SESSION=$("$PYTHON_PATH" -c 'import json, sys
+try:
+    print(1 + len(json.load(open(sys.argv[1])).get("resumes", [])))
+except (OSError, ValueError):
+    print(1)' "$RESULTS_DIR/metadata.json")
     bench_init_run_plan
     # The ID of every image before the first run, so a resume can tell whether one was rebuilt since
     if [ -z "$RESUME_DIR" ]; then
@@ -1582,6 +1623,11 @@ main() {
             mapfile -t BENCH_PLAN_STATIC < <(bench_shuffle "$pass" "${base_static[@]}")
             mapfile -t BENCH_PLAN_DYNAMIC < <(bench_shuffle "$pass" "${base_dynamic[@]}")
             mapfile -t BENCH_PLAN_WEBSOCKET < <(bench_shuffle "$pass" "${base_websocket[@]}")
+        fi
+        if [ -n "${CFG_VARIANTS:-}" ] && [ "${CFG_VARIANT_ORDER:-separate}" = "separate" ]; then
+            mapfile -t BENCH_PLAN_STATIC < <(bench_group_variants "$pass" "${BENCH_PLAN_STATIC[@]}")
+            mapfile -t BENCH_PLAN_DYNAMIC < <(bench_group_variants "$pass" "${BENCH_PLAN_DYNAMIC[@]}")
+            mapfile -t BENCH_PLAN_WEBSOCKET < <(bench_group_variants "$pass" "${BENCH_PLAN_WEBSOCKET[@]}")
         fi
         # The order of every pass, so a drift over time can be checked afterwards.
         if [ -n "${CONFIG_FILE:-}" ]; then

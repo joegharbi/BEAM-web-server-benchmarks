@@ -55,14 +55,14 @@ def idle_window(seconds):
 
 def idle_fields(raw_json, container_name, container_id, window, warmup_s):
     """CSV columns of the warm-up and idle phases (idle values empty when idle is off)."""
-    fields = {"Warm-up (s)": warmup_s, "Idle Time (s)": 0, "Idle Energy (J)": "",
-              "Idle Avg Power (W)": "", "Idle Host Avg Power (W)": ""}
+    fields = {"Warm-up (s)": warmup_s, "Idle Time (s)": 0, "Container Idle Energy (J)": "",
+              "Container Idle Avg Power (W)": "", "Host Idle Avg Power (W)": ""}
     if window is None:
         return fields
     e = compute_window_energy(raw_json, container_name, window[0], window[1], container_id=container_id,
                               zero_is_normal=True)
     fields.update({"Idle Time (s)": round(window[1] - window[0], 3),
-                   "Idle Energy (J)": round(e["energy_j"], 6),
-                   "Idle Avg Power (W)": round(e["avg_power_w"], 6),
-                   "Idle Host Avg Power (W)": round(e["host_avg_power_w"], 6)})
+                   "Container Idle Energy (J)": round(e["energy_j"], 6),
+                   "Container Idle Avg Power (W)": round(e["avg_power_w"], 6),
+                   "Host Idle Avg Power (W)": round(e["host_avg_power_w"], 6)})
     return fields

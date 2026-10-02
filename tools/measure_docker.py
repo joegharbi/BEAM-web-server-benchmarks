@@ -18,6 +18,7 @@ import readiness
 import run_metadata
 from scaphandre_energy import compute_window_energy, finish_raw, raw_json_path, scaphandre_json_args, window_record
 import load_phases
+import csv_columns
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger()
@@ -262,73 +263,12 @@ def collect_resources_docker_stats(container_name, stop_event, docker_path, inte
            {'avg': mem_avg, 'peak': mem_peak, 'total': mem_total}
 
 
-def save_results_to_csv(filename, results, total_energy, average_power, runtime, requests_per_second, total_samples, 
-                       cpu_metrics, mem_metrics, num_cores, container_name, measurement_type, extra_fields=None):
-    extra_fields = extra_fields or {}
-    base_headers = ["Container Name", "Type", "Num CPUs", "Total Requests", "Successful Requests", "Failed Requests", "Execution Time (s)", "Requests/s",
-               "Total Energy (J)", "Avg Power (W)", "Samples", "Avg CPU (%)", "Peak CPU (%)", "Total CPU (%*s)",
-               "Avg Mem (MB)", "Peak Mem (MB)", "Total Mem (MB*s)"]
-    headers = base_headers + list(extra_fields.keys())
-    num_cores_csv = int(num_cores) if num_cores is not None else 1
-    new_row = [
-        str(container_name),
-        str(measurement_type),
-        int(num_cores_csv),
-        int(results['total']),
-        int(results['success']),
-        int(results['failure']),
-        float(runtime),
-        float(requests_per_second),
-        float(total_energy),
-        float(average_power),
-        int(total_samples),
-        float(cpu_metrics['avg']),
-        float(cpu_metrics['peak']),
-        float(cpu_metrics['total']),
-        float(mem_metrics['avg']),
-        float(mem_metrics['peak']),
-        float(mem_metrics['total'])
-    ] + list(extra_fields.values())
-
+def save_results_to_csv(filename, values):
+    """Append one run to the CSV, in the column order of tools/csv_columns.py (HTTP)."""
     if filename is None:
-        os.makedirs("results_docker", exist_ok=True)
-        filename = os.path.join("results_docker", f"{container_name}.csv")
+        filename = os.path.join("results_docker", f"{values['Container Name']}.csv")
+    csv_columns.append(filename, csv_columns.HTTP_COLUMNS, values)
 
-    if not os.path.isfile(filename) or os.stat(filename).st_size == 0:
-        with open(filename, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(headers)
-            writer.writerow(new_row)
-        return
-
-    with open(filename, mode='r', newline='') as file:
-        existing = list(csv.reader(file))
-    if not existing:
-        with open(filename, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(headers)
-            writer.writerow(new_row)
-        return
-
-    existing_header = existing[0]
-    if existing_header == headers:
-        with open(filename, mode='a', newline='') as file:
-            csv.writer(file).writerow(new_row)
-        return
-
-    # Older CSVs without new columns: rewrite with canonical header and padded rows.
-    migrated = []
-    for row in existing[1:]:
-        row_dict = {}
-        for i, key in enumerate(existing_header):
-            if i < len(row):
-                row_dict[key] = row[i]
-        migrated.append([row_dict.get(k, '') for k in headers])
-    migrated.append(new_row)
-    with open(filename, mode='w', newline='') as file:
-        w = csv.writer(file)
-        w.writerow(headers)
-        w.writerows(migrated)
 
 def print_summary(results, total_energy, average_power, runtime, requests_per_second, cpu_metrics, mem_metrics, num_cores, output_json, output_csv, container_name, http_max_workers_label=None):
     logger.info("=== Measurement Summary ===")
@@ -358,9 +298,9 @@ def thermal_fields(before, after, args, pre_load=(None, "not checked")):
     """
     ms0, ms1 = before[1], after[1]
     return {
-        "CPU Temp Start (C)": before[0],
-        "CPU Temp End (C)": after[0],
-        "Throttled (ms)": ms1 - ms0 if ms0 != "" and ms1 != "" else "",
+        "Host CPU Temp Start (C)": before[0],
+        "Host CPU Temp End (C)": after[0],
+        "Host Throttled (ms)": ms1 - ms0 if ms0 != "" and ms1 != "" else "",
         "Waited Before Start (s)": "" if args.waited_s is None else args.waited_s,
         "Waited Before Load (s)": "" if pre_load[0] is None else pre_load[0],
         "Ready Check": readiness.combine(args.ready_check, pre_load[1]),
@@ -618,19 +558,30 @@ def main():
         record["idle_start_epoch"], record["idle_end_epoch"] = idle
     output_json = finish_raw(output_json, record)
     total_energy, average_power, total_samples = energy["energy_j"], energy["avg_power_w"], energy["samples"]
+    cpu_limit = csv_columns.container_cpu_limit(docker_path, container_name)
     stop_server_container(container_name, docker_path)
     measurement_type = getattr(args, 'measurement_type', None) or "unknown"
     http_workers_label = http_max_workers_label(args)
-    save_results_to_csv(args.output_csv, results_counter, total_energy, average_power, runtime, requests_per_second, 
-                       int(total_samples), resource_results['cpu'], resource_results['mem'], num_cores, args.server_image, measurement_type,
-                       extra_fields={"HTTP Max Workers": http_workers_label,
-                                     "HTTP Connection Mode": args.connection,
-                                     "Host Energy (J)": round(energy["host_energy_j"], 6),
-                                     "Host Avg Power (W)": round(energy["host_avg_power_w"], 6),
-                                     "Sampling Step (ms)": energy["step_ms"],
-                                     "Window Coverage": round(energy["coverage"], 4),
-                                     **thermal_fields(thermal_before, thermal_after, args, pre_load),
-                                     **phases})
+    cpu, mem = resource_results['cpu'], resource_results['mem']
+    save_results_to_csv(args.output_csv, {
+        "Container Name": args.server_image, **csv_columns.run_fields(),
+        "Type": measurement_type, "Total Requests": int(results_counter['total']),
+        "HTTP Max Workers": http_workers_label, "HTTP Connection Mode": args.connection,
+        "Successful Requests": int(results_counter['success']), "Failed Requests": int(results_counter['failure']),
+        "Execution Time (s)": float(runtime), "Requests/s": float(requests_per_second),
+        "Container CPU Limit": cpu_limit, "Container Energy (J)": float(total_energy),
+        "Container Avg Power (W)": float(average_power),
+        "Container Avg CPU (%)": float(cpu['avg']), "Container Peak CPU (%)": float(cpu['peak']),
+        "Container Total CPU (%*s)": float(cpu['total']), "Container Avg Mem (MB)": float(mem['avg']),
+        "Container Peak Mem (MB)": float(mem['peak']), "Container Total Mem (MB*s)": float(mem['total']),
+        "Host CPUs": int(num_cores) if num_cores is not None else 1,
+        "Host Energy (J)": round(energy["host_energy_j"], 6), "Host Avg Power (W)": round(energy["host_avg_power_w"], 6),
+        **thermal_fields(thermal_before, thermal_after, args, pre_load),
+        **phases,
+        "Energy Samples": int(total_samples), "Energy Sampling Step (ms)": energy["step_ms"],
+        "Energy Window Coverage": round(energy["coverage"], 4),
+        "Raw Log": csv_columns.raw_log_field(output_json),
+    })
     csv_disp = args.output_csv or os.path.join("results_docker", f"{container_name}.csv")
     if is_measure_quiet() and not args.verbose:
         ok = results_counter["success"] == results_counter["total"]

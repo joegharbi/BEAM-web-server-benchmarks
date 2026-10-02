@@ -17,6 +17,7 @@ import readiness
 import run_metadata
 from scaphandre_energy import compute_window_energy, finish_raw, raw_json_path, scaphandre_json_args, window_record
 import load_phases
+import csv_columns
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger()
@@ -179,33 +180,6 @@ def collect_resources_docker_stats(container_name, stop_event, docker_path, inte
            {'avg': mem_avg, 'peak': mem_peak, 'total': mem_total}
 
 
-def append_csv_row(filename, headers, row):
-    """Append a row; if the file has an older header, rewrite it with the new header and padded rows."""
-    existing = []
-    if os.path.isfile(filename) and os.stat(filename).st_size > 0:
-        with open(filename, newline='') as f:
-            existing = list(csv.reader(f))
-    if not existing:
-        with open(filename, 'w', newline='') as f:
-            w = csv.writer(f)
-            w.writerow(headers)
-            w.writerow(row)
-        return
-    old_header = existing[0]
-    if old_header == headers:
-        with open(filename, 'a', newline='') as f:
-            csv.writer(f).writerow(row)
-        return
-    migrated = [[dict(zip(old_header, r)).get(k, '') for k in headers] for r in existing[1:]]
-    with open(filename, 'w', newline='') as f:
-        w = csv.writer(f)
-        w.writerow(headers)
-        w.writerows(migrated)
-        w.writerow(row)
-
-# =====================
-# Container Lifecycle
-# =====================
 def cleanup_existing_container(container_name, docker_path):
     logger.info(f"Cleaning up any existing container named '{container_name}'...")
     subprocess.run([docker_path, "stop", container_name], capture_output=True, text=True, check=False)
@@ -332,9 +306,9 @@ def thermal_fields(before, after, args, pre_load=(None, "not checked")):
     """
     ms0, ms1 = before[1], after[1]
     return {
-        "CPU Temp Start (C)": before[0],
-        "CPU Temp End (C)": after[0],
-        "Throttled (ms)": ms1 - ms0 if ms0 != "" and ms1 != "" else "",
+        "Host CPU Temp Start (C)": before[0],
+        "Host CPU Temp End (C)": after[0],
+        "Host Throttled (ms)": ms1 - ms0 if ms0 != "" and ms1 != "" else "",
         "Waited Before Start (s)": "" if args.waited_s is None else args.waited_s,
         "Waited Before Load (s)": "" if pre_load[0] is None else pre_load[0],
         "Ready Check": readiness.combine(args.ready_check, pre_load[1]),
@@ -631,54 +605,35 @@ def main():
         record["idle_start_epoch"], record["idle_end_epoch"] = idle
     output_json = finish_raw(output_json, record)
     total_energy, avg_power, total_samples = energy["energy_j"], energy["avg_power_w"], energy["samples"]
+    cpu_limit = csv_columns.container_cpu_limit(docker_path, container_name)
     stop_server_container(container_name, docker_path)
 
-    headers = ["Container Name", "Test Type", "Num CPUs", "Total Messages", "Successful Messages", "Failed Messages", "Execution Time (s)", "Messages/s", "Throughput (MB/s)",
-               "Avg Latency (ms)", "Min Latency (ms)", "Max Latency (ms)",
-               "Total Energy (J)", "Avg Power (W)", "Samples", "Avg CPU (%)", "Peak CPU (%)", "Total CPU (%*s)",
-               "Avg Mem (MB)", "Peak Mem (MB)", "Total Mem (MB*s)",
-               "Pattern", "Num Clients", "Message Size (KB)", "Rate (msg/s)", "Bursts", "Interval (s)", "Duration (s)",
-               "Host Energy (J)", "Host Avg Power (W)", "Sampling Step (ms)", "Window Coverage"]
-    # Calculate latency statistics
     min_latency = min(all_latencies) if all_latencies else 0.0
     max_latency = max(all_latencies) if all_latencies else 0.0
-    
-    row = [
-        container_name,
-        args.measurement_type,
-        int(num_cores) if num_cores is not None else 1,
-        total_msgs,
-        total_success,
-        total_fail,
-        runtime,
-        requests_per_second,
-        throughput_mb_s,
-        avg_latency,
-        min_latency,
-        max_latency,
-        total_energy,
-        avg_power,
-        total_samples,
-        resource_results['cpu'].get('avg', 0.0),
-        resource_results['cpu'].get('peak', 0.0),
-        resource_results['cpu'].get('total', 0.0),
-        resource_results['mem'].get('avg', 0.0),
-        resource_results['mem'].get('peak', 0.0),
-        resource_results['mem'].get('total', 0.0),
-        args.pattern,  # Pattern (burst/stream)
-        args.clients,
-        args.size_kb,  # Message Size (KB)
-        args.rate if args.pattern == 'stream' else '',  # Rate (msg/s) for stream mode
-        args.bursts if args.pattern == 'burst' else '',  # Bursts count for burst mode
-        args.interval if args.pattern == 'burst' else '',  # Interval (s) for burst mode
-        args.duration if args.pattern == 'stream' else '',  # Duration (s) for stream mode
-        round(energy["host_energy_j"], 6),
-        round(energy["host_avg_power_w"], 6),
-        energy["step_ms"],
-        round(energy["coverage"], 4),
-    ]
-    thermal = thermal_fields(thermal_before, thermal_after, args, pre_load)
-    append_csv_row(output_csv, headers + list(thermal) + list(phases), row + list(thermal.values()) + list(phases.values()))
+    cpu, mem = resource_results['cpu'], resource_results['mem']
+    csv_columns.append(output_csv, csv_columns.WS_COLUMNS, {
+        "Container Name": container_name, **csv_columns.run_fields(),
+        "Test Type": args.measurement_type, "Pattern": args.pattern, "Num Clients": args.clients,
+        "Message Size (KB)": args.size_kb,
+        "Rate (msg/s)": args.rate if args.pattern == 'stream' else '',
+        "Bursts": args.bursts if args.pattern == 'burst' else '',
+        "Interval (s)": args.interval if args.pattern == 'burst' else '',
+        "Duration (s)": args.duration if args.pattern == 'stream' else '',
+        "Total Messages": total_msgs, "Successful Messages": total_success, "Failed Messages": total_fail,
+        "Execution Time (s)": runtime, "Messages/s": requests_per_second, "Throughput (MB/s)": throughput_mb_s,
+        "Avg Latency (ms)": avg_latency, "Min Latency (ms)": min_latency, "Max Latency (ms)": max_latency,
+        "Container CPU Limit": cpu_limit, "Container Energy (J)": total_energy, "Container Avg Power (W)": avg_power,
+        "Container Avg CPU (%)": cpu.get('avg', 0.0), "Container Peak CPU (%)": cpu.get('peak', 0.0),
+        "Container Total CPU (%*s)": cpu.get('total', 0.0), "Container Avg Mem (MB)": mem.get('avg', 0.0),
+        "Container Peak Mem (MB)": mem.get('peak', 0.0), "Container Total Mem (MB*s)": mem.get('total', 0.0),
+        "Host CPUs": int(num_cores) if num_cores is not None else 1,
+        "Host Energy (J)": round(energy["host_energy_j"], 6), "Host Avg Power (W)": round(energy["host_avg_power_w"], 6),
+        **thermal_fields(thermal_before, thermal_after, args, pre_load),
+        **phases,
+        "Energy Samples": total_samples, "Energy Sampling Step (ms)": energy["step_ms"],
+        "Energy Window Coverage": round(energy["coverage"], 4),
+        "Raw Log": csv_columns.raw_log_field(output_json),
+    })
 
     if is_measure_quiet() and not args.verbose:
         ok = total_success == total_msgs

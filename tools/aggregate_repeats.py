@@ -27,6 +27,9 @@ import os
 import statistics
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import csv_columns  # noqa: E402
+
 # t value for a 95% two-sided interval, by degrees of freedom (number of runs - 1),
 # to 4 decimals. Above 30 a Cornish-Fisher expansion around the normal value is used,
 # which matches the exact t value to 4 decimals there.
@@ -49,9 +52,9 @@ def t95(df):
 
 # Columns that name a configuration. Rows sharing these are repeats of one thing.
 # Everything else that looks numeric is averaged.
-KEY_COLS = ["Container Name", "Type", "Test Type", "Total Requests", "HTTP Max Workers",
+KEY_COLS = ["Container Name", "Variant", "Type", "Test Type", "Total Requests", "HTTP Max Workers",
             "HTTP Connection Mode", "Pattern", "Num Clients", "Message Size (KB)",
-            "Rate (msg/s)", "Bursts", "Interval (s)", "Duration (s)", "Sampling Step (ms)"]
+            "Rate (msg/s)", "Bursts", "Interval (s)", "Duration (s)", "Energy Sampling Step (ms)"]
 
 
 def is_number(s):
@@ -137,14 +140,14 @@ def describe(values):
 
 
 def read_rows(paths):
+    """Rows of all CSVs with current column names (files of earlier releases are translated)."""
     rows, headers = [], []
     for path in paths:
-        with open(path, newline="", encoding="utf-8") as fh:
-            reader = csv.DictReader(fh)
-            for h in reader.fieldnames or []:
-                if h not in headers:
-                    headers.append(h)
-            rows.extend(reader)
+        header, file_rows = csv_columns.read(path)
+        for h in header:
+            if h not in headers:
+                headers.append(h)
+        rows.extend(file_rows)
     return rows, headers
 
 
@@ -163,8 +166,9 @@ def main():
 
     key_cols = [c for c in KEY_COLS if c in headers]
     value_cols = [c for c in headers
-                  if c not in key_cols and any(is_number(r.get(c, "")) for r in rows)]
-    energy_col = next((c for c in value_cols if c.lower().startswith("total energy")), None)
+                  if c not in key_cols and c not in csv_columns.NOT_MEASURED
+                  and any(is_number(r.get(c, "")) for r in rows)]
+    energy_col = "Container Energy (J)" if "Container Energy (J)" in value_cols else None
 
     groups = {}
     for r in rows:

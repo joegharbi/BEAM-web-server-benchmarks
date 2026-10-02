@@ -14,6 +14,8 @@ MEASURE=static dynamic websocket concurrency payload
 SERVERS=
 # also measure each server with these container settings, e.g. nobw:ERL_FLAGS=+sbwt none
 VARIANTS=
+# with VARIANTS: separate (one variant after the other, rotating) | mixed
+VARIANT_ORDER=separate
 # folder searched for servers; empty = benchmarks/
 BENCHMARKS_DIR=
 

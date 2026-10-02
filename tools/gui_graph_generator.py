@@ -3,6 +3,7 @@ Benchmark Graph Generator — PyQt5 GUI for plotting CSV benchmark results.
 Extensible: add categories via CATEGORY_PATH_PARTS and CATEGORY_PREFIXES.
 """
 import os
+import glob
 import csv
 import sys
 import re
@@ -27,6 +28,7 @@ from PyQt5.QtWidgets import (
     QProgressDialog, QHeaderView,
     QScrollArea,
     QLineEdit,
+    QDialog, QTableWidget, QTableWidgetItem,
 )
 from PyQt5.QtCore import Qt, QPoint, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QKeySequence, QColor, QPalette
@@ -469,6 +471,13 @@ REPEATS_MEDIAN_IQR = "Median + IQR"
 REPEATS_MEAN_CI = "Mean + 95% CI"
 REPEATS_ALL_RUNS = "All runs"
 REPEATS_OPTIONS = [REPEATS_MEDIAN_IQR, REPEATS_MEAN_CI, REPEATS_ALL_RUNS]
+REPEATS_TOOLTIP = ("How the repeated runs at each load are drawn:\n"
+                   "Median + IQR: the middle run, bar from the 1st to the 3rd quartile (the middle half of the runs)\n"
+                   "Mean + 95% CI: the average, bar = where the true average lies with 95% confidence\n"
+                   "All runs: line through the medians, every run as a dot, bar from min to max\n"
+                   "Repeat N: only the runs of that repeat")
+SCOPE_ALL, SCOPE_CONTAINER, SCOPE_HOST = "All", "Container", "Host"
+SCOPE_OPTIONS = [SCOPE_ALL, SCOPE_CONTAINER, SCOPE_HOST]
 
 
 def aggregate_points(x, y, mode=REPEATS_MEDIAN_IQR):
@@ -683,11 +692,10 @@ def _row_value(r, key, header=None):
     return None
 
 def read_csv(filepath):
-    with open(filepath, newline='', encoding='utf-8', errors='replace') as f:
-        reader = csv.DictReader(f)
-        header = reader.fieldnames or []
-        rows = list(reader)
-    return header, rows
+    """Header and rows with current column names: files of earlier releases are translated
+    (e.g. "Total Energy (J)" -> "Container Energy (J)"), so old and new results plot together."""
+    import csv_columns
+    return csv_columns.read(filepath)
 
 def summarize_column(rows, col):
     vals = [safe_float(r.get(col)) for r in rows if r.get(col) not in (None, '', 'NaN')]
@@ -820,6 +828,14 @@ class BenchmarkGrapher(QMainWindow):
         plot_layout = QVBoxLayout(plot_group)
         plot_layout.setSpacing(GAP)
         plot_layout.setContentsMargins(8, 10, 8, 8)
+        plot_layout.addWidget(QLabel("Scope:"))
+        self.scope_selector = MenuSelectorWidget(placeholder=SCOPE_ALL, parent=self)
+        self.scope_selector.set_options(SCOPE_OPTIONS)
+        self.scope_selector.set_current(SCOPE_ALL)
+        self.scope_selector.setToolTip("Container: values of the server's container. Host: values of the whole machine.\n"
+                                       "All: every value, including performance and run conditions.")
+        self.scope_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self._on_scope_changed))
+        plot_layout.addWidget(self.scope_selector)
         plot_layout.addWidget(QLabel("Metric:"))
         self.metric_selector = MenuSelectorWidget(placeholder=METRIC_PLACEHOLDER, parent=self)
         self.metric_selector.set_options([])
@@ -848,12 +864,18 @@ class BenchmarkGrapher(QMainWindow):
         self.repeats_selector = MenuSelectorWidget(placeholder=REPEATS_MEDIAN_IQR, parent=self)
         self.repeats_selector.set_options(REPEATS_OPTIONS)
         self.repeats_selector.set_current(REPEATS_MEDIAN_IQR)
-        self.repeats_selector.setToolTip("How repeated runs at the same load are shown")
+        self.repeats_selector.setToolTip(REPEATS_TOOLTIP)
         self.repeats_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self._on_plot_controls_changed))
         pr.addWidget(self.repeats_selector)
         self.plot_btn = _btn("Plot", self.plot_selected, min_w=96, role="primary")
         self.plot_btn.setEnabled(False)
         pr.addWidget(self.plot_btn)
+        self.stats_btn = _btn("Statistics", self.show_statistics, min_w=96, role="secondary")
+        self.stats_btn.setToolTip("Table of the repeated runs per server and load: runs, median, quartiles, mean, 95% CI, CV")
+        pr.addWidget(self.stats_btn)
+        self.run_detail_btn = _btn("Run detail", self.show_run_detail, min_w=96, role="secondary")
+        self.run_detail_btn.setToolTip("How one run went: power over time from its raw Scaphandre log, and its conditions")
+        pr.addWidget(self.run_detail_btn)
         pr.addStretch()
         plot_layout.addLayout(pr)
         self.summary_label = QLabel("")
@@ -1851,6 +1873,165 @@ class BenchmarkGrapher(QMainWindow):
         self._refresh_export_controls()
         self._update_export_preview()
 
+    # --- Statistics table -------------------------------------------------------------------------
+
+    def statistics_rows(self, metric):
+        """[(server, x, n, median, Q1, Q3, mean, +/-95%, CV%)] of the selected files for one metric,
+        over every run (whatever is chosen under Repeats); the same numbers as summary.csv."""
+        out = []
+        for f in self.get_selected_files():
+            header, rows = self.headers[f], self.rows[f]
+            label = str(rows[0].get("Container Name") or os.path.basename(f)) if rows else os.path.basename(f)
+            xcol = self.get_x_axis_column_name(header, rows, self.file_types[f], filepath=f)
+            groups = {}
+            for r in rows:
+                x, y = _row_value(r, xcol, header), _row_value(r, metric, header)
+                if x not in (None, "") and y not in (None, ""):
+                    groups.setdefault(safe_float(x), []).append(safe_float(y))
+            for x in sorted(groups):
+                st = dict(zip(aggregate_repeats.STATS, aggregate_repeats.describe(groups[x])))
+                out.append((label, x, len(groups[x]), st["median"], st["Q1"], st["Q3"], st["mean"],
+                            st["+/-95%"], st["CV%"]))
+        return out
+
+    def show_statistics(self):
+        metric = self.metric_selector.currentText()
+        if not metric or metric == METRIC_PLACEHOLDER or not self.get_selected_files():
+            QMessageBox.information(self, "Statistics", "Load files and choose a metric first.")
+            return
+        rows = self.statistics_rows(metric)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Statistics: {metric}")
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(f"{metric}, per server and load, over every run (same numbers as summary.csv). "
+                             "Select cells and copy with Ctrl+C."))
+        cols = ["Server", "Load", "Runs", "Median", "Q1", "Q3", "Mean", "± 95% CI", "CV %"]
+        table = QTableWidget(len(rows), len(cols), dlg)
+        table.setHorizontalHeaderLabels(cols)
+        for i, row in enumerate(rows):
+            for j, v in enumerate(row):
+                text = v if isinstance(v, str) else (f"{v:g}" if j in (1, 2) else ("" if v == "" else f"{v:.4g}"))
+                item = QTableWidgetItem(text)
+                if j > 0:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                table.setItem(i, j, item)
+        table.resizeColumnsToContents()
+        lay.addWidget(table)
+        dlg.resize(min(1100, 120 + table.horizontalHeader().length()), 520)
+        dlg.exec_()
+
+    # --- Run detail -----------------------------------------------------------------------------
+
+    def run_candidates(self):
+        """[(label, raw log path, row)] of the selected files' runs that have a kept raw Scaphandre log."""
+        import json as _json
+        out = []
+        for f in self.get_selected_files():
+            results_dir = os.path.dirname(os.path.dirname(os.path.abspath(f)))
+            rows = self.rows[f]
+            with_log = [r for r in rows if str(r.get("Raw Log") or "").strip()]
+            if with_log:
+                for r in with_log:
+                    raw = os.path.join(results_dir, r["Raw Log"]) if not os.path.isabs(r["Raw Log"]) else r["Raw Log"]
+                    load = r.get("Total Requests") or r.get("Test Type") or ""
+                    label = (f"{r.get('Container Name', '')} · {load} · repeat {r.get('Repeat') or '?'}"
+                             f" · session {r.get('Session') or '?'} · {r.get('Measured At (UTC)', '')}")
+                    out.append((label, raw, r))
+            elif rows:
+                # Files of earlier releases do not name their raw log: list the server's logs in raw/
+                name = rows[0].get("Container Name", "")
+                for w in sorted(glob.glob(os.path.join(results_dir, "raw", "*.window.json"))):
+                    try:
+                        with open(w, encoding="utf-8") as fh:
+                            if _json.load(fh).get("container_name") != name:
+                                continue
+                    except (OSError, ValueError):
+                        continue
+                    raw = w[: -len(".window.json")] + ".json"
+                    out.append((f"{name} · {os.path.basename(raw)}", raw, {}))
+        return out
+
+    def show_run_detail(self):
+        import json as _json
+        import scaphandre_energy
+        candidates = [c for c in self.run_candidates() if os.path.isfile(c[1])]
+        if not candidates:
+            QMessageBox.information(self, "Run detail",
+                                    "No raw Scaphandre log found for the selected files. Run detail needs the raw "
+                                    "logs of the results folder (RAW_DATA=keep).")
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Run detail")
+        lay = QVBoxLayout(dlg)
+        chooser = QComboBox(dlg)
+        chooser.addItems([c[0] for c in candidates])
+        lay.addWidget(chooser)
+        fig, ax = plt.subplots(figsize=(8, 3.6))
+        canvas = FigureCanvas(fig)
+        lay.addWidget(canvas, 1)
+        info = QLabel("")
+        info.setWordWrap(True)
+        info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lay.addWidget(info)
+
+        def draw(index):
+            label, raw, row = candidates[index]
+            ax.clear()
+            try:
+                with open(scaphandre_energy.window_path(raw), encoding="utf-8") as fh:
+                    w = _json.load(fh)
+                series = scaphandre_energy.load_power_series(raw, w["container_name"], pids=set(w["pids"]))
+            except (OSError, ValueError, KeyError) as e:
+                info.setText(f"Cannot read {raw}: {e}")
+                canvas.draw()
+                return
+            t0 = w["load_start_epoch"]
+            ts = [s[0] - t0 for s in series]
+            ax.step(ts, [s[2] for s in series], where="pre", label="Host (whole machine)", color="#555555")
+            ax.step(ts, [s[1] for s in series], where="pre", label="Container", color="#D55E00")
+            ax.axvspan(0, w["load_end_epoch"] - t0, color="#0072B2", alpha=0.12, label="Load")
+            if "idle_start_epoch" in w:
+                ax.axvspan(w["idle_start_epoch"] - t0, w["idle_end_epoch"] - t0, color="#999999", alpha=0.15,
+                           label="Idle")
+            ax.set_xlabel("seconds from the start of the load")
+            ax.set_ylabel("power (W)")
+            ax.set_title(label, fontsize=9)
+            ax.legend(fontsize=8, loc="upper left")
+            ax.grid(alpha=0.3)
+            fig.tight_layout()
+            canvas.draw()
+            facts = [f"Container energy {w['energy_j']:.3f} J", f"host energy {w['host_energy_j']:.3f} J",
+                     f"load {w['load_end_epoch'] - t0:.1f} s", f"{len(series)} power readings"]
+            for col in ("Variant", "Container CPU Limit", "Host CPU Temp Start (C)", "Host CPU Temp End (C)",
+                        "Host Throttled (ms)", "Waited Before Start (s)", "Waited Before Load (s)", "Ready Check",
+                        "Energy Window Coverage"):
+                if str(row.get(col) or "").strip():
+                    facts.append(f"{col}: {row[col]}")
+            info.setText(" · ".join(facts) + f"\nRaw log: {raw}")
+
+        chooser.currentIndexChanged.connect(draw)
+        draw(0)
+        dlg.resize(900, 560)
+        dlg.exec_()
+        plt.close(fig)
+
+    def _on_scope_changed(self):
+        self.update_metric_options()
+        self._on_plot_controls_changed()
+
+    def _refresh_repeat_options(self):
+        """Repeats: the three summaries, plus "Repeat N" for every repeat found in the loaded files."""
+        found = set()
+        for f in self.files:
+            for r in self.rows.get(f, []):
+                v = str(r.get("Repeat") or "").strip()
+                if v.isdigit():
+                    found.add(int(v))
+        options = REPEATS_OPTIONS + [f"Repeat {k}" for k in sorted(found)]
+        current = self.repeats_selector.currentText()
+        self.repeats_selector.set_options(options)
+        self.repeats_selector.set_current(current if current in options else REPEATS_MEDIAN_IQR)
+
     def _on_plot_controls_changed(self):
         self.plot_selected()
         self.plot_btn.setEnabled(len(self.files) > 0 and self._live_plot_ready())
@@ -1934,6 +2115,7 @@ class BenchmarkGrapher(QMainWindow):
                 self.file_ws_subtypes[f] = ws_sub
                 self.file_checked_state[f] = True
         self._update_filter_combo()
+        self._refresh_repeat_options()
         self.update_metric_options()
         self.update_file_listbox_display()
         self._refresh_export_controls()
@@ -1964,6 +2146,9 @@ class BenchmarkGrapher(QMainWindow):
         self._update_selection_buttons_state()
 
     def clear_files(self):
+        if hasattr(self, "repeats_selector"):
+            self.repeats_selector.set_options(REPEATS_OPTIONS)
+            self.repeats_selector.set_current(REPEATS_MEDIAN_IQR)
         self.files.clear()
         self.file_types.clear()
         self.headers.clear()
@@ -2761,6 +2946,10 @@ class BenchmarkGrapher(QMainWindow):
         metrics = set(get_numeric_columns(self.headers[visible[0]]))
         for f in visible[1:]:
             metrics &= set(get_numeric_columns(self.headers[f]))
+        scope = self.scope_selector.currentText() if hasattr(self, "scope_selector") else SCOPE_ALL
+        if scope in (SCOPE_CONTAINER, SCOPE_HOST):
+            import csv_columns
+            metrics = {m for m in metrics if csv_columns.scope_of(m) == scope}
         metrics = sorted(metrics)
         old = self.metric_selector.currentText()
         self.metric_selector.set_options(metrics)
@@ -3263,7 +3452,9 @@ class BenchmarkGrapher(QMainWindow):
 
             if all_vals:
                 s = f"{metric}: min={min(all_vals):.2f}, max={max(all_vals):.2f}, avg={sum(all_vals)/len(all_vals):.2f}"
-                if bar_repeat_counts:
+                if self._single_repeat() is not None:
+                    s += f" · repeat {self._single_repeat()} only"
+                elif bar_repeat_counts:
                     n = "/".join(str(c) for c in sorted(bar_repeat_counts))
                     s += {REPEATS_MEDIAN_IQR: f" · each bar: median of {n} runs, whiskers: Q1 to Q3",
                           REPEATS_MEAN_CI: f" · each bar: mean of {n} runs, whiskers: 95% confidence interval",
@@ -3393,7 +3584,9 @@ class BenchmarkGrapher(QMainWindow):
         self.canvas.draw()
         if all_vals:
             s = f"{metric}: min={min(all_vals):.2f}, max={max(all_vals):.2f}, avg={sum(all_vals)/len(all_vals):.2f}"
-            if repeat_counts:
+            if self._single_repeat() is not None:
+                s += f" · repeat {self._single_repeat()} only"
+            elif repeat_counts:
                 n = "/".join(str(c) for c in sorted(repeat_counts))
                 s += {REPEATS_MEDIAN_IQR: f" · each point: median of {n} runs, bars: Q1 to Q3",
                       REPEATS_MEAN_CI: f" · each point: mean of {n} runs, bars: 95% confidence interval",
@@ -3434,6 +3627,9 @@ class BenchmarkGrapher(QMainWindow):
         self._update_export_preview()
 
     def get_plot_data(self, header, rows, typ, metric, label, filepath=None):
+        repeat = self._single_repeat()
+        if repeat is not None:
+            rows = [r for r in rows if str(r.get("Repeat") or "").strip() == str(repeat)]
         if not rows:
             return [], [], label
         header_list = list(header) if hasattr(header, "__iter__") and not isinstance(header, dict) else list(header.keys()) if isinstance(header, dict) else []
@@ -3471,9 +3667,16 @@ class BenchmarkGrapher(QMainWindow):
         return self._with_repeats(x, y, label)
 
     def _repeats_mode(self):
+        """How repeated runs are summarised; a single repeat is drawn as it is (median if a load repeats)."""
         sel = getattr(self, "repeats_selector", None)
         text = sel.currentText() if sel is not None else ""
         return text if text in REPEATS_OPTIONS else REPEATS_MEDIAN_IQR
+
+    def _single_repeat(self):
+        """The repeat number chosen under Repeats ("Repeat 2" -> 2), or None for the summaries."""
+        sel = getattr(self, "repeats_selector", None)
+        text = sel.currentText() if sel is not None else ""
+        return int(text.split()[1]) if text.startswith("Repeat ") and text.split()[1].isdigit() else None
 
     def _with_repeats(self, x, y, label):
         """One point per x: repeated runs are summarised; their spread is kept for the error bars."""

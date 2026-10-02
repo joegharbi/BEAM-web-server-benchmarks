@@ -17,13 +17,13 @@ ts = [e["host"]["timestamp"] for e in d]
 gaps = [b - a for a, b in zip(ts, ts[1:])]
 checks = [
     ("all requests succeeded", r["Successful Requests"] == r["Total Requests"]),
-    ("container energy > 0", float(r["Total Energy (J)"]) > 0),
-    ("container power below host power", float(r["Avg Power (W)"]) < float(r["Host Avg Power (W)"])),
-    ("window fully covered", float(r["Window Coverage"]) >= 0.99),
+    ("container energy > 0", float(r["Container Energy (J)"]) > 0),
+    ("container power below host power", float(r["Container Avg Power (W)"]) < float(r["Host Avg Power (W)"])),
+    ("window fully covered", float(r["Energy Window Coverage"]) >= 0.99),
     ("sampling well under 2 s", statistics.median(gaps) < 1.0),
 ]
-for k in ("Execution Time (s)", "Total Energy (J)", "Avg Power (W)", "Host Energy (J)",
-          "Host Avg Power (W)", "Samples", "Window Coverage", "HTTP Connection Mode"):
+for k in ("Execution Time (s)", "Container Energy (J)", "Container Avg Power (W)", "Host Energy (J)",
+          "Host Avg Power (W)", "Energy Samples", "Energy Window Coverage", "HTTP Connection Mode"):
     print(f"  {k}: {r[k]}")
 print(f"  median sample spacing: {statistics.median(gaps):.3f} s")
 for name, ok in checks:

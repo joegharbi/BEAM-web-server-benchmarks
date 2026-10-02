@@ -203,6 +203,11 @@ SCHEMA = {
              "For each variant an image <server>-<NAME> is built at the start (the server's image plus these\n"
              "environment variables) and measured next to the server as it is. Example, BEAM scheduler\n"
              "busy-waiting off: nobw:ERL_FLAGS=+sbwt none +sbwtdcpu none +sbwtdio none. Empty = no variants."),
+    "VARIANT_ORDER": dict(default="separate", check=_choice("separate", "mixed"),
+        help="With VARIANTS: the order of the servers and their variants within each repeat.",
+        options={"separate": "all servers as built, then all of the first variant, ...; which group goes first\n"
+                             "#            rotates from repeat to repeat, so each group runs early and late equally often",
+                 "mixed": "servers and variants shuffled together"}),
     "BENCHMARKS_DIR": dict(default="", check=_path, unit="folder path, or empty = benchmarks/",
         help="The folder searched for servers. Empty = benchmarks/ (or BENCHMARKS_DIR from the environment).\n"
              "--bench on the command line takes precedence."),
@@ -470,6 +475,7 @@ SHORT = {
     "MEASURE": "kinds: static dynamic websocket concurrency payload",
     "SERVERS": "server folder names, or TYPE:IMAGE; empty = every server found",
     "VARIANTS": "also measure each server with these container settings, e.g. nobw:ERL_FLAGS=+sbwt none",
+    "VARIANT_ORDER": "with VARIANTS: separate (one variant after the other, rotating) | mixed",
     "BENCHMARKS_DIR": "folder searched for servers; empty = benchmarks/",
     "REPEATS": "runs of every measurement (each repeat = one pass over all servers)",
     "SHUFFLE": "1 = shuffle the server order in every repeat, 0 = same order",
@@ -520,7 +526,7 @@ SHORT = {
 # The example measurement file; machine settings live in the profiles (configs/machine/)
 EXAMPLE_LAYOUT = [
     ("Machine profile", ["MACHINE"]),
-    ("What to measure", ["MEASURE", "SERVERS", "VARIANTS", "BENCHMARKS_DIR"]),
+    ("What to measure", ["MEASURE", "SERVERS", "VARIANTS", "VARIANT_ORDER", "BENCHMARKS_DIR"]),
     ("How much", ["REPEATS", "HTTP_REQUESTS", "IDLE_SECONDS", "WARMUP_SECONDS"]),
     ("Failures and raw data", ["FAILURES_STOP_AFTER", "RAW_DATA"]),
     ("Order of the runs", ["SHUFFLE", "SHUFFLE_SEED"]),

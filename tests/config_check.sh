@@ -73,14 +73,14 @@ runs = [r for f in glob.glob(os.path.join(d, "static", "*.csv"))
 rows = len(runs)
 limit = float(m["settings"]["ready_temp_reference_c"]) + float(m["settings"]["ready_temp_margin_c"])
 for r in runs:
-    print(f"  {r['Container Name']:<26} load started at {r['CPU Temp Start (C)']} C (limit {limit}), "
+    print(f"  {r['Container Name']:<26} load started at {r['Host CPU Temp Start (C)']} C (limit {limit}), "
           f"waited {r['Waited Before Start (s)']}s + {r['Waited Before Load (s)']}s, "
-          f"throttled {r['Throttled (ms)']} ms, ready: {r['Ready Check']}")
+          f"throttled {r['Host Throttled (ms)']} ms, ready: {r['Ready Check']}")
 raw = sorted(g for g in glob.glob(os.path.join(d, "raw", "*.json")) if not g.endswith(".window.json"))
 same = []
 for gz in raw:
     w = json.load(open(se.window_path(gz)))
-    csv_e = [float(r["Total Energy (J)"]) for r in runs if r["Container Name"] == w["container_name"]]
+    csv_e = [float(r["Container Energy (J)"]) for r in runs if r["Container Name"] == w["container_name"]]
     re_e = se.recompute(gz)["energy_j"]
     same.append(any(abs(e - re_e) < 1e-9 for e in csv_e))
     print(f"  raw {os.path.basename(gz)}: recalculated {re_e:.6f} J, in CSV: {'yes' if same[-1] else 'NO'}")
@@ -92,8 +92,8 @@ checks = [
     ("conditions stable start to end", m.get("conditions_stable") is True),
     ("4 measurements (2 servers x 2 repeats)", rows == 4),
     ("every run passed both readiness checks", all(r["Ready Check"] == "yes" for r in runs)),
-    ("every load started within the temperature limit", all(float(r["CPU Temp Start (C)"]) <= limit for r in runs)),
-    ("no throttling during any run", all(r["Throttled (ms)"] in ("0", "") for r in runs)),
+    ("every load started within the temperature limit", all(float(r["Host CPU Temp Start (C)"]) <= limit for r in runs)),
+    ("no throttling during any run", all(r["Host Throttled (ms)"] in ("0", "") for r in runs)),
     ("no failed measurements", not os.path.exists(os.path.join(d, "failures.csv"))),
     ("progress.txt lists the 4 measurements", len(progress) == 4),
     ("4 raw logs kept, with window files", len(raw) == 4 and all(os.path.exists(se.window_path(g)) for g in raw)),
@@ -111,9 +111,15 @@ checks = [
     ("warm-up of 3 s before every run", all(float(r["Warm-up (s)"]) == 3 for r in runs)),
     # A quiet server can use no CPU at all while idle, and then its idle energy is truly 0 J
     ("idle measured for 5 s (energy recorded, 0 J or more)", all(abs(float(r["Idle Time (s)"]) - 5) < 0.5
-                                                                 and float(r["Idle Energy (J)"]) >= 0 for r in runs)),
+                                                                 and float(r["Container Idle Energy (J)"]) >= 0 for r in runs)),
     ("laptop state recorded (charger, battery, screen, radios)",
      all(k in s for k in ("ac_power", "battery", "screen_brightness_percent", "wifi", "bluetooth"))),
+    ("CSV in the new layout (tools/csv_columns.py)", all(list(r) == __import__("csv_columns").HTTP_COLUMNS for r in runs)),
+    ("Repeat 1-2, Session 1 and Measured At in every row", sorted({r["Repeat"] for r in runs}) == ["1", "2"]
+     and {r["Session"] for r in runs} == {"1"} and all(r["Measured At (UTC)"] for r in runs)),
+    ("Raw Log of every row points to its kept raw file", all(os.path.isfile(os.path.join(d, r["Raw Log"])) for r in runs)),
+    ("Container CPU Limit and Host CPUs recorded", all(r["Container CPU Limit"] == "none" and int(r["Host CPUs"]) > 0
+                                                        for r in runs)),
     ("Scaphandre package version recorded", bool(m.get("software_and_machine", m).get("scaphandre_package_version", ""))),
 ]
 for name, ok in checks:

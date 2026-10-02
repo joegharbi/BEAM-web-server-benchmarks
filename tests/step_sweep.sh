@@ -29,7 +29,7 @@ out, steps, runs = sys.argv[1], sys.argv[2].split(), int(sys.argv[3])
 print(f"\n{'step ms':>8} {'container J':>18} {'CV %':>6} {'host W':>7} {'scaph W idle':>12} {'scaph W load':>12} {'spacing s':>9}")
 for s in steps:
     rows = list(csv.DictReader(open(f"{out}/step_{s}.csv")))
-    e = [float(r["Total Energy (J)"]) for r in rows]
+    e = [float(r["Container Energy (J)"]) for r in rows]
     hw = [float(r["Host Avg Power (W)"]) for r in rows]
     idle, load, gaps = [], [], []
     for i in range(1, runs + 1):

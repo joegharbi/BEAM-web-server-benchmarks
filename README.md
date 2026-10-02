@@ -91,9 +91,15 @@ and every value actually used (`bench.config.resolved`). A run started over SSH 
 switch Wi-Fi off, since that would cut its own connection; use the tolerable profile there.
 
 **Variants.** `VARIANTS=nobw:ERL_FLAGS=+sbwt none +sbwtdcpu none +sbwtdio none` measures every selected
-server also as `<server>-nobw`: an image built at the start from the server's image plus these environment
-variables, measured in the same shuffled order as the server itself, so both versions share the same
-conditions. `tests/variant_flags_check.sh` checks that every server's BEAM receives `ERL_FLAGS`.
+server also as `<server>-nobw`: at the start, a label is put on the server's own image with these environment
+variables (no files change, no internet needed), and it is measured like any other server. The CSV says which
+variant a row is (`Variant`). `VARIANT_ORDER=separate` (default) measures, within each repeat, all servers as
+built, then all of the first variant, and so on; which group goes first rotates from repeat to repeat, so every
+group runs early and late equally often. `VARIANT_ORDER=mixed` shuffles servers and variants together.
+`tests/variant_flags_check.sh` checks that every server's BEAM receives `ERL_FLAGS`.
+
+**Images must be up to date.** `make run` does not build images (`make build` does, online). Before anything
+starts it stops if an image is missing, or older than a file of its recipe folder (rebuild with `make build`).
 
 **What to measure.** A name in `SERVERS` is a server folder (its place, `static/`, `dynamic/` or
 `websocket/`, gives its type), or `TYPE:IMAGE` for an image built on this machine without a folder (its
@@ -141,7 +147,7 @@ machine's energy (`Host Energy (J)`). The desktop may still dim or switch off th
 
 | File | Content |
 |---|---|
-| `static/`, `dynamic/`, `websocket/` `*.csv` | One row per run: the columns of earlier releases, plus whole-machine energy, CPU temperature at the start and end of the load, throttling, readiness waits and result, and the warm-up and idle columns |
+| `static/`, `dynamic/`, `websocket/` `*.csv` | One row per run, in six blocks (below) |
 | `<family>/summary.csv`, `*_summary.csv` | Per configuration: n, mean, sd, 95% confidence interval, median, Q1, Q3, IQR, min, max, CV%, and the energy mean after the IQR and Hampel outlier rules |
 | `metadata.json` | How the measurement was made: framework version, Scaphandre (program and package version), Docker, Python, OS, kernel, CPU, memory, all settings, machine state at the start and end (governor, turbo, charger, battery, screen brightness, Wi-Fi, Bluetooth, temperature), and the exact ID of every image measured |
 | `bench.config`, `bench.config.resolved` | The config used, and every setting with the value actually used (defaults included) |
@@ -220,6 +226,41 @@ per sample and integrated over exactly the load window (500 ms sampling by defau
 The container is found by its cgroup, not by process name, so any server works, whatever its language.
 The HTTP client keeps one connection per worker (`HTTP_CONNECTION=reuse`); `per-request` reproduces the
 client of earlier releases.
+
+### The measurement CSV
+
+One row per run. Every measured value says whose it is: `Container …` (the server's container),
+`Host …` (the whole machine), `Energy …` (the energy sampling). The columns come in six blocks
+(defined once in `tools/csv_columns.py`):
+
+| Block | Columns |
+|---|---|
+| 1. What was measured | Container Name, Variant, Repeat, Session (1 = first start, 2 = after the first resume, ...), Measured At (UTC), then the workload (HTTP: Type, Total Requests, HTTP Max Workers, HTTP Connection Mode; WebSocket: Test Type, Pattern, Num Clients, Message Size (KB), Rate, Bursts, Interval, Duration) |
+| 2. Performance | HTTP: Successful/Failed Requests, Execution Time (s), Requests/s; WebSocket: Total/Successful/Failed Messages, Execution Time (s), Messages/s, Throughput (MB/s), Avg/Min/Max Latency (ms) |
+| 3. Container | Container CPU Limit (`none` = may use every host CPU), Container Energy (J), Container Avg Power (W), Container Avg/Peak/Total CPU, Container Avg/Peak/Total Mem |
+| 4. Host | Host CPUs, Host Energy (J), Host Avg Power (W), Host CPU Temp Start/End (C), Host Throttled (ms) |
+| 5. Idle | Idle Time (s), Container Idle Energy (J), Container Idle Avg Power (W), Host Idle Avg Power (W) |
+| 6. How the run went | Warm-up (s), Waited Before Start/Load (s), Ready Check, Energy Samples, Energy Sampling Step (ms), Energy Window Coverage, Raw Log (the run's kept Scaphandre log, relative to the results folder) |
+
+Renamed in this version (files of earlier releases are read under the new names by the statistics and the GUI;
+they are never rewritten):
+
+| Earlier | Now |
+|---|---|
+| Total Energy (J), Avg Power (W) | Container Energy (J), Container Avg Power (W) |
+| Avg/Peak/Total CPU, Avg/Peak/Total Mem | Container Avg/Peak/Total CPU, Container Avg/Peak/Total Mem |
+| Num CPUs | Host CPUs |
+| CPU Temp Start/End (C), Throttled (ms) | Host CPU Temp Start/End (C), Host Throttled (ms) |
+| Idle Energy (J), Idle Avg Power (W), Idle Host Avg Power (W) | Container Idle Energy (J), Container Idle Avg Power (W), Host Idle Avg Power (W) |
+| Samples, Sampling Step (ms), Window Coverage | Energy Samples, Energy Sampling Step (ms), Energy Window Coverage |
+
+### Graphs
+
+`make gui` (or `make graph`) opens the graph window. Load a results folder (summary files are skipped: the
+window computes the same statistics). Scope shows the container's values, the host's, or all. Repeats draws
+the repeated runs as median and quartiles, mean and 95% confidence interval, every run, or one repeat only.
+Statistics shows the table per server and load (the numbers of `summary.csv`). Run detail shows how one run
+went: power over time from its raw log, with the load and idle periods, and its conditions.
 
 ### Checking a setup
 

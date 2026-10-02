@@ -173,26 +173,40 @@ class ConnectionMode(unittest.TestCase):
 
 
 class CsvMigration(unittest.TestCase):
-    def test_websocket_old_header_is_migrated(self):
-        import measure_websocket as mw
+    """The shared CSV writer: new rows in the current layout; a file of an earlier release is
+    rewritten once with the current header, its values kept under the new names."""
+    def test_old_file_is_migrated_with_renamed_columns(self):
+        import csv_columns
         fd, path = tempfile.mkstemp(suffix=".csv")
         with os.fdopen(fd, "w", newline="") as fh:
             w = csv.writer(fh)
-            w.writerow(["A", "B"])
-            w.writerow(["1", "2"])
-        mw.append_csv_row(path, ["A", "B", "C"], ["3", "4", "5"])
-        with open(path, newline="") as fh:
-            rows = list(csv.reader(fh))
-        self.assertEqual(rows, [["A", "B", "C"], ["1", "2", ""], ["3", "4", "5"]])
+            w.writerow(["Container Name", "Total Energy (J)", "Num CPUs"])
+            w.writerow(["st-a", "12.5", "8"])
+        csv_columns.append(path, csv_columns.HTTP_COLUMNS, {"Container Name": "st-a", "Container Energy (J)": 13.0})
+        header, rows = csv_columns.read(path)
+        self.assertEqual(header, csv_columns.HTTP_COLUMNS)
+        self.assertEqual([(r["Container Energy (J)"], r["Host CPUs"]) for r in rows], [("12.5", "8"), ("13.0", "")])
 
-    def test_websocket_same_header_appends(self):
-        import measure_websocket as mw
+    def test_same_header_appends(self):
+        import csv_columns
         fd, path = tempfile.mkstemp(suffix=".csv")
         os.close(fd)
-        mw.append_csv_row(path, ["A"], ["1"])
-        mw.append_csv_row(path, ["A"], ["2"])
+        csv_columns.append(path, csv_columns.WS_COLUMNS, {"Container Name": "ws-a"})
+        csv_columns.append(path, csv_columns.WS_COLUMNS, {"Container Name": "ws-b"})
         with open(path, newline="") as fh:
-            self.assertEqual(list(csv.reader(fh)), [["A"], ["1"], ["2"]])
+            rows = list(csv.reader(fh))
+        self.assertEqual((rows[0], [r[0] for r in rows[1:]]), (csv_columns.WS_COLUMNS, ["ws-a", "ws-b"]))
+
+    def test_every_measured_value_says_whose_it_is(self):
+        import csv_columns
+        for col in csv_columns.CONTAINER:
+            self.assertEqual(csv_columns.scope_of(col), "Container", col)
+        for col in csv_columns.HOST:
+            self.assertEqual(csv_columns.scope_of(col), "Host", col)
+        for old, new in csv_columns.RENAMED.items():
+            self.assertEqual(csv_columns.canonical(old), new)
+            self.assertIn(new, csv_columns.HTTP_COLUMNS)
+        self.assertEqual(len(set(csv_columns.HTTP_COLUMNS)), len(csv_columns.HTTP_COLUMNS))
 
 
 class AggregatorKeys(unittest.TestCase):
@@ -215,7 +229,7 @@ class AggregatorKeys(unittest.TestCase):
         self.assertEqual(len(out), 2)
         by = {r["HTTP Connection Mode"]: r for r in out}
         self.assertEqual(by["reuse"]["Repeats"], "2")
-        self.assertAlmostEqual(float(by["reuse"]["Total Energy (J) mean"]), 11.0)
+        self.assertAlmostEqual(float(by["reuse"]["Container Energy (J) mean"]), 11.0)   # old input name
 
     def test_interval_is_a_key_not_averaged(self):
         h = ["Container Name", "Pattern", "Interval (s)", "Total Energy (J)"]
@@ -479,7 +493,7 @@ class ThermalColumns(unittest.TestCase):
         import argparse, measure_docker
         a = argparse.Namespace(waited_s=12.5, ready_check="yes")
         f = measure_docker.thermal_fields((45.0, 100), (52.0, 130), a, (3.0, "yes"))
-        self.assertEqual(f, {"CPU Temp Start (C)": 45.0, "CPU Temp End (C)": 52.0, "Throttled (ms)": 30,
+        self.assertEqual(f, {"Host CPU Temp Start (C)": 45.0, "Host CPU Temp End (C)": 52.0, "Host Throttled (ms)": 30,
                              "Waited Before Start (s)": 12.5, "Waited Before Load (s)": 3.0,
                              "Ready Check": "yes"})
 
@@ -487,7 +501,7 @@ class ThermalColumns(unittest.TestCase):
         import argparse, measure_websocket
         a = argparse.Namespace(waited_s=None, ready_check="not checked")
         f = measure_websocket.thermal_fields(("", ""), ("", ""), a)
-        self.assertEqual((f["Throttled (ms)"], f["Waited Before Start (s)"], f["Waited Before Load (s)"],
+        self.assertEqual((f["Host Throttled (ms)"], f["Waited Before Start (s)"], f["Waited Before Load (s)"],
                           f["Ready Check"]), ("", "", "", "not checked"))
 
     def test_ready_check_names_the_failing_check(self):
@@ -770,9 +784,9 @@ class Statistics(AggregatorKeys):
         out = self.run_agg(h, [["s", "100", v] for v in ("78", "80", "81", "79", "82", "120")])
         r = out[0]
         for stat in ("mean", "sd", "+/-95%", "median", "Q1", "Q3", "IQR", "min", "max", "CV%"):
-            self.assertIn(f"Total Energy (J) {stat}", r)
-        self.assertEqual(r["Total Energy (J) runs dropped, IQR rule"], "1")      # the 120 J run
-        self.assertAlmostEqual(float(r["Total Energy (J) mean, IQR-filtered"]), 80.0)
+            self.assertIn(f"Container Energy (J) {stat}", r)
+        self.assertEqual(r["Container Energy (J) runs dropped, IQR rule"], "1")      # the 120 J run
+        self.assertAlmostEqual(float(r["Container Energy (J) mean, IQR-filtered"]), 80.0)
         self.assertNotIn("Energy IQR mean", r)                                   # old misleading name gone
 
     def test_several_csvs_into_one_summary(self):
@@ -786,7 +800,7 @@ class Statistics(AggregatorKeys):
                         os.path.join(d, "a.csv"), os.path.join(d, "b.csv"), "--output", out],
                        check=True, capture_output=True)
         rows = {r["Container Name"]: r for r in csv.DictReader(open(out))}
-        self.assertEqual((rows["a"]["Total Energy (J) mean"], rows["b"]["Total Energy (J) mean"]), ("11.0", "21.0"))
+        self.assertEqual((rows["a"]["Container Energy (J) mean"], rows["b"]["Container Energy (J) mean"]), ("11.0", "21.0"))
 
 
 class WorkloadConfig(unittest.TestCase):
@@ -964,7 +978,7 @@ class IdleAndWarmup(unittest.TestCase):
                 if v is not None:
                     os.environ[k] = v
         f = load_phases.idle_fields("unused.json", "srv", None, None, 0)
-        self.assertEqual((f["Idle Time (s)"], f["Idle Energy (J)"]), (0, ""))
+        self.assertEqual((f["Idle Time (s)"], f["Container Idle Energy (J)"]), (0, ""))
 
     def test_idle_energy_from_the_same_log(self):
         import load_phases
@@ -972,9 +986,9 @@ class IdleAndWarmup(unittest.TestCase):
         entries = [entry(0, 0, [])] + [entry(t, 10, [consumer(7, 2.0 if t <= 6 else 8.0, "srv")]) for t in range(1, 12)]
         path = write_json(entries)
         f = load_phases.idle_fields(path, "srv", None, (1, 6), 3)
-        self.assertAlmostEqual(f["Idle Energy (J)"], 10.0)         # 2 W x 5 s
-        self.assertAlmostEqual(f["Idle Avg Power (W)"], 2.0)
-        self.assertAlmostEqual(f["Idle Host Avg Power (W)"], 10.0)
+        self.assertAlmostEqual(f["Container Idle Energy (J)"], 10.0)         # 2 W x 5 s
+        self.assertAlmostEqual(f["Container Idle Avg Power (W)"], 2.0)
+        self.assertAlmostEqual(f["Host Idle Avg Power (W)"], 10.0)
         self.assertEqual((f["Idle Time (s)"], f["Warm-up (s)"]), (5, 3))
 
     def test_http_warmup_is_not_counted(self):
@@ -1304,7 +1318,7 @@ class FixesFromTheRealCheck(LaptopSettings):
         path = write_json([entry(0, 0, [])] + [entry(t, 5, [consumer(1, 0.5)]) for t in range(1, 8)])
         with self.assertNoLogs(level="WARNING"):
             f = load_phases.idle_fields(path, "srv", "0123456789abcdef", (1, 6), 0)
-        self.assertEqual(f["Idle Energy (J)"], 0.0)
+        self.assertEqual(f["Container Idle Energy (J)"], 0.0)
 
     def test_full_disk_stops_before_measuring(self):
         d = tempfile.mkdtemp()
@@ -1626,7 +1640,7 @@ class GuiRepeats(unittest.TestCase):
             w.add_files(sorted(glob.glob(os.path.join(E, "*.csv"))))
             self.assertEqual(len(w.files), 6)                                     # summaries skipped
             self.assertIn("Skipped 7 statistics file(s)", w.summary_label.text())  # a note, no window
-            self.assertTrue(w._render_plot(w.files, "Total Energy (J)", g.WS_PLOT_MULTILINE, enable_interactivity=False))
+            self.assertTrue(w._render_plot(w.files, "Container Energy (J)", g.WS_PLOT_MULTILINE, enable_interactivity=False))
             self.assertIn("median of 5 runs", w.summary_label.text())
             lines = {l.get_label(): l for l in w.ax.get_lines() if not l.get_label().startswith("_")}
             base, var = lines["st-elixir-cowboy-1-19-5"], lines["st-elixir-cowboy-1-19-5-nobw"]
@@ -1635,14 +1649,75 @@ class GuiRepeats(unittest.TestCase):
             self.assertEqual(list(base.get_xdata()), [20000.0, 80000.0])         # one point per load
             self.assertTrue(w._render_plot(w.files, "Host Energy (J)", g.WS_PLOT_BAR, enable_interactivity=False))
             self.assertEqual(sorted({round(t) for t in w.ax.get_xticks()}), [0, 1])  # grouped per load level
+            # Scope selector: only that scope's values in the metric list
+            w.scope_selector.set_current(g.SCOPE_HOST)
+            w.update_metric_options()
+            self.assertTrue(w.metric_selector._options and all(m.startswith("Host ") for m in w.metric_selector._options))
+            w.scope_selector.set_current(g.SCOPE_ALL)
+            w.update_metric_options()
+            # Statistics table = summary.csv (old file: "Total Energy (J)" is read as "Container Energy (J)")
+            row = [r for r in w.statistics_rows("Container Energy (J)")
+                   if r[0] == "st-elixir-cowboy-1-19-5" and r[1] == 80000][0]
+            with open(os.path.join(E, "summary.csv")) as fh:
+                ref = [r for r in csv.DictReader(fh)
+                       if r["Container Name"] == "st-elixir-cowboy-1-19-5" and r["Total Requests"] == "80000"][0]
+            self.assertEqual((row[2], row[3], row[6]), (5, float(ref["Total Energy (J) median"]),
+                                                        float(ref["Total Energy (J) mean"])))
             # As in the window: with hover on, for every plot type and every way of showing repeats
             for mode in g.REPEATS_OPTIONS:
                 w.repeats_selector.set_current(mode)
                 for kind in (g.WS_PLOT_MULTILINE, g.WS_PLOT_BAR):
-                    self.assertTrue(w._render_plot(w.files, "Total Energy (J)", kind, enable_interactivity=True),
+                    self.assertTrue(w._render_plot(w.files, "Container Energy (J)", kind, enable_interactivity=True),
                                     (mode, kind))
         finally:
             g.QMessageBox.information = saved
+
+
+class VariantOrder(unittest.TestCase):
+    """VARIANT_ORDER=separate: one group after the other within a repeat; the first group rotates."""
+    def order(self, pass_no, items):
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            sh = fh.read()
+        f = sh[sh.index("bench_group_variants() {"):]
+        f = f[:f.index("\n}\n") + 3]
+        script = (f + '\nCFG_VARIANTS="nobw:ERL_FLAGS=+sbwt none;fast:X=1"\ndeclare -A BENCH_VARIANT_OF=('
+                  '[a-nobw]=nobw [b-nobw]=nobw [a-fast]=fast [b-fast]=fast)\n'
+                  f'bench_group_variants {pass_no} ' + " ".join(items))
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout.split()
+
+    def test_groups_rotate_and_keep_the_shuffled_order(self):
+        shuffled = ["b-nobw", "a", "a-fast", "b", "a-nobw", "b-fast"]
+        self.assertEqual(self.order(1, shuffled), ["a", "b", "b-nobw", "a-nobw", "a-fast", "b-fast"])
+        self.assertEqual(self.order(2, shuffled), ["b-nobw", "a-nobw", "a-fast", "b-fast", "a", "b"])
+        self.assertEqual(self.order(3, shuffled), ["a-fast", "b-fast", "a", "b", "b-nobw", "a-nobw"])
+
+    def test_config(self):
+        import bench_config
+        self.assertEqual(bench_config.parse("")["VARIANT_ORDER"], "separate")
+        self.assertEqual(bench_config.parse("VARIANT_ORDER=mixed")["VARIANT_ORDER"], "mixed")
+        with self.assertRaises(bench_config.ConfigError):
+            bench_config.parse("VARIANT_ORDER=random")
+
+
+class StaleImages(unittest.TestCase):
+    """An image built before its recipe last changed is reported (the run stops before it starts)."""
+    def test_newer_recipe_file_is_reported(self):
+        import run_metadata
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "static", "x", "st-a"))
+        os.makedirs(os.path.join(d, "static", "x", "st-b"))
+        for name in ("st-a", "st-b"):
+            open(os.path.join(d, "static", "x", name, "Dockerfile"), "w").close()
+        built = 1_790_000_000
+        os.utime(os.path.join(d, "static", "x", "st-a", "Dockerfile"), (built - 100, built - 100))   # older: fine
+        os.utime(os.path.join(d, "static", "x", "st-b", "Dockerfile"), (built + 100, built + 100))   # changed after
+        saved = run_metadata._run
+        run_metadata._run = lambda cmd, cwd=None: "2026-09-21T14:13:20.123456789+00:00"               # = built
+        try:
+            stale = run_metadata.stale_images(d, ["st-a", "st-b", "st-a-nobw"])
+        finally:
+            run_metadata._run = saved
+        self.assertEqual(stale, [("st-b", os.path.join("static", "x", "st-b", "Dockerfile"))])
 
 
 if __name__ == "__main__":

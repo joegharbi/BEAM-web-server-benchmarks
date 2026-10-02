@@ -139,8 +139,8 @@ def last_result(row):
     if row["outcome"] != "ok":
         return f"{base} · FAILED ({row['outcome']})"
     try:
-        with open(row["csv"], newline="", encoding="utf-8") as fh:
-            r = list(csv.DictReader(fh))[-1]
+        import csv_columns
+        r = csv_columns.read(row["csv"])[1][-1]
     except (OSError, IndexError, csv.Error):
         return f"{base} · {row['duration']:.0f} s"
     parts = [base]
@@ -149,8 +149,8 @@ def last_result(row):
         parts.append(f"load {float(r['Execution Time (s)']):.1f} s")
     if rate:
         parts.append(f"{float(rate):.0f} {'req' if r.get('Requests/s') else 'msg'}/s")
-    if r.get("Total Energy (J)"):
-        parts.append(f"container {float(r['Total Energy (J)']):.1f} J")
+    if r.get("Container Energy (J)"):
+        parts.append(f"container {float(r['Container Energy (J)']):.1f} J")
     if r.get("Host Energy (J)"):
         parts.append(f"machine {float(r['Host Energy (J)']):.0f} J")
     failed = r.get("Failed Requests") or r.get("Failed Messages")
