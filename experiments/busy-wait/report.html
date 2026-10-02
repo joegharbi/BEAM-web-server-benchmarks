@@ -1,0 +1,258 @@
+<title>BEAM Busy-Wait Finding</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~70ch) of a lab report; charts and tables break out to the full container width. */
+:root{
+  --bg:#f6f7f8; --surface:#ffffff; --fg:#1b2127; --muted:#5c6670; --rule:#d9dee3;
+  --spin:#c2410c; --spin-soft:#fbe3d6; --calm:#0f766e; --calm-soft:#d5efec; --accent:#334e68;
+  --display:"Newsreader", Georgia, "Times New Roman", serif;
+  --body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#12161a; --surface:#1a2026; --fg:#e4e8ec; --muted:#9aa5af; --rule:#2c343c;
+  --spin:#fb923c; --spin-soft:#3a2418; --calm:#2dd4bf; --calm-soft:#123a36; --accent:#9fb3c8; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#12161a; --surface:#1a2026; --fg:#e4e8ec; --muted:#9aa5af; --rule:#2c343c;
+  --spin:#fb923c; --spin-soft:#3a2418; --calm:#2dd4bf; --calm-soft:#123a36; --accent:#9fb3c8; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:15px/1.6 var(--body);padding-inline:16px;padding-block:32px 64px}
+main{max-width:960px;margin:0 auto;display:flex;flex-direction:column;gap:40px}
+.col{max-width:70ch}
+h1,h2,h3{font-family:var(--display);font-weight:600;text-wrap:balance;margin:0;line-height:1.2}
+h1{font-size:2.3rem}
+h2{font-size:1.55rem;margin-bottom:8px}
+h3{font-size:1.1rem;font-family:var(--body);margin-bottom:6px}
+p{margin:0 0 10px} ul,ol{margin:0 0 10px;padding-left:1.3em} li{margin-bottom:4px}
+.eyebrow{font:500 .75rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+header{display:flex;flex-direction:column;gap:10px;border-bottom:1px solid var(--rule);padding-bottom:20px}
+.lede{font-size:1.1rem;max-width:68ch}
+.meta{font:.8rem/1.5 var(--mono);color:var(--muted)}
+.figures{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.fig{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.fig b{font:600 1.5rem/1.2 var(--mono);font-variant-numeric:tabular-nums}
+.fig span{color:var(--muted);font-size:.85rem}
+.spin{color:var(--spin)} .calm{color:var(--calm)}
+section{display:flex;flex-direction:column;gap:10px}
+.chart{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:16px;overflow-x:auto}
+.chart svg{display:block;width:100%;min-width:560px;height:auto}
+.chart text{fill:var(--fg);font:12px var(--mono)}
+.chart .axis text,.chart .note{fill:var(--muted)}
+.chart line.grid{stroke:var(--rule)}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:.85rem;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.caption{font-size:.85rem;color:var(--muted);max-width:75ch}
+.tablewrap{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:.88rem;font-variant-numeric:tabular-nums}
+th,td{padding:8px 12px;text-align:right;border-bottom:1px solid var(--rule);white-space:nowrap}
+th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
+th{font:500 .75rem var(--mono);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+code{font:.86em var(--mono);background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:1px 5px}
+pre{font:.82rem/1.5 var(--mono);background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:12px 14px;overflow-x:auto;margin:0}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.two>div{min-width:0}
+.box{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:14px 16px}
+.qa dt{font-weight:600;margin-top:10px}
+.qa dd{margin:2px 0 0;color:var(--fg)}
+.step{font:500 .75rem var(--mono);color:var(--accent);letter-spacing:.06em;text-transform:uppercase}
+</style>
+
+<main>
+<header>
+  <div class="eyebrow">WSEB pilot · BEAM web servers · 1–2 October 2026</div>
+  <h1>BEAM busy-waiting makes container energy unstable and inflated</h1>
+  <p class="lede">In the pilot, several BEAM servers used up to four times more CPU from one run to the next for the same work, while the whole machine's energy stayed within 3%. A controlled experiment shows the cause: the BEAM schedulers' busy-waiting. Switching it off made the measurements stable and showed that most of the per-container energy was spinning, not work.</p>
+  <div class="meta">Laptop: Intel Core i7-10610U, 8 threads, 31 GB, Debian 13, kernel 6.12 · Scaphandre 1.0.3 (package 1.0.3-2) · Docker 29.8 · governor performance, turbo off, 1.8 GHz · on AC power</div>
+</header>
+
+<div class="figures">
+  <div class="fig"><b><span class="spin">36%</span> → <span class="calm">≤3.3%</span></b><span>run-to-run variation (CV) of container energy, default vs busy-wait off</span></div>
+  <div class="fig"><b>2.9–6.7×</b><span>more container energy with busy-waiting on, for the same requests</span></div>
+  <div class="fig"><b>3.5–5.5%</b><span>less whole-machine energy with busy-waiting off (all 6 comparisons fully separated, p = 0.008 each)</span></div>
+  <div class="fig"><b>0</b><span>failed requests in 225 measurements (8.6 million requests)</span></div>
+</div>
+
+<section class="col">
+  <span class="step">Setup</span>
+  <h2>What was measured</h2>
+  <ul>
+    <li><b>Framework:</b> WSEB, a controlled-measurement version (local branch, not yet published). Energy from Scaphandre's per-process power, summed over every process of the server's container and integrated over the load window.</li>
+    <li><b>Load:</b> HTTP <code>GET /</code> from a Python client on the same machine, 100 parallel workers, kept-alive connections. Every server ran at about 800 requests per second, the client's limit, so all servers did the same work at the same rate.</li>
+    <li><b>Control:</b> the <code>minimal</code> machine profile: fixed CPU frequency, turbo off, other containers stopped, screen at 1%, keyboard light, Wi-Fi and Bluetooth off, sleep blocked, charger required. Before every run the machine had to be back within 3 °C of its resting temperature with no throttling; every run passed.</li>
+    <li><b>Design:</b> 5 repeats, each a full pass over all servers in a new random order (seed recorded), so slow drift spreads evenly.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="col">
+    <span class="step">Step 1 · Pilot</span>
+    <h2>The observation: the machine was steady, some containers were not</h2>
+    <p>11 static HTTP servers × 3 load levels × 5 repeats = 165 measurements, 6 h 27 min. At 80,000 requests the whole machine's energy varied by 0.4–2.7% between repeats. Container energy varied by up to 43% for some servers, while others were as steady as the machine.</p>
+  </div>
+  <div class="chart" id="c-pilot" role="img" aria-label="Run-to-run variation per server at 80000 requests"></div>
+  <div class="legend"><span><i style="background:var(--spin)"></i>container energy CV</span><span><i style="background:var(--accent)"></i>whole-machine energy CV</span></div>
+  <p class="caption">Coefficient of variation over 5 repeats at 80,000 requests. The steady servers (three “index” servers and Yaws, which read a file on every request, and Erlang pure) are the busy ones, at about 155% CPU or close to one full core of work.</p>
+</section>
+
+<section class="col">
+  <span class="step">Step 2 · Ruling out a measurement error</span>
+  <h2>Two independent meters agree: the CPU use itself changed</h2>
+  <ul>
+    <li><b>Docker's own CPU statistics</b>, which do not use Scaphandre, show the same jumps. Elixir Cowboy used 24% CPU in one run and 111% in another, both serving 80,000 requests in about 100 s.</li>
+    <li><b>Energy follows CPU time exactly:</b> container energy per CPU-second is constant over all 110 measurements at 20k and 80k (0.108 J per CPU-%·s, CV 4%). Scaphandre assigns energy correctly; the server's CPU use varies.</li>
+    <li><b>The machine is not the cause:</b> no throttling, every run started within the temperature limit, and the whole-machine energy varied by under 3%.</li>
+  </ul>
+  <p><b>Hypothesis:</b> BEAM scheduler busy-waiting. When a scheduler runs out of work, it keeps spinning on the CPU for a while before sleeping, so it can react faster to the next task. At a moderate request rate the schedulers often run out of work, and how much they spin can differ between runs. The rebar3 release template's own <code>vm.args</code> says: <i>“Uncomment the following line if running in a container: +sbwt none”</i>.</p>
+</section>
+
+<section>
+  <div class="col">
+    <span class="step">Step 3 · Controlled experiment</span>
+    <h2>Switching busy-waiting off removes the jumps</h2>
+    <p>Three of the unstable servers, each in two variants built from the same image: as it is, and with <code>ERL_FLAGS="+sbwt none +sbwtdcpu none +sbwtdio none"</code> (checked inside the running BEAM). 20,000 and 80,000 requests, 5 repeats, both variants mixed in one shuffled order: 60 measurements, 2 h 7 min.</p>
+  </div>
+  <div class="chart" id="c-cpu" role="img" aria-label="CPU use per run, default versus busy-wait off"></div>
+  <div class="legend"><span><i style="background:var(--spin)"></i>default (busy-waiting on)</span><span><i style="background:var(--calm)"></i>busy-waiting off</span></div>
+  <p class="caption">Average CPU use of the server container in each run (Docker statistics). Each dot is one run.</p>
+  <div class="chart" id="c-host" role="img" aria-label="Whole-machine energy per run at 80000 requests"></div>
+  <div class="legend"><span><i style="background:var(--spin)"></i>default</span><span><i style="background:var(--calm)"></i>busy-waiting off</span></div>
+  <p class="caption">Whole-machine energy per run at 80,000 requests (Scaphandre host power, includes the client). Every “off” run is below every default run.</p>
+  <div class="tablewrap"><table id="t-exp"></table></div>
+</section>
+
+<section class="col">
+  <span class="step">Interpretation</span>
+  <h2>What it means</h2>
+  <ol>
+    <li><b>The cause is found.</b> With busy-waiting off, the variation falls from up to 36% to at most 3.3%, so 5 repeats are enough again.</li>
+    <li><b>Per-container energy counts spinning as work.</b> Scaphandre shares the CPU package's power by CPU time. Spinning schedulers take CPU time, so the container is charged 2.9–6.7 times more energy for the same requests.</li>
+    <li><b>The physical cost is smaller but real.</b> The whole machine used 3.5–5.5% less energy with busy-waiting off, far beyond its 0.2–1.8% run-to-run noise. Container energy exaggerates the effect; both numbers belong in the paper.</li>
+    <li><b>Servers become comparable.</b> With the defaults the three servers were indistinguishable at about 210 J. With busy-waiting off they separate clearly: Elixir pure 31 J, Erlang Cowboy 44 J, Elixir Cowboy 61 J at 80,000 requests.</li>
+  </ol>
+</section>
+
+<section class="col">
+  <span class="step">Limits</span>
+  <h2>What this does not show yet</h2>
+  <ul>
+    <li>One request rate (about 800 per second, set by the client). At full load schedulers rarely run out of work, and the effect should shrink; the busy index servers were already stable.</li>
+    <li>Three servers, one laptop, static HTTP only. Dynamic and WebSocket servers are not tested yet.</li>
+    <li>The client runs on the same machine, so whole-machine energy includes it.</li>
+    <li>Container energy is an allocation by CPU time; network work done by the kernel and Docker's proxy is only in the whole-machine number.</li>
+    <li>A leftover test program (a stand-in for Scaphandre from a framework test, started the morning before) was found still running afterwards, so it ran during both measurements. It used little CPU: the machine's resting CPU use, measured at the start of both runs with it running, was 0.4–0.5%. It is not part of any container's energy, it added the same small amount to the whole-machine energy of every run, and in the experiment both variants ran mixed under the same conditions, so the comparison is unaffected. The framework now cleans up after an external stop, which is how it was left behind.</li>
+  </ul>
+</section>
+
+<section class="col">
+  <span class="step">Next</span>
+  <h2>Decision for the full campaign</h2>
+  <p>Measure every BEAM server twice: with the default scheduler settings, as people run them, and with busy-waiting off. The framework will pass the setting to every container through one config line, so no Dockerfile changes and non-BEAM servers ignore it. Load levels start at 5,000 requests (1,000 requests lasts 1.3 s, only 1–2 power readings), and idle measurement is off (an idle server drew 0.1–2 mW; the machine at rest 2.7 W).</p>
+</section>
+
+<section>
+  <div class="col">
+    <span class="step">Evidence</span>
+    <h2>How to check every number</h2>
+    <p>All numbers on this page come from these files. The small files are committed in the repository; the raw Scaphandre logs (480 MB) are in the results folders, so each energy value can be recalculated.</p>
+  </div>
+  <div class="two">
+    <div class="box">
+      <h3>Pilot</h3>
+      <p class="meta">results/2026-10-01_203846 · framework commit 92737b4 · seed 155987084<br>evidence copy: experiments/busy-wait/evidence/pilot-2026-10-01_203846</p>
+    </div>
+    <div class="box">
+      <h3>Busy-wait experiment</h3>
+      <p class="meta">results/2026-10-02_090615 · framework commit 4eeab46 · seed 827455753<br>evidence copy: experiments/busy-wait/evidence/busywait-2026-10-02_090615</p>
+    </div>
+  </div>
+<pre>bash experiments/busy-wait/build.sh                       # the three "-nobw" images
+make run CONFIG=experiments/busy-wait/busywait.config     # repeat the experiment
+make reproduce FROM=results/2026-10-02_090615             # same settings and order, new folder
+python3 tools/scaphandre_energy.py recompute results/2026-10-02_090615/raw/&lt;run&gt;.json</pre>
+</section>
+
+<section class="col">
+  <span class="step">For the meeting</span>
+  <h2>Talking order (about 10 minutes)</h2>
+  <ol>
+    <li><b>The surprise</b> (pilot chart): the machine is steady, some containers are not.</li>
+    <li><b>Not our measurement</b>: Docker's CPU statistics agree, and energy per CPU-second is constant.</li>
+    <li><b>The hypothesis</b>: busy-waiting, with the rebar3 template comment.</li>
+    <li><b>The experiment</b> (CPU and machine-energy charts): the jumps disappear, the machine saves 3.5–5.5%.</li>
+    <li><b>The decision</b>: campaign with both settings, and the limits we still have to test.</li>
+  </ol>
+  <h3>Likely questions</h3>
+  <dl class="qa">
+    <dt>Could Scaphandre be wrong?</dt>
+    <dd>Docker's CPU statistics are independent of Scaphandre and show the same jumps, and the whole-machine energy agrees in direction.</dd>
+    <dt>Is 5 repeats enough for the p-value?</dt>
+    <dd>Every one of the 5 runs with busy-waiting off used less whole-machine energy than every default run, in all 6 comparisons; with 5 against 5 that is the strongest possible result (exact two-sided Mann-Whitney p = 0.008).</dd>
+    <dt>Is turning busy-waiting off fair to the BEAM?</dt>
+    <dd>It is a documented runtime option, suggested by the Erlang tooling itself for containers. The campaign measures both settings, so the default is still reported.</dd>
+    <dt>Does it hold at higher load?</dt>
+    <dd>Not tested yet: our client is limited to about 800 requests per second. The busy index servers were stable, which suggests the effect shrinks under full load.</dd>
+  </dl>
+</section>
+</main>
+
+<script>
+const DATA = {"pilot": [{"server": "st-elixir-cowboy-1-19-5", "cv_container": 42.6, "cv_host": 2.7, "cpu": [24, 83, 84, 91, 111], "energy": 211.2}, {"server": "st-elixir-index-1-19-5", "cv_container": 12.2, "cv_host": 1.7, "cpu": [153, 153, 156, 161, 193], "energy": 460.1}, {"server": "st-elixir-phoenix-1-8-5", "cv_container": 18.9, "cv_host": 1.0, "cpu": [51, 69, 80, 83, 83], "energy": 195.8}, {"server": "st-elixir-pure-1-19-5", "cv_container": 31.1, "cv_host": 1.7, "cpu": [32, 63, 75, 75, 77], "energy": 165.3}, {"server": "st-erlang-cowboy-28-4-3", "cv_container": 20.5, "cv_host": 1.2, "cpu": [61, 71, 81, 95, 95], "energy": 211.6}, {"server": "st-erlang-index-28-4-3", "cv_container": 2.0, "cv_host": 0.4, "cpu": [154, 155, 158, 159, 162], "energy": 437.6}, {"server": "st-erlang-pure-28-4-3", "cv_container": 2.7, "cv_host": 0.5, "cpu": [77, 78, 78, 79, 81], "energy": 201.9}, {"server": "st-erlang-yaws-28-4-3", "cv_container": 1.1, "cv_host": 0.6, "cpu": [152, 155, 155, 155, 156], "energy": 439.7}, {"server": "st-gleam-index-1-15-2", "cv_container": 2.5, "cv_host": 0.4, "cpu": [156, 158, 160, 160, 165], "energy": 448.5}, {"server": "st-gleam-mist-1-15-2", "cv_container": 13.9, "cv_host": 0.9, "cpu": [55, 68, 74, 77, 78], "energy": 182.2}, {"server": "st-gleam-pure-1-15-2", "cv_container": 11.3, "cv_host": 0.8, "cpu": [61, 67, 77, 78, 80], "energy": 189.8}], "exp": [{"server": "st-elixir-cowboy-1-19-5", "level": 20000, "variant": "default", "runs": 5, "energy": [16.0, 52.1, 45.5, 43.4, 51.6], "host": [233.8, 242.5, 240.3, 240.0, 245.4], "cpu": [21.4, 68.1, 59.2, 60.1, 67.4], "energy_mean": 41.7, "energy_cv": 35.6, "host_mean": 240.4, "host_cv": 1.8}, {"server": "st-elixir-cowboy-1-19-5", "level": 20000, "variant": "nobw", "runs": 5, "energy": [14.3, 14.8, 15.3, 14.1, 14.2], "host": [232.3, 232.3, 233.3, 230.8, 231.5], "cpu": [19.8, 20.3, 21.7, 19.4, 19.3], "energy_mean": 14.5, "energy_cv": 3.3, "host_mean": 232.0, "host_cv": 0.4}, {"server": "st-elixir-cowboy-1-19-5", "level": 80000, "variant": "default", "runs": 5, "energy": [195.0, 197.2, 208.6, 213.3, 240.8], "host": [980.9, 974.0, 982.8, 980.0, 987.1], "cpu": [73.8, 76.1, 79.5, 82.5, 92.3], "energy_mean": 211.0, "energy_cv": 8.7, "host_mean": 981.0, "host_cv": 0.5}, {"server": "st-elixir-cowboy-1-19-5", "level": 80000, "variant": "nobw", "runs": 5, "energy": [59.9, 59.8, 62.6, 62.4, 59.1], "host": [941.6, 938.7, 943.5, 944.5, 934.7], "cpu": [24.2, 24.0, 25.1, 24.9, 24.0], "energy_mean": 60.8, "energy_cv": 2.6, "host_mean": 940.6, "host_cv": 0.4}, {"server": "st-elixir-pure-1-19-5", "level": 20000, "variant": "default", "runs": 5, "energy": [51.7, 40.2, 44.7, 53.3, 30.0], "host": [237.7, 233.7, 231.3, 236.0, 229.3], "cpu": [72.4, 57.0, 64.1, 74.6, 38.4], "energy_mean": 44.0, "energy_cv": 21.5, "host_mean": 233.6, "host_cv": 1.4}, {"server": "st-elixir-pure-1-19-5", "level": 20000, "variant": "nobw", "runs": 5, "energy": [7.4, 7.4, 7.4, 7.6, 7.3], "host": [222.0, 221.3, 220.8, 222.5, 222.7], "cpu": [10.6, 10.6, 10.8, 10.9, 10.4], "energy_mean": 7.4, "energy_cv": 1.4, "host_mean": 221.9, "host_cv": 0.4}, {"server": "st-elixir-pure-1-19-5", "level": 80000, "variant": "default", "runs": 5, "energy": [197.1, 193.8, 215.7, 257.1, 170.1], "host": [948.0, 940.8, 949.0, 962.6, 937.4], "cpu": [78.1, 77.6, 85.5, 100.4, 68.0], "energy_mean": 206.7, "energy_cv": 15.7, "host_mean": 947.6, "host_cv": 1.0}, {"server": "st-elixir-pure-1-19-5", "level": 80000, "variant": "nobw", "runs": 5, "energy": [31.5, 29.7, 30.7, 31.0, 30.8], "host": [902.5, 895.1, 902.7, 899.3, 899.9], "cpu": [13.1, 12.5, 12.8, 12.9, 13.1], "energy_mean": 30.7, "energy_cv": 2.1, "host_mean": 899.9, "host_cv": 0.3}, {"server": "st-erlang-cowboy-28-4-3", "level": 20000, "variant": "default", "runs": 5, "energy": [56.1, 46.0, 50.7, 45.7, 40.3], "host": [239.8, 235.5, 237.4, 235.0, 233.3], "cpu": [76.6, 64.9, 72.4, 62.4, 56.8], "energy_mean": 47.8, "energy_cv": 12.4, "host_mean": 236.2, "host_cv": 1.1}, {"server": "st-erlang-cowboy-28-4-3", "level": 20000, "variant": "nobw", "runs": 5, "energy": [11.6, 11.3, 11.2, 11.0, 10.9], "host": [227.0, 226.7, 226.8, 227.8, 225.6], "cpu": [16.2, 16.1, 16.0, 15.6, 15.3], "energy_mean": 11.2, "energy_cv": 2.6, "host_mean": 226.8, "host_cv": 0.4}, {"server": "st-erlang-cowboy-28-4-3", "level": 80000, "variant": "default", "runs": 5, "energy": [211.3, 245.9, 203.1, 251.3, 178.7], "host": [965.3, 975.5, 957.7, 973.4, 952.1], "cpu": [81.6, 94.9, 80.0, 98.4, 71.0], "energy_mean": 218.0, "energy_cv": 14.0, "host_mean": 964.8, "host_cv": 1.0}, {"server": "st-erlang-cowboy-28-4-3", "level": 80000, "variant": "nobw", "runs": 5, "energy": [44.2, 45.4, 43.5, 44.5, 43.8], "host": [914.0, 910.9, 910.2, 913.2, 910.5], "cpu": [18.0, 18.8, 17.9, 18.2, 18.2], "energy_mean": 44.3, "energy_cv": 1.6, "host_mean": 911.7, "host_cv": 0.2}]};
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent, text){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(text!==undefined)e.textContent=text;parent.appendChild(e);return e}
+const short = s => s.replace(/^st-/,"").replace(/-(\d+-\d+-\d+)$/,"");
+function axis(svg, x0, x1, y0, y1, ticks, scale, unit){
+  const g = el("g",{class:"axis"},svg);
+  ticks.forEach(t=>{const x=scale(t);el("line",{x1:x,x2:x,y1:y0,y2:y1,class:"grid"},g);el("text",{x:x,y:y1+16,"text-anchor":"middle"},g,t+unit)});
+}
+// Chart 1: pilot CV per server at 80k
+(function(){
+  const rows = DATA.pilot.slice().sort((a,b)=>b.cv_container-a.cv_container);
+  const W=760, L=190, R=30, T=10, rowH=26, H=T+rows.length*rowH+30;
+  const svg = el("svg",{viewBox:`0 0 ${W} ${H}`},document.getElementById("c-pilot"));
+  const max=50, sx=v=>L+(W-L-R)*Math.min(v,max)/max;
+  axis(svg,L,W-R,T,T+rows.length*rowH,[0,10,20,30,40,50],sx,"%");
+  rows.forEach((r,i)=>{const y=T+i*rowH+rowH/2;
+    el("text",{x:L-10,y:y+4,"text-anchor":"end"},svg,short(r.server));
+    el("line",{x1:sx(r.cv_host),x2:sx(r.cv_container),y1:y,y2:y,stroke:"var(--rule)","stroke-width":2},svg);
+    el("circle",{cx:sx(r.cv_host),cy:y,r:5,fill:"var(--accent)"},svg);
+    el("circle",{cx:sx(r.cv_container),cy:y,r:6,fill:"var(--spin)"},svg);
+    el("text",{x:sx(r.cv_container)+10,y:y+4,class:"note"},svg,r.cv_container.toFixed(1)+"%");});
+})();
+// Chart 2: CPU per run, default vs nobw
+(function(){
+  const groups=[]; const seen={};
+  DATA.exp.forEach(e=>{const k=e.server+e.level;if(!seen[k]){seen[k]={server:e.server,level:e.level};groups.push(seen[k])}seen[k][e.variant]=e});
+  const W=760,L=230,R=30,T=10,rowH=34,H=T+groups.length*rowH+30;
+  const svg=el("svg",{viewBox:`0 0 ${W} ${H}`},document.getElementById("c-cpu"));
+  const max=120, sx=v=>L+(W-L-R)*v/max;
+  axis(svg,L,W-R,T,T+groups.length*rowH,[0,20,40,60,80,100,120],sx,"%");
+  groups.forEach((g,i)=>{const y=T+i*rowH+rowH/2;
+    el("text",{x:L-10,y:y+4,"text-anchor":"end"},svg,`${short(g.server)} · ${g.level/1000}k`);
+    g.nobw.cpu.forEach((c,j)=>el("circle",{cx:sx(c),cy:y-5+j*0.6,r:5,fill:"var(--calm)","fill-opacity":.85},svg));
+    g.default.cpu.forEach((c,j)=>el("circle",{cx:sx(c),cy:y+5-j*0.6,r:5,fill:"var(--spin)","fill-opacity":.85},svg));});
+})();
+// Chart 3: whole-machine energy per run at 80k
+(function(){
+  const rows=DATA.exp.filter(e=>e.level===80000);
+  const servers=[...new Set(rows.map(r=>r.server))];
+  const W=760,L=190,R=30,T=10,rowH=40,H=T+servers.length*rowH+30;
+  const svg=el("svg",{viewBox:`0 0 ${W} ${H}`},document.getElementById("c-host"));
+  const lo=880, hi=1000, sx=v=>L+(W-L-R)*(v-lo)/(hi-lo);
+  axis(svg,L,W-R,T,T+servers.length*rowH,[880,900,920,940,960,980,1000],sx," J");
+  servers.forEach((s,i)=>{const y=T+i*rowH+rowH/2;
+    el("text",{x:L-10,y:y+4,"text-anchor":"end"},svg,short(s));
+    rows.filter(r=>r.server===s).forEach(r=>{const col=r.variant==="nobw"?"var(--calm)":"var(--spin)";const dy=r.variant==="nobw"?-6:6;
+      r.host.forEach(h=>el("circle",{cx:sx(h),cy:y+dy,r:5,fill:col,"fill-opacity":.85},svg));});});
+})();
+// Table
+(function(){
+  const t=document.getElementById("t-exp");
+  t.innerHTML="<thead><tr><th>Server</th><th>Requests</th><th>Container J default</th><th>Container J off</th><th>CV default</th><th>CV off</th><th>Machine J default</th><th>Machine J off</th><th>Machine saving</th></tr></thead>";
+  const tb=document.createElement("tbody");t.appendChild(tb);
+  const seen={};DATA.exp.forEach(e=>{const k=e.server+e.level;(seen[k]=seen[k]||{server:e.server,level:e.level})[e.variant]=e});
+  Object.values(seen).forEach(g=>{const a=g.default,b=g.nobw;const tr=document.createElement("tr");
+    const cells=[short(g.server),g.level.toLocaleString("en"),a.energy_mean.toFixed(1),b.energy_mean.toFixed(1),a.energy_cv.toFixed(1)+"%",b.energy_cv.toFixed(1)+"%",a.host_mean.toFixed(1),b.host_mean.toFixed(1),(100*(a.host_mean-b.host_mean)/a.host_mean).toFixed(1)+"%"];
+    cells.forEach(c=>{const td=document.createElement("td");td.textContent=c;tr.appendChild(td)});tb.appendChild(tr)});
+})();
+</script>
