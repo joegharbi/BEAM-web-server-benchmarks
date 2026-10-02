@@ -142,6 +142,12 @@ resume: check-env ## Continue an unfinished measurement (the newest one, or RESU
 	done; \
 	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --resume "$$R"
 
+status: ## Progress of the running (or newest) measurement: make status [RESULTS=results/<folder>]
+	@for v in ./*/bin/activate; do \
+		if [ -f "$$v" ]; then . "$$v"; break; fi; \
+	done; \
+	python3 tools/progress.py status $(RESULTS)
+
 reproduce: check-env ## Measure an earlier measurement again in a new folder: make reproduce FROM=results/<folder>
 	@if [ -z "$(FROM)" ]; then echo "Usage: make reproduce FROM=results/<folder>"; exit 1; fi
 	@for v in ./*/bin/activate; do \
@@ -313,7 +319,8 @@ help:  ## Show this help message
 	@printf "  %-22s %s\n" "example" "make resume [RESUME=results/<folder>]  # continue an interrupted measurement (default: the newest)"
 	@printf "  %-22s %s\n" "example" "make reproduce FROM=results/<folder>  # measure an earlier measurement again, new folder"
 	@printf "  %-22s %s\n" "example" "make run HTTP_MAX_WORKERS=system  # override to Python default (None)"
-	@printf "  %-22s %s\n" "example" "make run BENCH_MEASURE_QUIET=0  # verbose logs"
+	@printf "  %-22s %s\n" "example" "make run CONFIG=my.config VERBOSE=1  # every detail of every measurement"
+	@printf "  %-22s %s\n" "example" "make status  # progress of the running (or newest) measurement, from any terminal"
 	@printf "  %-22s %s\n" "example" "make run BENCH_MEASURE_QUIET=1 MEASURE_HEARTBEAT_SEC=60  # compact mode for both"
 	@printf "\n"
 	@printf "${YELLOW}Validation & Health:${NC}\n"

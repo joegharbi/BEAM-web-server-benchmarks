@@ -65,7 +65,10 @@ def run(main):
     except SystemExit:
         raise
     except KeyboardInterrupt:
+        # Ctrl-C: clean up and exit at once. Raising would make Python wait for the threads still
+        # running (the load's workers, the CPU statistics collector), which can hang for minutes.
+        logger.error("Interrupted; removing the container and stopping Scaphandre")
         _cleanup()
-        raise
+        os._exit(130)
     except Exception as e:  # noqa: BLE001 - every error must end as a recorded failure
         fail(f"{type(e).__name__}: {e}")

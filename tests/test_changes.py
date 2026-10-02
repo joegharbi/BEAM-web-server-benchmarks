@@ -1553,5 +1553,36 @@ class TerminatedMeasurement(unittest.TestCase):
         self.assertIn("pkill -9 scaphandre", log)
 
 
+class InterruptedLoad(unittest.TestCase):
+    """Ctrl-C during a load ends the measurement at once, although worker threads are still running."""
+    def test_ctrl_c_with_running_threads_exits_at_once(self):
+        import signal
+        d = tempfile.mkdtemp()
+        calls = os.path.join(d, "calls.log")
+        for name in ("docker", "sudo"):
+            with open(os.path.join(d, name), "w") as fh:
+                fh.write(f'#!/bin/sh\necho "{name} $*" >> {calls}\n')
+            os.chmod(os.path.join(d, name), 0o755)
+        # Like a load: a non-daemon thread that never stops by itself (the CPU statistics collector)
+        prog = ("import sys, threading, time; sys.path.insert(0, %r); import measure_failure as mf\n"
+                "def main():\n    mf.started_container('srv', 'docker')\n"
+                "    threading.Thread(target=lambda: time.sleep(600)).start()\n"
+                "    print('running', flush=True)\n    time.sleep(600)\n"
+                "mf.run(main)\n") % os.path.join(ROOT, "tools")
+        env = dict(os.environ, PATH=d + os.pathsep + os.environ["PATH"])
+        p = subprocess.Popen([sys.executable, "-c", prog], env=env, stdout=subprocess.PIPE, text=True)
+        self.assertEqual(p.stdout.readline().strip(), "running")
+        p.send_signal(signal.SIGINT)
+        try:
+            p.wait(timeout=10)
+        finally:
+            if p.poll() is None:
+                p.kill()
+            p.stdout.close()
+        self.assertEqual(p.returncode, 130)
+        with open(calls) as fh:
+            self.assertIn("docker rm -f srv", fh.read())
+
+
 if __name__ == "__main__":
     unittest.main()

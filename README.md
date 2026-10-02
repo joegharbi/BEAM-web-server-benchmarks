@@ -150,6 +150,28 @@ machine's energy (`Host Energy (J)`). The desktop may still dim or switch off th
 | `failures.csv` | Failed measurements and why (only if any failed) |
 | `raw/` | Scaphandre's raw power logs (plain JSON) with the load and idle windows of each run (`RAW_DATA=keep`) |
 
+### Watching the progress
+
+Before every measurement the run prints a short panel:
+
+```
+──────────────────────────────────────────────────────────────────────────
+ static · repeat 2 of 5 · measurement 248 of 1210 (20% done)  ██████░░░░░░░░░░░░░░░░░░░░░░
+ Time    spent 9h41m · left ~28h10m · done around Sat 04 Oct 14:20
+ Now     st-elixir-cowboy-1-19-5-nobw · level 5/11 · 20000 requests · server 3 of 22 in this repeat
+ Last    st-gleam-mist-1-15-2 · 80,000 requests · load 98.1 s · 816 req/s · container 211.4 J · machine 977 J · ok
+ Health  no failures · CPU 41 °C · disk 4.9 GB free
+──────────────────────────────────────────────────────────────────────────
+```
+
+The time left is estimated from the measurements already done (HTTP: overhead plus seconds per request,
+fitted to the finished runs; WebSocket: mean per test family); until three are done it uses rough values
+from the pilot and says so. The panel is printed only between measurements, plus one line per minute
+during a long load: drawing on the screen costs CPU on the measured machine, so the output stays sparse.
+`make status` prints the same panel on demand, from any terminal, and says whether the measurement is
+running, finished or stopped. `VERBOSE=1` (`make run CONFIG=my.config VERBOSE=1`) shows every detail of
+every measurement.
+
 ### Stopping and resuming
 
 Ctrl-C stops the measurement, restores the machine settings and prints the command to continue. A full
@@ -161,7 +183,11 @@ make resume RESUME=results/<folder>    # a specific one
 ```
 
 This continues in the same folder with the same config, arguments and shuffle order, and skips the
-measurements that already finished. The measurement that was running when it stopped is done again.
+measurements that already finished. One measurement is one server at one load level in one repeat. The
+measurement that was running when it stopped is done again from its start, with a fresh container (its
+energy must come from one unbroken recording); nothing of it reaches the CSV, and its half-written raw
+log is moved to `raw/incomplete/`. Ctrl-C, a shutdown or `kill` remove the running container and stop
+Scaphandre before the run ends.
 
 A measurement is only continued with the tools it started with. If the framework (git commit),
 Scaphandre, Docker, Python, OS, kernel, CPU, memory, a server image, or the config copies in the folder

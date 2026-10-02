@@ -106,6 +106,8 @@ if [ -n "$HTTP_MAX_WORKERS" ] && ! [[ "$HTTP_MAX_WORKERS" =~ ^[1-9][0-9]*$ ]]; t
     exit 1
 fi
 # HTTP measurements: 1 = one-line measure_docker output (default); 0 = full logs.
+# VERBOSE=1 (make run ... VERBOSE=1): every detail of every measurement
+[ "${VERBOSE:-0}" = "1" ] && BENCH_MEASURE_QUIET=0
 BENCH_MEASURE_QUIET="${BENCH_MEASURE_QUIET:-1}"
 
 # Full test parameters for WebSocket benchmarks (balanced set)
@@ -241,6 +243,11 @@ bench_eta_human() {
 print_bench_progress() {
     local detail=$1
     BENCH_STEP=$((BENCH_STEP + 1))
+    if [ -n "${CONFIG_FILE:-}" ]; then
+        # The panel (tools/progress.py) shows it before the measurement starts
+        BENCH_NOW_DESC="${detail//|/·} · server ${BENCH_CIDX:-?} of ${BENCH_CTOTAL:-?} in this repeat"
+        return 0
+    fi
     local step=$BENCH_STEP
     local total=$BENCH_TOTAL_STEPS
     local pct=0
@@ -462,6 +469,14 @@ if [ -n "$RESUME_DIR" ]; then
         echo "[ERROR] Cannot resume $RESUME_DIR: $RESUME_PROBLEMS"
         exit 1
     fi
+    # Raw logs of a measurement that was cut off have no window file: keep them apart, never mix them in
+    for _raw in "$RESUME_DIR"/raw/*.json; do
+        [ -e "$_raw" ] || continue
+        case "$_raw" in *.window.json) continue ;; esac
+        if [ ! -f "${_raw%.json}.window.json" ]; then
+            mkdir -p "$RESUME_DIR/raw/incomplete" && mv "$_raw" "$RESUME_DIR/raw/incomplete/"
+        fi
+    done
     # The machine profile as it was at the start: the copy kept in the results folder
     [ -f "$RESUME_DIR/machine.config" ] && export BENCH_MACHINE_FILE="$RESUME_DIR/machine.config"
     ORIGINAL_ARGS="$*"
@@ -1198,19 +1213,86 @@ csv.writer(sys.stdout).writerow([datetime.datetime.now(datetime.timezone.utc).is
         "$BENCH_PASS" "$image" "$measurement" "$reason" >> "$f"
 }
 
+# What the whole measurement contains, for the progress panel and `make status` (kept on resume)
+bench_write_plan() {
+    [ -f "$RESULTS_DIR/plan.json" ] && return 0
+    local -a levels
+    if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then levels=("${super_quick_http_requests[@]}")
+    elif [[ $QUICK_BENCH -eq 1 ]]; then levels=("${quick_http_requests[@]}")
+    else levels=("${full_http_requests[@]}"); fi
+    local ws=0 conc=0 pay=0
+    case "$TARGET_TYPE" in
+        websocket|--websocket) ws=$(bench_ws_burst_stream_steps_per_container) ;;
+        concurrency) conc=$(bench_ws_concurrency_steps_per_container) ;;
+        payload) pay=$(bench_ws_payload_steps_per_container) ;;
+        *) if [[ $RUN_ALL -eq 1 ]]; then
+               ws=$(( $(bench_ws_burst_stream_steps_per_container) * BENCH_DO_WS ))
+               conc=$(( $(bench_ws_concurrency_steps_per_container) * BENCH_DO_CONC ))
+               pay=$(( $(bench_ws_payload_steps_per_container) * BENCH_DO_PAYLOAD ))
+           fi ;;
+    esac
+    "$PYTHON_PATH" - "$RESULTS_DIR/plan.json" <<PLAN || print_status "WARNING" "Could not write plan.json"
+import json, sys
+json.dump({"name": "$(basename "${CONFIG_FILE%.config}")", "total": $BENCH_TOTAL_STEPS, "repeats": $CFG_REPEATS,
+           "servers": {"static": ${#BENCH_PLAN_STATIC[@]}, "dynamic": ${#BENCH_PLAN_DYNAMIC[@]},
+                       "websocket": ${#BENCH_PLAN_WEBSOCKET[@]}},
+           "http_levels": [$(IFS=,; echo "${levels[*]}")],
+           "ws_steps": {"websocket": $ws, "concurrency": $conc, "payload": $pay}}, open(sys.argv[1], "w"), indent=1)
+PLAN
+}
+
+# Kind of measurement for timing.tsv, from the phase the loops set
+bench_family() {
+    case "${BENCH_PHASE:-}" in
+        "static HTTP") echo static ;;
+        "dynamic HTTP") echo dynamic ;;
+        "WebSocket burst/stream") echo websocket ;;
+        "WebSocket concurrency") echo concurrency ;;
+        "WebSocket payload") echo payload ;;
+        *) echo other ;;
+    esac
+}
+
 bench_measure() {
     # What this measurement is: pass + tool arguments (without the output path)
     local measurement key
     measurement=$(printf '%s ' "$@" | sed -E 's# --output_csv [^ ]+##; s#\./tools/##; s/ +$//')
     key="pass $BENCH_PASS | $measurement"
     if [ -f "$RESULTS_DIR/progress.txt" ] && grep -Fxq "$key" "$RESULTS_DIR/progress.txt"; then
-        print_status "INFO" "Already measured, skipping: $key"
+        BENCH_SKIPPED=$(( ${BENCH_SKIPPED:-0} + 1 ))
         return 0
     fi
+    if [ "${BENCH_SKIPPED:-0}" -gt 0 ]; then
+        print_status "INFO" "Resumed: skipped $BENCH_SKIPPED measurements that were already done"
+        BENCH_SKIPPED=0
+    fi
+    # What is measured now, for timing.tsv and the progress panel
+    local a prev="" m_server="" m_level="" m_csv="" m_type=""
+    for a in "$@"; do
+        case "$prev" in
+            --server_image) m_server="$a" ;;
+            --num_requests) m_level="$a" ;;
+            --output_csv) m_csv="$a" ;;
+            --measurement_type) m_type="$a" ;;
+        esac
+        prev="$a"
+    done
+    [ -n "$m_level" ] || m_level="$m_type"
+    if [ -f "$RESULTS_DIR/plan.json" ]; then
+        "$PYTHON_PATH" ./tools/progress.py panel "$RESULTS_DIR" --pass "$BENCH_PASS" --now "${BENCH_NOW_DESC:-$m_server}" \
+            || true
+    fi
+    local t_start=$SECONDS
     bench_ready_gate
     local reason_file="$RESULTS_DIR/.failure_reason" rc=0
     rm -f "$reason_file"
     MEASURE_FAILURE_REASON_FILE="$reason_file" "$PYTHON_PATH" "$@" "${BENCH_GATE_ARGS[@]}" || rc=$?
+    if [ -n "${CONFIG_FILE:-}" ] && [ "$rc" != 2 ] && [ "$rc" != 3 ] && [ "$rc" != 130 ] && [ "$rc" != 143 ]; then
+        local outcome=ok
+        [ "$rc" = 0 ] || outcome="failed"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$((SECONDS - t_start))" "$BENCH_PASS" \
+            "$(bench_family)" "$m_server" "$m_level" "$outcome" "$m_csv" >> "$RESULTS_DIR/timing.tsv"
+    fi
     case "$rc" in
         0)
             BENCH_FAILED_IN_A_ROW=0
@@ -1223,6 +1305,11 @@ bench_measure() {
         3)
             print_status "ERROR" "The measurement setup is broken (see above); stopping."
             exit 1
+            ;;
+        130|143)
+            # Stopped by Ctrl-C or a termination signal: not a failed measurement; it is redone on resume
+            BENCH_INTERRUPTED=1
+            exit 130
             ;;
         *)
             # This measurement failed: record why, remove what is left, continue with the next one.
@@ -1338,6 +1425,7 @@ bench_wait_for_charger() {
 bench_on_exit() {
     # A closed terminal must not stop the restore (a write to it would end the script)
     trap '' PIPE
+    rm -f "$RESULTS_DIR/.running"
     bench_restore_environment
     bench_unblock_sleep
     if [ "${BENCH_INTERRUPTED:-0}" = "1" ]; then
@@ -1381,6 +1469,7 @@ main() {
     # Restore machine settings on any exit (normal end, error, Ctrl-C), then stop the sudo keepalive.
     trap bench_on_exit EXIT
     trap 'BENCH_INTERRUPTED=1; exit 130' INT TERM
+    echo $$ > "$RESULTS_DIR/.running"
     bench_block_sleep
     if [ -n "${CONFIG_FILE:-}" ]; then
         # Without RAPL (most cloud virtual machines) Scaphandre measures nothing: stop now, not after hours
@@ -1477,6 +1566,7 @@ main() {
             || print_status "WARNING" "Could not record the image IDs in metadata.json"
     fi
     BENCH_TOTAL_STEPS=$(( BENCH_TOTAL_STEPS * CFG_REPEATS ))
+    [ -n "${CONFIG_FILE:-}" ] && bench_write_plan
     if [ "$CFG_REPEATS" -gt 1 ]; then
         print_status "INFO" "Repeats: $CFG_REPEATS passes (shuffle=$CFG_SHUFFLE seed=$CFG_SHUFFLE_SEED), $BENCH_TOTAL_STEPS measurements in total"
     fi
