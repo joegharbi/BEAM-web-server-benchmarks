@@ -226,6 +226,8 @@ clean-all-build-run: ## Completely clean (results, srv, Docker), then setup, bui
 		printf "\n"; \
 		$(MAKE) run'
 
+gui: graph ## Same as make graph: open the graph window
+
 graph:  ## Launch the GUI graph generator (uses PyQt5 from requirements.txt)
 	@$(MAKE) check-env
 	@# Suppress benign Qt/Wayland warnings
