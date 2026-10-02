@@ -10,6 +10,7 @@ from io import BytesIO
 from datetime import datetime
 import numpy as np
 import matplotlib
+import matplotlib.container
 matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -1908,11 +1909,10 @@ class BenchmarkGrapher(QMainWindow):
         skipped = [f for f in files if is_summary_csv(f)]
         files = [f for f in files if not is_summary_csv(f)]
         if skipped:
-            QMessageBox.information(self, "Summary files skipped",
-                                    "These hold every server in one table and are not plotted:\n"
-                                    + "\n".join(os.path.basename(f) for f in skipped)
-                                    + "\n\nLoad the run CSVs instead; the graph shows the same statistics "
-                                      "(choose them under Repeats).")
+            # A quiet note, no window: loading a results folder always brings its summary files along
+            self.summary_label.setText(
+                f"Skipped {len(skipped)} statistics file(s) (summary.csv, *_summary.csv): the graph computes the "
+                "same statistics from the run files; choose how under Repeats.")
         for f in files:
             if f not in self.files:
                 try:
@@ -2930,7 +2930,7 @@ class BenchmarkGrapher(QMainWindow):
             self.bar_cursor = None
 
     def _apply_plot_chrome(self, title, series_count, has_colorbar=False, compact_title=False):
-        plot_kind = "bar" if self.ax.containers else "line"
+        plot_kind = "bar" if self._bar_containers() else "line"
         style = self._tuned_plot_style_for_series_count(
             self._scaled_plot_style(self._current_plot_style()),
             max(1, series_count),
@@ -3005,9 +3005,13 @@ class BenchmarkGrapher(QMainWindow):
     def _apply_series_legend(self, series_count, title, compact_title=False):
         self._apply_plot_chrome(title, series_count, compact_title=compact_title)
 
+    def _bar_containers(self):
+        """The bar groups of the plot; ax.containers also holds error bars, which are not bars."""
+        return [c for c in self.ax.containers if isinstance(c, matplotlib.container.BarContainer)]
+
     def _attach_plot_interactivity(self, metric):
         lines = [line for line in self.ax.get_lines() if not str(line.get_label()).startswith("_")]
-        bars = [bar for cont in self.ax.containers for bar in cont]
+        bars = [bar for cont in self._bar_containers() for bar in cont]
         series_count = max(
             len(lines),
             len({bar.get_gid() for bar in bars if bar.get_gid()}),

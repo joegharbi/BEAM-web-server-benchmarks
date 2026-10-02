@@ -1625,6 +1625,7 @@ class GuiRepeats(unittest.TestCase):
             E = os.path.join(ROOT, "experiments", "busy-wait", "evidence", "busywait-2026-10-02_090615", "static")
             w.add_files(sorted(glob.glob(os.path.join(E, "*.csv"))))
             self.assertEqual(len(w.files), 6)                                     # summaries skipped
+            self.assertIn("Skipped 7 statistics file(s)", w.summary_label.text())  # a note, no window
             self.assertTrue(w._render_plot(w.files, "Total Energy (J)", g.WS_PLOT_MULTILINE, enable_interactivity=False))
             self.assertIn("median of 5 runs", w.summary_label.text())
             lines = {l.get_label(): l for l in w.ax.get_lines() if not l.get_label().startswith("_")}
@@ -1634,6 +1635,12 @@ class GuiRepeats(unittest.TestCase):
             self.assertEqual(list(base.get_xdata()), [20000.0, 80000.0])         # one point per load
             self.assertTrue(w._render_plot(w.files, "Host Energy (J)", g.WS_PLOT_BAR, enable_interactivity=False))
             self.assertEqual(sorted({round(t) for t in w.ax.get_xticks()}), [0, 1])  # grouped per load level
+            # As in the window: with hover on, for every plot type and every way of showing repeats
+            for mode in g.REPEATS_OPTIONS:
+                w.repeats_selector.set_current(mode)
+                for kind in (g.WS_PLOT_MULTILINE, g.WS_PLOT_BAR):
+                    self.assertTrue(w._render_plot(w.files, "Total Energy (J)", kind, enable_interactivity=True),
+                                    (mode, kind))
         finally:
             g.QMessageBox.information = saved
 
