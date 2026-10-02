@@ -1527,5 +1527,31 @@ class Variants(WhatToMeasure):
                 bench_config.parse(bad)
 
 
+class TerminatedMeasurement(unittest.TestCase):
+    """A measurement stopped by SIGTERM (shutdown, timeout, kill) leaves no container or Scaphandre behind."""
+    def test_sigterm_removes_container_and_stops_scaphandre(self):
+        import signal
+        d = tempfile.mkdtemp()
+        calls = os.path.join(d, "calls.log")
+        for name in ("docker", "sudo"):
+            with open(os.path.join(d, name), "w") as fh:
+                fh.write(f'#!/bin/sh\necho "{name} $*" >> {calls}\n')
+            os.chmod(os.path.join(d, name), 0o755)
+        prog = ("import sys, time; sys.path.insert(0, %r); import measure_failure as mf\n"
+                "def main():\n    mf.started_container('srv', 'docker')\n    print('running', flush=True)\n    time.sleep(60)\n"
+                "mf.run(main)\n") % os.path.join(ROOT, "tools")
+        env = dict(os.environ, PATH=d + os.pathsep + os.environ["PATH"])
+        p = subprocess.Popen([sys.executable, "-c", prog], env=env, stdout=subprocess.PIPE, text=True)
+        self.assertEqual(p.stdout.readline().strip(), "running")
+        p.send_signal(signal.SIGTERM)
+        p.wait(timeout=10)
+        p.stdout.close()
+        self.assertEqual(p.returncode, 128 + signal.SIGTERM)
+        with open(calls) as fh:
+            log = fh.read()
+        self.assertIn("docker rm -f srv", log)
+        self.assertIn("pkill -9 scaphandre", log)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ run_benchmarks.sh:
 """
 import logging
 import os
+import signal
 import subprocess
 import sys
 
@@ -48,8 +49,17 @@ def fail(reason):
     sys.exit(MEASUREMENT_FAILED)
 
 
+def _terminated(signum, frame):
+    """SIGTERM (a shutdown, `timeout`, `kill`): remove the container and stop Scaphandre, then exit at
+    once. Waiting for the load to finish could take minutes, and without this both stay behind."""
+    logger.error("Terminated (signal %s); removing the container and stopping Scaphandre", signum)
+    _cleanup()
+    os._exit(128 + signum)
+
+
 def run(main):
     """Run a tool's main(); turn any unexpected error into a recorded failure."""
+    signal.signal(signal.SIGTERM, _terminated)
     try:
         main()
     except SystemExit:
