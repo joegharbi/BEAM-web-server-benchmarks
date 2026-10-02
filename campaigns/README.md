@@ -1,7 +1,9 @@
 # Campaigns
 
 Every server is measured twice, as built and as `<server>-nobw` (BEAM scheduler busy-waiting off:
-`+sbwt none +sbwtdcpu none +sbwtdio none`), in one shuffled order. Why: experiments/busy-wait/.
+`+sbwt none +sbwtdcpu none +sbwtdio none`). Order within each repeat (VARIANT_ORDER=separate, the default): all
+servers as built, then all `-nobw`, shuffled within each group; which group goes first switches every repeat.
+Why both: experiments/busy-wait/.
 Each part is its own results folder: it can be resumed (`make resume`), checked and backed up on its own.
 
 ## Short (5 HTTP load levels: 5k, 10k, 20k, 40k, 80k)

@@ -197,6 +197,13 @@ class CsvMigration(unittest.TestCase):
             rows = list(csv.reader(fh))
         self.assertEqual((rows[0], [r[0] for r in rows[1:]]), (csv_columns.WS_COLUMNS, ["ws-a", "ws-b"]))
 
+    def test_results_doc_lists_every_column(self):
+        import csv_columns
+        with open(os.path.join(ROOT, "docs", "RESULTS.md")) as fh:
+            doc = fh.read()
+        for col in set(csv_columns.HTTP_COLUMNS) | set(csv_columns.WS_COLUMNS):
+            self.assertIn(col, doc, f"docs/RESULTS.md does not mention {col}")
+
     def test_every_measured_value_says_whose_it_is(self):
         import csv_columns
         for col in csv_columns.CONTAINER:

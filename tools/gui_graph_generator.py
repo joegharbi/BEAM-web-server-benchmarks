@@ -704,6 +704,18 @@ def summarize_column(rows, col):
     return {'min': min(vals), 'max': max(vals), 'avg': sum(vals) / len(vals)}
 
 def get_numeric_columns(header):
+    """The measured values of a CSV, offered as metrics: from tools/csv_columns.py for known columns
+    (settings, workload and run labels are not metrics), by keyword for columns it does not know."""
+    import csv_columns
+    known = set(csv_columns.HTTP_COLUMNS) | set(csv_columns.WS_COLUMNS)
+    not_metrics = set(csv_columns.NOT_MEASURED) | set(csv_columns.HTTP_WORKLOAD) | set(csv_columns.WS_WORKLOAD) \
+        | {"Container Name"}
+    metrics = [h for h in header if csv_columns.canonical(h) in known and csv_columns.canonical(h) not in not_metrics]
+    unknown = [h for h in header if csv_columns.canonical(h) not in known]
+    return metrics + [h for h in _numeric_by_keyword(unknown) if h not in metrics]
+
+
+def _numeric_by_keyword(header):
     numeric = []
     for h in header:
         if any(x in h.lower() for x in [
