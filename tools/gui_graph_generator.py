@@ -460,6 +460,52 @@ class ArrowDoubleSpinBox(QDoubleSpinBox):
 
 
 # --- Helper Functions ---
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import aggregate_repeats  # noqa: E402  same statistics as <family>/summary.csv
+import statistics  # noqa: E402
+
+REPEATS_MEDIAN_IQR = "Median + IQR"
+REPEATS_MEAN_CI = "Mean + 95% CI"
+REPEATS_ALL_RUNS = "All runs"
+REPEATS_OPTIONS = [REPEATS_MEDIAN_IQR, REPEATS_MEAN_CI, REPEATS_ALL_RUNS]
+
+
+def aggregate_points(x, y, mode=REPEATS_MEDIAN_IQR):
+    """Repeated runs at the same x -> one point each: (xs, centre, low, high, counts, raw).
+
+    Median + IQR: centre = median, bar = Q1..Q3. Mean + 95% CI: centre = mean, bar = mean +/- the
+    t-based half-width. All runs: centre = median, bar = min..max, and every run is kept in `raw`.
+    The quantiles and the interval are computed exactly as in tools/aggregate_repeats.py.
+    """
+    groups = {}
+    for xv, yv in zip(x, y):
+        groups.setdefault(xv, []).append(yv)
+    xs = sorted(groups)
+    centre, low, high, counts = [], [], [], []
+    for xv in xs:
+        vals = sorted(groups[xv])
+        n = len(vals)
+        counts.append(n)
+        if mode == REPEATS_MEAN_CI:
+            m = statistics.mean(vals)
+            half = aggregate_repeats.t95(n - 1) * statistics.stdev(vals) / (n ** 0.5) if n >= 2 else 0.0
+            centre.append(m); low.append(m - half); high.append(m + half)
+        else:
+            med = statistics.median(vals)
+            centre.append(med)
+            if mode == REPEATS_ALL_RUNS:
+                low.append(vals[0]); high.append(vals[-1])
+            else:
+                low.append(aggregate_repeats._quantile(vals, 0.25)); high.append(aggregate_repeats._quantile(vals, 0.75))
+    return xs, centre, low, high, counts, groups
+
+
+def is_summary_csv(path):
+    """Summary files hold every server in one table; the GUI computes the statistics from the run CSVs."""
+    name = os.path.basename(path)
+    return name == "summary.csv" or name.endswith("_summary.csv")
+
+
 def safe_float(val, default=0.0):
     """Convert value to float; return default on failure (avoids GUI crash on bad CSV data)."""
     if val is None or val == '' or (isinstance(val, str) and val.strip().upper() in ('', 'NAN', 'N/A', '-', '--')):
@@ -797,6 +843,13 @@ class BenchmarkGrapher(QMainWindow):
         self.plot_type_selector.setEnabled(False)
         self.plot_type_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self._on_plot_controls_changed))
         pr.addWidget(self.plot_type_selector)
+        pr.addWidget(QLabel("Repeats:"))
+        self.repeats_selector = MenuSelectorWidget(placeholder=REPEATS_MEDIAN_IQR, parent=self)
+        self.repeats_selector.set_options(REPEATS_OPTIONS)
+        self.repeats_selector.set_current(REPEATS_MEDIAN_IQR)
+        self.repeats_selector.setToolTip("How repeated runs at the same load are shown")
+        self.repeats_selector.option_chosen.connect(lambda t: QTimer.singleShot(0, self._on_plot_controls_changed))
+        pr.addWidget(self.repeats_selector)
         self.plot_btn = _btn("Plot", self.plot_selected, min_w=96, role="primary")
         self.plot_btn.setEnabled(False)
         pr.addWidget(self.plot_btn)
@@ -1852,6 +1905,14 @@ class BenchmarkGrapher(QMainWindow):
         )
 
     def add_files(self, files):
+        skipped = [f for f in files if is_summary_csv(f)]
+        files = [f for f in files if not is_summary_csv(f)]
+        if skipped:
+            QMessageBox.information(self, "Summary files skipped",
+                                    "These hold every server in one table and are not plotted:\n"
+                                    + "\n".join(os.path.basename(f) for f in skipped)
+                                    + "\n\nLoad the run CSVs instead; the graph shows the same statistics "
+                                      "(choose them under Repeats).")
         for f in files:
             if f not in self.files:
                 try:
@@ -2993,7 +3054,7 @@ class BenchmarkGrapher(QMainWindow):
                     if getattr(sel, "target", None) is not None and len(sel.target) > 1:
                         x_val = sel.target[0]
                         y_val = sel.target[1]
-                    annotation_lines = [sel.artist.get_label()]
+                    annotation_lines = [sel.artist.get_label()] + self._hover_stats(sel.artist.get_label(), x_val)
                     if x_val is not None:
                         annotation_lines.append(f"x = {self._format_hover_value(x_val)}")
                     if y_val is not None:
@@ -3037,6 +3098,7 @@ class BenchmarkGrapher(QMainWindow):
                         f"{label}\n"
                         f"x = {self._format_hover_value(x_val)}\n"
                         f"{metric} = {self._format_hover_value(y_val)}"
+                        + "".join("\n" + line for line in self._hover_stats(label, x_val))
                     )
                     for ann in self.ax.texts:
                         if ann is not sel.annotation:
@@ -3091,9 +3153,9 @@ class BenchmarkGrapher(QMainWindow):
             self.summary_label.setText("")
             return False
 
-        # WebSocket bar plot: group all series by shared x categories (e.g., Num Clients)
-        # so bars are aligned per category across servers.
-        if is_websocket and type_choice == WS_PLOT_BAR:
+        # Bar plot: group all series by shared x categories (load level, number of clients) so bars
+        # are aligned per category across servers, with the spread of the repeats as error bars.
+        if type_choice == WS_PLOT_BAR:
             prepared = []
             for idx, f in enumerate(selected_files):
                 header = self.headers[f]
@@ -3133,24 +3195,38 @@ class BenchmarkGrapher(QMainWindow):
             group_width = 0.8
             bar_width = group_width / plotted_series
 
+            labels = [lab for _, lab, _, _ in prepared]
+            bar_repeat_counts = set()
             for plotted_idx, (idx, label, x_vals, y_vals) in enumerate(prepared):
-                series_style = self._series_style_for_index(idx, style)
+                variant_of = self._variant_base(label, labels)
+                series_style = self._series_style_for_index(
+                    prepared[labels.index(variant_of)][0] if variant_of else idx, style)
                 offset = (plotted_idx - (plotted_series - 1) / 2) * bar_width
                 y_aligned = np.full(len(x_unique), np.nan, dtype=float)
-                for xv, yv in zip(x_vals, y_vals):
+                err_aligned = np.zeros((2, len(x_unique)), dtype=float)
+                yerr, counts = self._spread_for(label, x_vals, y_vals)
+                if counts:
+                    bar_repeat_counts.update(counts)
+                for i, (xv, yv) in enumerate(zip(x_vals, y_vals)):
                     if isinstance(xv, (int, float, np.integer, np.floating)):
                         x_key = float(xv)
                         if x_key in x_to_idx:
                             y_aligned[x_to_idx[x_key]] = float(yv)
+                            if yerr is not None:
+                                err_aligned[0][x_to_idx[x_key]] = yerr[0][i]
+                                err_aligned[1][x_to_idx[x_key]] = yerr[1][i]
                 container = self.ax.bar(
                     base + offset,
                     y_aligned,
                     width=bar_width,
                     label=label,
                     color=series_style["color"],
-                    alpha=style["bar_alpha"],
+                    alpha=style["bar_alpha"] * (0.55 if variant_of else 1.0),
                     edgecolor=style["bar_edgecolor"],
                     linewidth=style["bar_linewidth"],
+                    hatch="//" if variant_of else None,
+                    yerr=err_aligned if yerr is not None else None,
+                    error_kw={"elinewidth": 1.0, "capsize": 3, "ecolor": "#333333"},
                     zorder=2 + idx,
                 )
                 for bar in container:
@@ -3165,9 +3241,12 @@ class BenchmarkGrapher(QMainWindow):
                 [str(int(v)) if float(v).is_integer() else str(v) for v in x_unique]
             )
             self.ax.set_xlim(-0.5, len(x_unique) - 0.5)
-            self.ax.set_xlabel("Number of clients")
+            x_col = self.get_x_axis_column_name(self.headers[selected_files[0]], self.rows[selected_files[0]],
+                                                self.file_types[selected_files[0]], filepath=selected_files[0])
+            bar_x_label = XAXIS_DISPLAY_NAMES.get(x_col, x_col) if x_col else "Test parameter"
+            self.ax.set_xlabel(bar_x_label)
             self.ax.set_ylabel(metric)
-            titles = self._resolve_plot_titles(prepared and selected_files or [], metric, "Number of clients")
+            titles = self._resolve_plot_titles(prepared and selected_files or [], metric, bar_x_label)
             self._apply_series_legend(
                 len(prepared),
                 self._export_display_title(titles, title_mode=title_mode),
@@ -3180,18 +3259,36 @@ class BenchmarkGrapher(QMainWindow):
 
             if all_vals:
                 s = f"{metric}: min={min(all_vals):.2f}, max={max(all_vals):.2f}, avg={sum(all_vals)/len(all_vals):.2f}"
+                if bar_repeat_counts:
+                    n = "/".join(str(c) for c in sorted(bar_repeat_counts))
+                    s += {REPEATS_MEDIAN_IQR: f" · each bar: median of {n} runs, whiskers: Q1 to Q3",
+                          REPEATS_MEAN_CI: f" · each bar: mean of {n} runs, whiskers: 95% confidence interval",
+                          REPEATS_ALL_RUNS: f" · each bar: median of {n} runs, whiskers: min to max"}[self._repeats_mode()]
                 self.summary_label.setText(s)
             else:
                 self.summary_label.setText("")
             return True
 
+        series_data = []
+        for f in selected_files:
+            series_data.append(self.get_plot_data(self.headers[f], self.rows[f], self.file_types[f], metric,
+                                                  os.path.basename(f), filepath=f))
+        labels = [lab for _, _, lab in series_data]
+        base_style_index = {}
+        repeat_counts = set()
         for idx, f in enumerate(selected_files):
-            header = self.headers[f]
-            rows = self.rows[f]
-            typ = self.file_types[f]
-            x, y, label = self.get_plot_data(header, rows, typ, metric, os.path.basename(f), filepath=f)
+            x, y, label = series_data[idx]
             if x and y:
-                series_style = self._series_style_for_index(idx, style)
+                base = self._variant_base(label, labels)
+                series_style = dict(self._series_style_for_index(labels.index(base) if base else idx, style))
+                if base:
+                    # Same colour as its server, dashed, hollow markers
+                    series_style.update(linestyle="--", markerfacecolor="white", fillstyle="none")
+                elif any(self._variant_base(other, labels) == label for other in labels):
+                    series_style.update(linestyle="-")      # the server itself, when its variant is shown
+                yerr, counts = self._spread_for(label, x, y)
+                if counts:
+                    repeat_counts.update(counts)
                 use_bar = type_choice == WS_PLOT_BAR
                 if use_bar:
                     n_points = len(x)
@@ -3217,9 +3314,12 @@ class BenchmarkGrapher(QMainWindow):
                         width=bar_width,
                         label=label,
                         color=series_style["color"],
-                        alpha=style["bar_alpha"],
+                        alpha=style["bar_alpha"] * (0.55 if series_style["linestyle"] == "--" else 1.0),
                         edgecolor=style["bar_edgecolor"],
                         linewidth=style["bar_linewidth"],
+                        hatch="//" if series_style["linestyle"] == "--" else None,
+                        yerr=yerr,
+                        error_kw={"elinewidth": 1.0, "capsize": 3, "ecolor": "#333333"},
                         zorder=2 + idx,
                     )
                     for bar in container:
@@ -3261,6 +3361,15 @@ class BenchmarkGrapher(QMainWindow):
                     line._base_markersize = style["marker_size"]
                     line._base_alpha = 1.0
                     line._base_zorder = 2 + idx
+                    if yerr is not None:
+                        self.ax.errorbar(x, y, yerr=yerr, fmt="none", ecolor=series_style["color"], elinewidth=1.0,
+                                         capsize=3, alpha=0.8, label="_nolegend_", zorder=1 + idx)
+                        sp = self._plot_spread.get(label, {})
+                        if sp.get("mode") == REPEATS_ALL_RUNS:
+                            px = [xv for xv in sp["x"] for _ in sp["raw"][xv]]
+                            py = [v for xv in sp["x"] for v in sp["raw"][xv]]
+                            self.ax.scatter(px, py, s=10, color=series_style["color"], alpha=0.45,
+                                            label="_nolegend_", zorder=1 + idx)
                 all_vals.extend(y)
 
         if selected_files:
@@ -3280,6 +3389,11 @@ class BenchmarkGrapher(QMainWindow):
         self.canvas.draw()
         if all_vals:
             s = f"{metric}: min={min(all_vals):.2f}, max={max(all_vals):.2f}, avg={sum(all_vals)/len(all_vals):.2f}"
+            if repeat_counts:
+                n = "/".join(str(c) for c in sorted(repeat_counts))
+                s += {REPEATS_MEDIAN_IQR: f" · each point: median of {n} runs, bars: Q1 to Q3",
+                      REPEATS_MEAN_CI: f" · each point: mean of {n} runs, bars: 95% confidence interval",
+                      REPEATS_ALL_RUNS: f" · line: median of {n} runs, dots: every run, bars: min to max"}[self._repeats_mode()]
             self.summary_label.setText(s)
         else:
             self.summary_label.setText("")
@@ -3341,7 +3455,7 @@ class BenchmarkGrapher(QMainWindow):
                 x = list(range(1, len(rows) + 1))
             if not y:
                 y = [0.0] * len(rows)
-            return x, y, label
+            return self._with_repeats(x, y, label)
         if header_list and "Total Requests" in header_list:
             x = [safe_float(_row_value(r, "Total Requests", header_list)) for r in rows]
             y = [safe_float(_row_value(r, metric, header_list)) for r in rows]
@@ -3350,7 +3464,55 @@ class BenchmarkGrapher(QMainWindow):
             y = [safe_float(_row_value(r, metric, header_list)) for r in rows]
         if not y:
             y = [0.0] * len(rows)
-        return x, y, label
+        return self._with_repeats(x, y, label)
+
+    def _repeats_mode(self):
+        sel = getattr(self, "repeats_selector", None)
+        text = sel.currentText() if sel is not None else ""
+        return text if text in REPEATS_OPTIONS else REPEATS_MEDIAN_IQR
+
+    def _with_repeats(self, x, y, label):
+        """One point per x: repeated runs are summarised; their spread is kept for the error bars."""
+        if not hasattr(self, "_plot_spread"):
+            self._plot_spread = {}
+        if len(set(x)) == len(x):
+            self._plot_spread.pop(label, None)
+            return x, y, label
+        mode = self._repeats_mode()
+        xs, centre, low, high, counts, raw = aggregate_points(x, y, mode)
+        self._plot_spread[label] = {"x": xs, "low": low, "high": high, "n": counts, "raw": raw, "mode": mode}
+        return xs, centre, label
+
+    def _spread_for(self, label, x, y):
+        """(yerr, n) for error bars at the plotted points, or (None, None) without repeats."""
+        sp = getattr(self, "_plot_spread", {}).get(label)
+        if not sp or list(sp["x"]) != list(x):
+            return None, None
+        lower = [max(0.0, c - lo) for c, lo in zip(y, sp["low"])]
+        upper = [max(0.0, hi - c) for c, hi in zip(y, sp["high"])]
+        return [lower, upper], sp["n"]
+
+    def _hover_stats(self, label, x_val):
+        """Statistics of the repeated runs behind one point (as in summary.csv), for the hover box."""
+        sp = getattr(self, "_plot_spread", {}).get(label)
+        if not sp:
+            return []
+        keys = [k for k in sp["raw"] if abs(float(k) - float(x_val)) < 1e-9]
+        if not keys:
+            return []
+        vals = sp["raw"][keys[0]]
+        st = dict(zip(aggregate_repeats.STATS, aggregate_repeats.describe(vals)))
+        lines = [f"runs: {len(vals)}", f"median {st['median']:.4g}  (Q1 {st['Q1']:.4g}, Q3 {st['Q3']:.4g})"]
+        if st["sd"] != "":
+            lines.append(f"mean {st['mean']:.4g} ± {st['+/-95%']:.3g} (95% CI)")
+            if st["CV%"] != "":
+                lines.append(f"CV {st['CV%']:.1f}%")
+        return lines
+
+    def _variant_base(self, label, labels):
+        """'st-x-nobw' -> 'st-x' when both are plotted: a variant is drawn like its server, dashed."""
+        bases = [b for b in labels if b != label and label.startswith(b + "-")]
+        return max(bases, key=len) if bases else None
 
     def get_x_axis_column_name(self, header, rows, typ, filepath=None):
         if typ == "websocket":

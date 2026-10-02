@@ -1584,5 +1584,59 @@ class InterruptedLoad(unittest.TestCase):
             self.assertIn("docker rm -f srv", fh.read())
 
 
+class GuiRepeats(unittest.TestCase):
+    """The GUI shows repeated runs as one point per load with their spread, the same statistics as summary.csv."""
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from PyQt5.QtWidgets import QApplication
+        except ImportError:
+            raise unittest.SkipTest("PyQt5 not installed")
+        cls.app = QApplication.instance() or QApplication([])
+        import gui_graph_generator
+        cls.g = gui_graph_generator
+
+    def test_one_point_per_load_with_quartiles(self):
+        import aggregate_repeats
+        x = [1000, 2000, 1000, 2000, 1000, 2000]
+        y = [10.0, 21.0, 12.0, 20.0, 11.0, 30.0]
+        xs, centre, low, high, counts, raw = self.g.aggregate_points(x, y, self.g.REPEATS_MEDIAN_IQR)
+        self.assertEqual((xs, centre, counts), ([1000, 2000], [11.0, 21.0], [3, 3]))
+        st = dict(zip(aggregate_repeats.STATS, aggregate_repeats.describe([20.0, 21.0, 30.0])))
+        self.assertAlmostEqual(low[1], st["Q1"], places=4)
+        self.assertAlmostEqual(high[1], st["Q3"], places=4)
+        xs, centre, low, high, _, _ = self.g.aggregate_points(x, y, self.g.REPEATS_MEAN_CI)
+        st = dict(zip(aggregate_repeats.STATS, aggregate_repeats.describe([10.0, 12.0, 11.0])))
+        self.assertAlmostEqual(high[0] - centre[0], st["+/-95%"], places=4)
+
+    def test_summary_files_are_not_plotted(self):
+        self.assertTrue(self.g.is_summary_csv("results/x/static/summary.csv"))
+        self.assertTrue(self.g.is_summary_csv("results/x/static/st-a_summary.csv"))
+        self.assertFalse(self.g.is_summary_csv("results/x/static/st-a.csv"))
+
+    def test_plots_real_results_and_pairs_variants(self):
+        import glob
+        g = self.g
+        saved = g.QMessageBox.information
+        g.QMessageBox.information = lambda *a, **k: None
+        try:
+            w = g.BenchmarkGrapher()
+            E = os.path.join(ROOT, "experiments", "busy-wait", "evidence", "busywait-2026-10-02_090615", "static")
+            w.add_files(sorted(glob.glob(os.path.join(E, "*.csv"))))
+            self.assertEqual(len(w.files), 6)                                     # summaries skipped
+            self.assertTrue(w._render_plot(w.files, "Total Energy (J)", g.WS_PLOT_MULTILINE, enable_interactivity=False))
+            self.assertIn("median of 5 runs", w.summary_label.text())
+            lines = {l.get_label(): l for l in w.ax.get_lines() if not l.get_label().startswith("_")}
+            base, var = lines["st-elixir-cowboy-1-19-5"], lines["st-elixir-cowboy-1-19-5-nobw"]
+            self.assertEqual(base.get_color(), var.get_color())                  # same colour
+            self.assertEqual((base.get_linestyle(), var.get_linestyle()), ("-", "--"))
+            self.assertEqual(list(base.get_xdata()), [20000.0, 80000.0])         # one point per load
+            self.assertTrue(w._render_plot(w.files, "Host Energy (J)", g.WS_PLOT_BAR, enable_interactivity=False))
+            self.assertEqual(sorted({round(t) for t in w.ax.get_xticks()}), [0, 1])  # grouped per load level
+        finally:
+            g.QMessageBox.information = saved
+
+
 if __name__ == "__main__":
     unittest.main()
