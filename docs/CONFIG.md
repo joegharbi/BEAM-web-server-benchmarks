@@ -48,6 +48,14 @@ Which servers to measure. Empty = every server found in BENCHMARKS_DIR (a folder
 
 Unit: names separated by spaces, or empty = all servers found
 
+### `VARIANTS`
+
+Default: `(empty)`
+
+Measure every selected server also with other container settings, in the same shuffled order. For each variant an image <server>-<NAME> is built at the start (the server's image plus these environment variables) and measured next to the server as it is. Example, BEAM scheduler busy-waiting off: nobw:ERL_FLAGS=+sbwt none +sbwtdcpu none +sbwtdio none. Empty = no variants.
+
+Unit: NAME:VAR=value[|VAR=value], several separated by ;
+
 ### `BENCHMARKS_DIR`
 
 Default: `(empty)`

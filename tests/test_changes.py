@@ -1339,6 +1339,8 @@ class FixesFromTheRealCheck(LaptopSettings):
 
 class WhatToMeasure(unittest.TestCase):
     """MEASURE, SERVERS and BENCHMARKS_DIR in the config; checked before anything starts."""
+    build_fail = ""
+
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.bin = os.path.join(self.d, "bin")
@@ -1347,7 +1349,8 @@ class WhatToMeasure(unittest.TestCase):
             fh.write('#!/bin/sh\nwhile [ $# -gt 0 ]; do case "$1" in -*) shift ;; *) break ;; esac; done\n'
                      '[ $# -eq 0 ] && exit 0\ncase "$*" in *prepare_environment.py*) exit 0 ;; esac\nexec "$@"\n')
         with open(os.path.join(self.bin, "docker"), "w") as fh:        # "built" images: $FAKE_IMAGES
-            fh.write('#!/bin/sh\nif [ "$1 $2" = "image inspect" ]; then\n'
+            fh.write('#!/bin/sh\nif [ "$1" = "build" ]; then cat > "$FAKE_BUILDS.$$"; [ -z "$FAKE_BUILD_FAIL" ]; exit $?; fi\n'
+                     'if [ "$1 $2" = "image inspect" ]; then\n'
                      '  case "$*" in *ExposedPorts*) echo "8080/tcp "; exit 0 ;; esac\n'
                      '  for i in $FAKE_IMAGES; do [ "$i" = "$3" ] && exit 0; done; exit 1\nfi\nexit 0\n')
         for f in ("sudo", "docker"):
@@ -1366,7 +1369,8 @@ class WhatToMeasure(unittest.TestCase):
                      "ENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\n"
                      "ENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n" + config)
         before = set(os.listdir(os.path.join(ROOT, "results")))
-        env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], FAKE_IMAGES=images)
+        env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], FAKE_IMAGES=images,
+                   FAKE_BUILDS=os.path.join(self.d, "build"), FAKE_BUILD_FAIL=self.build_fail)
         out_file = os.path.join(self.d, "out.txt")
         with open(out_file, "w") as fh:
             p = subprocess.Popen(["bash", "scripts/run_benchmarks.sh", "--bench", self.bench, "--config", cfg, *args],
@@ -1420,7 +1424,7 @@ class WhatToMeasure(unittest.TestCase):
 
     def test_command_line_wins(self):
         rc, out = self.run_until_plan("MEASURE=websocket\n", args=("static",))
-        self.assertIn("The command line chooses what to measure (static); MEASURE and SERVERS of the config are not used", out)
+        self.assertIn("The command line chooses what to measure (static); MEASURE, SERVERS and VARIANTS of the config are not used", out)
 
     def test_port_of_an_image_without_folder(self):
         with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
@@ -1496,6 +1500,31 @@ class TwoLayerConfig(unittest.TestCase):
         self.write(d, "machine.config", "ENV_WIFI=unchanged\n")
         diffs = [w for w, _, _ in run_metadata.differences(meta, d)]
         self.assertIn("Config (machine.config in the folder, edited)", diffs)
+
+
+class Variants(WhatToMeasure):
+    """VARIANTS: each server also measured as <server>-<name>, built from it, in the same shuffled order."""
+    def test_variants_join_the_plan_and_are_built(self):
+        rc, out = self.run_until_plan("MEASURE=static\nSERVERS=st-a st-b\nHTTP_REQUESTS=1000\n"
+                                      "VARIANTS=nobw:ERL_FLAGS=+sbwt none +sbwtdcpu none +sbwtdio none\n")
+        self.assertIn("Static HTTP:     4 containers × 1 levels = 4", out)
+        builds = [open(os.path.join(self.d, f)).read() for f in os.listdir(self.d) if f.startswith("build.")]
+        self.assertEqual(sorted(b.splitlines()[0] for b in builds), ["FROM st-a", "FROM st-b"])
+        self.assertTrue(all('ENV ERL_FLAGS="+sbwt none +sbwtdcpu none +sbwtdio none"' in b for b in builds))
+
+    def test_failed_build_stops_before_anything(self):
+        self.build_fail = "1"
+        rc, out = self.run_until_plan("MEASURE=static\nSERVERS=st-a\nVARIANTS=nobw:ERL_FLAGS=+sbwt none\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("VARIANTS: could not build st-a-nobw from st-a", out)
+        self.assertNotIn("Machine settings", out)
+
+    def test_config_checks(self):
+        import bench_config
+        self.assertEqual(bench_config.parse("VARIANTS=a:X=1|Y=2 ; b:Z=3")["VARIANTS"], "a:X=1|Y=2;b:Z=3")
+        for bad in ("VARIANTS=NoBW:X=1", "VARIANTS=nobw", "VARIANTS=nobw:+sbwt none"):
+            with self.assertRaises(bench_config.ConfigError):
+                bench_config.parse(bad)
 
 
 if __name__ == "__main__":

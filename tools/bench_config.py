@@ -103,6 +103,20 @@ def _machine(v):
     raise ValueError("must be a profile name (minimal, tolerable, untouched), a .config file, or none")
 
 
+def _variants(v):
+    """Empty, or 'NAME:VAR=value[|VAR=value]' entries separated by ';'."""
+    out = []
+    for item in [x.strip() for x in v.split(";") if x.strip()]:
+        name, _, envs = item.partition(":")
+        if not re.fullmatch(r"[a-z0-9]+", name):
+            raise ValueError(f"'{item}': a variant starts with a short lowercase name, e.g. nobw:ERL_FLAGS=...")
+        pairs = [e.strip() for e in envs.split("|") if e.strip()]
+        if not pairs or not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", e) for e in pairs):
+            raise ValueError(f"'{item}': after the name, give VAR=value (several separated by |)")
+        out.append(f"{name}:{'|'.join(pairs)}")
+    return ";".join(out)
+
+
 def _path(v):
     if any(c.isspace() for c in v):
         raise ValueError("must be a folder path without spaces")
@@ -184,6 +198,11 @@ SCHEMA = {
              "folder name, e.g. st-erlang-cowboy-28-4-3. An image built on this machine without a folder is\n"
              "given with its type: static:my-nginx, dynamic:my-app, websocket:my-ws (port from the image).\n"
              "Every name must exist and every image must be built, or the measurement does not start."),
+    "VARIANTS": dict(default="", check=_variants, unit="NAME:VAR=value[|VAR=value], several separated by ;",
+        help="Measure every selected server also with other container settings, in the same shuffled order.\n"
+             "For each variant an image <server>-<NAME> is built at the start (the server's image plus these\n"
+             "environment variables) and measured next to the server as it is. Example, BEAM scheduler\n"
+             "busy-waiting off: nobw:ERL_FLAGS=+sbwt none +sbwtdcpu none +sbwtdio none. Empty = no variants."),
     "BENCHMARKS_DIR": dict(default="", check=_path, unit="folder path, or empty = benchmarks/",
         help="The folder searched for servers. Empty = benchmarks/ (or BENCHMARKS_DIR from the environment).\n"
              "--bench on the command line takes precedence."),
@@ -450,6 +469,7 @@ SHORT = {
     "MACHINE": "machine profile: minimal | tolerable | remote | cloud | untouched (configs/machine/), a .config file, or none",
     "MEASURE": "kinds: static dynamic websocket concurrency payload",
     "SERVERS": "server folder names, or TYPE:IMAGE; empty = every server found",
+    "VARIANTS": "also measure each server with these container settings, e.g. nobw:ERL_FLAGS=+sbwt none",
     "BENCHMARKS_DIR": "folder searched for servers; empty = benchmarks/",
     "REPEATS": "runs of every measurement (each repeat = one pass over all servers)",
     "SHUFFLE": "1 = shuffle the server order in every repeat, 0 = same order",
@@ -500,7 +520,7 @@ SHORT = {
 # The example measurement file; machine settings live in the profiles (configs/machine/)
 EXAMPLE_LAYOUT = [
     ("Machine profile", ["MACHINE"]),
-    ("What to measure", ["MEASURE", "SERVERS", "BENCHMARKS_DIR"]),
+    ("What to measure", ["MEASURE", "SERVERS", "VARIANTS", "BENCHMARKS_DIR"]),
     ("How much", ["REPEATS", "HTTP_REQUESTS", "IDLE_SECONDS", "WARMUP_SECONDS"]),
     ("Failures and raw data", ["FAILURES_STOP_AFTER", "RAW_DATA"]),
     ("Order of the runs", ["SHUFFLE", "SHUFFLE_SEED"]),

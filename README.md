@@ -90,6 +90,11 @@ your own profile file. The results folder keeps a copy of both files (`bench.con
 and every value actually used (`bench.config.resolved`). A run started over SSH through Wi-Fi refuses to
 switch Wi-Fi off, since that would cut its own connection; use the tolerable profile there.
 
+**Variants.** `VARIANTS=nobw:ERL_FLAGS=+sbwt none +sbwtdcpu none +sbwtdio none` measures every selected
+server also as `<server>-nobw`: an image built at the start from the server's image plus these environment
+variables, measured in the same shuffled order as the server itself, so both versions share the same
+conditions. `tests/variant_flags_check.sh` checks that every server's BEAM receives `ERL_FLAGS`.
+
 **What to measure.** A name in `SERVERS` is a server folder (its place, `static/`, `dynamic/` or
 `websocket/`, gives its type), or `TYPE:IMAGE` for an image built on this machine without a folder (its
 port is read from the image). `BENCHMARKS_DIR` sets the folder searched (default `benchmarks/`). Every name

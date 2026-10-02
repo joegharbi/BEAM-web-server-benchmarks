@@ -702,6 +702,33 @@ bench_stop_early() {
     exit 1
 }
 
+# VARIANTS: for every server in the named list, also an image <server>-<name> = the server's image plus
+# environment variables, built here (Docker reuses it when nothing changed) and measured like any other
+# server, in the same shuffled order. Stops before anything starts if a build fails.
+bench_add_variants() {
+    local -n _list=$1
+    local img v name envs e dockerfile out=()
+    local -a _variants _envs
+    IFS=';' read -r -a _variants <<< "$CFG_VARIANTS"
+    for img in "${_list[@]}"; do
+        out+=("$img")
+        for v in "${_variants[@]}"; do
+            name="${v%%:*}"; envs="${v#*:}"
+            dockerfile="FROM $img"
+            IFS='|' read -r -a _envs <<< "$envs"
+            for e in "${_envs[@]}"; do
+                dockerfile+=$'\n'"ENV ${e%%=*}=\"${e#*=}\""
+            done
+            if ! printf '%s\n' "$dockerfile" | docker build -q -t "$img-$name" - >/dev/null 2>&1; then
+                echo -e "${RED}[ERROR]${NC} VARIANTS: could not build $img-$name from $img."
+                bench_stop_early
+            fi
+            out+=("$img-$name")
+        done
+    done
+    _list=("${out[@]}")
+}
+
 bench_select_from_config() {
     local kinds=" $CFG_MEASURE " s t img dir missing=()
     [[ "$kinds" == *" static "* ]] || BENCH_DO_STATIC=0
@@ -747,12 +774,17 @@ bench_select_from_config() {
         echo -e "${RED}[ERROR]${NC} These images are not built: ${missing[*]}. Build them first (make build)."
         bench_stop_early
     fi
+    if [ -n "${CFG_VARIANTS:-}" ]; then
+        bench_add_variants SELECT_STATIC
+        bench_add_variants SELECT_DYNAMIC
+        bench_add_variants SELECT_WEBSOCKET
+    fi
     BENCH_SELECTED=1
 }
 
 if [ -n "${CONFIG_FILE:-}" ]; then
     if [ "$RUN_ALL" -eq 0 ]; then
-        echo -e "${BLUE}[INFO]${NC} The command line chooses what to measure ($TARGET_TYPE${TARGET_IMAGES[*]:+ ${TARGET_IMAGES[*]}}); MEASURE and SERVERS of the config are not used."
+        echo -e "${BLUE}[INFO]${NC} The command line chooses what to measure ($TARGET_TYPE${TARGET_IMAGES[*]:+ ${TARGET_IMAGES[*]}}); MEASURE, SERVERS and VARIANTS of the config are not used."
     else
         bench_select_from_config
     fi
@@ -1425,7 +1457,7 @@ main() {
         --set http_connection="$CFG_HTTP_CONNECTION" --set failures_stop_after="$CFG_FAILURES_STOP_AFTER" \
         --set idle_s="${CFG_IDLE_SECONDS:-0}" --set warmup_s="${CFG_WARMUP_SECONDS:-0}" \
         --set reproduces="${REPRODUCE_DIR:-}" \
-        --set measure="${CFG_MEASURE:-}" --set servers="${CFG_SERVERS:-}" \
+        --set measure="${CFG_MEASURE:-}" --set servers="${CFG_SERVERS:-}" --set variants="${CFG_VARIANTS:-}" \
         --set machine="${CFG_MACHINE:-}" --set machine_file="${BENCH_MACHINE_FILE:-}" \
         --set env_screen_brightness="${CFG_ENV_SCREEN_BRIGHTNESS:-}" --set env_keyboard_light="${CFG_ENV_KEYBOARD_LIGHT:-}" \
         --set env_wifi="${CFG_ENV_WIFI:-}" --set env_bluetooth="${CFG_ENV_BLUETOOTH:-}" --set on_battery="${CFG_ON_BATTERY:-}" \

@@ -12,6 +12,8 @@ MACHINE=minimal
 MEASURE=static dynamic websocket concurrency payload
 # server folder names, or TYPE:IMAGE; empty = every server found
 SERVERS=
+# also measure each server with these container settings, e.g. nobw:ERL_FLAGS=+sbwt none
+VARIANTS=
 # folder searched for servers; empty = benchmarks/
 BENCHMARKS_DIR=
 
