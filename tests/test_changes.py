@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -17,6 +18,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import scaphandre_energy as se  # noqa: E402
+
+with open("/proc/sys/kernel/pid_max") as _fh:
+    NOPID = int(_fh.read()) + 1000  # an ID no task can have
 
 
 def entry(t, host_w, consumers):
@@ -66,15 +70,103 @@ class IntegrateWindow(unittest.TestCase):
 
 
 class LoadSeries(unittest.TestCase):
-    def test_threads_are_summed_not_averaged(self):
-        # Six threads of one container at 1 W each: the container draws 6 W.
+    # IDs above the system's pid_max never exist, so a live /proc lookup cannot classify them:
+    # these tests exercise the fallback rule, as for logs from before the classification was saved.
+    def test_processes_are_summed_not_averaged(self):
+        # Six processes of one container at 1 W each: the container draws 6 W.
         # The old code averaged the entries and reported 1 W.
-        threads = [consumer(100 + i, 1.0, "srv") for i in range(6)]
-        path = write_json([entry(0, 0, [])] + [entry(t, 20, threads) for t in range(1, 12)])
+        procs = [consumer(NOPID + i, 1.0, "srv") for i in range(6)]
+        path = write_json([entry(0, 0, [])] + [entry(t, 20, procs) for t in range(1, 12)])
         r = se.compute_window_energy(path, "srv", 1.0, 11.0)
         self.assertAlmostEqual(r["avg_power_w"], 6.0)
         self.assertAlmostEqual(r["energy_j"], 60.0)
         self.assertAlmostEqual(r["host_energy_j"], 200.0)
+        self.assertEqual(r["thread_handling"], "fallback")
+
+    def test_fallback_process_and_its_threads_counted_once(self):
+        # What Scaphandre writes for a BEAM: the process entry (6 W, all threads included)
+        # plus one entry per scheduler thread (6 x 1 W). The container draws 6 W, not 12 W.
+        beam = [consumer(NOPID, 6.0, "srv")] + [consumer(NOPID + 1 + i, 1.0, "srv") for i in range(6)]
+        path = write_json([entry(0, 0, [])] + [entry(t, 20, beam) for t in range(1, 12)])
+        r = se.compute_window_energy(path, "srv", 1.0, 11.0)
+        self.assertAlmostEqual(r["avg_power_w"], 6.0)
+
+    def test_fallback_thread_entries_missing_from_a_sample(self):
+        # Some thread entries can be missing (top-N cut, zero power): the process entry still counts alone.
+        beam = [consumer(NOPID, 6.0, "srv"), consumer(NOPID + 1, 2.0, "srv"), consumer(NOPID + 2, 1.0, "srv")]
+        path = write_json([entry(0, 0, [])] + [entry(t, 20, beam) for t in range(1, 5)])
+        r = se.compute_window_energy(path, "srv", 1.0, 4.0)
+        self.assertAlmostEqual(r["avg_power_w"], 6.0)
+
+    def test_different_programs_in_one_container_summed(self):
+        # A server process and a helper program (epmd, a shell): different exe, both count.
+        cs = [consumer(NOPID, 6.0, "srv"), dict(consumer(NOPID + 100, 0.5, "srv"), exe="epmd", cmdline="epmd")]
+        path = write_json([entry(0, 0, [])] + [entry(t, 20, cs) for t in range(1, 5)])
+        r = se.compute_window_energy(path, "srv", 1.0, 4.0)
+        self.assertAlmostEqual(r["avg_power_w"], 6.5)
+
+
+class ProcessesAndThreads(unittest.TestCase):
+    """Live runs: /proc tells processes (Tgid == ID) from threads (Tgid != ID)."""
+
+    def run_with_thread(self, entries_for):
+        # A real thread of this test process, alive while the log is evaluated.
+        box, stop = {}, threading.Event()
+        t = threading.Thread(target=lambda: (box.setdefault("tid", threading.get_native_id()), stop.wait(10)))
+        t.start()
+        while "tid" not in box:
+            time.sleep(0.01)
+        try:
+            path = write_json([entry(0, 0, [])] + [entry(s, 20, entries_for(os.getpid(), box["tid"])) for s in range(1, 5)])
+            return se.compute_window_energy(path, "srv", 1.0, 4.0), box["tid"]
+        finally:
+            stop.set()
+            t.join()
+
+    def test_live_thread_entry_skipped(self):
+        r, tid = self.run_with_thread(lambda pid, tid: [consumer(pid, 6.0, "srv"), consumer(tid, 1.0, "srv")])
+        self.assertAlmostEqual(r["avg_power_w"], 6.0)
+        self.assertEqual(r["thread_handling"], "tgid")
+        self.assertEqual(r["thread_ids"], [tid])
+        self.assertEqual(r["process_ids"], [os.getpid()])
+
+    def test_live_equal_sibling_processes_both_counted(self):
+        # Two processes of the same program, equally busy: the fallback rule alone would
+        # drop one of them; known processes are never dropped.
+        sibling = os.getppid()
+        cs = [consumer(os.getpid(), 3.0, "srv"), consumer(sibling, 3.0, "srv")]
+        path = write_json([entry(0, 0, [])] + [entry(s, 20, cs) for s in range(1, 5)])
+        r = se.compute_window_energy(path, "srv", 1.0, 4.0)
+        self.assertAlmostEqual(r["avg_power_w"], 6.0)
+        self.assertEqual(r["thread_handling"], "tgid")
+
+    def test_saved_classification_used_when_recalculating(self):
+        # Recalculation never reads /proc (IDs are reused): the saved kinds decide.
+        cs = [consumer(NOPID, 6.0, "srv"), consumer(NOPID + 1, 5.9, "srv"), consumer(NOPID + 2, 3.0, "srv")]
+        path = write_json([entry(0, 0, [])] + [entry(s, 20, cs) for s in range(1, 5)])
+        kinds = {NOPID: "process", NOPID + 1: "process", NOPID + 2: "thread"}
+        r = se.compute_window_energy(path, "srv", 1.0, 4.0, pids={NOPID, NOPID + 1, NOPID + 2}, kinds=kinds)
+        self.assertAlmostEqual(r["avg_power_w"], 11.9)
+        self.assertEqual(r["thread_handling"], "tgid")
+
+    def test_window_file_round_trip(self):
+        # The classification is saved next to the raw log and recompute uses it.
+        r, tid = self.run_with_thread(lambda pid, tid: [consumer(pid, 6.0, "srv"), consumer(tid, 1.0, "srv")])
+        cs = [consumer(os.getpid(), 6.0, "srv"), consumer(tid, 1.0, "srv")]
+        raw = write_json([entry(0, 0, [])] + [entry(s, 20, cs) for s in range(1, 5)])
+        with open(se.window_path(raw), "w") as fh:
+            json.dump(se.window_record("srv", "", 1.0, 4.0, r), fh)
+        again = se.recompute(raw)
+        self.assertAlmostEqual(again["avg_power_w"], 6.0)
+        self.assertEqual(again["thread_handling"], "tgid")
+
+    def test_unknown_thread_of_a_known_process_dropped(self):
+        # A thread that ended before the lookup: the known process entry already contains it.
+        cs = [consumer(os.getpid(), 6.0, "srv"), consumer(NOPID, 1.0, "srv")]
+        path = write_json([entry(0, 0, [])] + [entry(s, 20, cs) for s in range(1, 5)])
+        r = se.compute_window_energy(path, "srv", 1.0, 4.0)
+        self.assertAlmostEqual(r["avg_power_w"], 6.0)
+        self.assertEqual(r["thread_handling"], "tgid+fallback")
 
     def test_other_containers_ignored(self):
         cs = [consumer(1, 3.0, "srv"), consumer(2, 50.0, "other"), consumer(3, 7.0)]

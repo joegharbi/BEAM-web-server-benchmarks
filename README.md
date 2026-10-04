@@ -216,13 +216,24 @@ that received updates under the same name gives a different image ID; this is re
 ### Recalculating energy from the raw logs
 
 ```bash
-python3 tools/scaphandre_energy.py recompute results/<folder>/raw/<run>.json
+python3 tools/scaphandre_energy.py recompute results/<folder>/raw/<run>.json   # one run
+python3 tools/recompute_results.py results/<folder> --reason "why"             # a whole measurement
 ```
+
+The second rewrites the container energy in every CSV of the folder, keeps the old CSVs in
+`superseded/<time>/`, rebuilds the summaries and notes it in `metadata.json`. Nothing is measured again.
 
 ### Energy calculation
 
-Container energy is Scaphandre's power of all processes and threads of the server container, summed
-per sample and integrated over exactly the load window (500 ms sampling by default, `SCAPH_STEP_MS`).
+Container energy is Scaphandre's power of the server container's processes, summed per sample and
+integrated over exactly the load window (500 ms sampling by default, `SCAPH_STEP_MS`). Each process is
+counted once: Scaphandre also lists the threads of a multi-threaded process (such as the BEAM's
+schedulers) next to the process, whose entry already contains them, because Linux reports a process's
+CPU time as the sum of its threads. Separate processes (Nginx or Apache workers) are all counted. During
+a run, `/proc/<id>/status` tells them apart (Tgid equal to the ID = process) and the result is saved
+in the run's `.window.json`, so recalculation is exact too. Entries that cannot be classified (logs from
+before 2026-10-04, threads that ended early) use a fallback rule; `.window.json` says which was used
+(`thread_handling`: `tgid`, `tgid+fallback` or `fallback`).
 The container is found by its cgroup, not by process name, so any server works, whatever its language.
 The HTTP client keeps one connection per worker (`HTTP_CONNECTION=reuse`); `per-request` reproduces the
 client of earlier releases.

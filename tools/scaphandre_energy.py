@@ -11,7 +11,21 @@ settle and tail time) are ignored, and samples where the container drew zero
 power count as zero rather than being skipped.
 
 Per entry, the container's power is the sum over all of its processes, so a
-container with several processes is counted in full.
+container with several processes is counted in full. Scaphandre also lists the
+threads of a multi-threaded process (such as the BEAM's schedulers) as entries of
+their own, next to the process entry. The process entry already contains them: Linux
+reports a process's CPU time as the sum of its threads (proc_pid_stat(5)), and
+Scaphandre shares power by CPU time. So each process is counted once and its thread
+entries are skipped; child processes have their own CPU time and are counted.
+
+Which entry is a process and which a thread is decided, most certain first:
+  1. tgid      - during a live run, /proc/<id>/status: Tgid equal to the ID = process,
+                 different = thread. Saved in the window file next to a kept raw log.
+  2. saved     - when recalculating, the classification saved at measurement time
+                 (/proc is not read then: IDs are reused by other processes).
+  3. fallback  - entries that could not be classified (logs from before this was saved,
+                 threads that ended before the lookup): see _fallback_keep.
+The method used is reported as thread_handling: "tgid", "tgid+fallback" or "fallback".
 """
 import datetime
 import gzip
@@ -74,15 +88,23 @@ def window_record(container_name, container_id, t0, t1, energy):
     """What finish_raw saves next to a kept raw log."""
     return {"container_name": container_name, "container_id": container_id or "",
             "load_start_epoch": t0, "load_end_epoch": t1, "pids": energy["pids"],
+            "process_ids": energy.get("process_ids", []), "thread_ids": energy.get("thread_ids", []),
+            "thread_handling": energy.get("thread_handling", ""),
             "energy_j": energy["energy_j"], "host_energy_j": energy["host_energy_j"]}
 
 
 def recompute(raw_path):
-    """Recalculate the energy of one run from its kept raw log and window file."""
+    """Recalculate the energy of one run from its kept raw log and window file.
+
+    Uses the process/thread classification saved at measurement time; window files from
+    before it was saved have none, so the fallback rule decides.
+    """
     with open(window_path(raw_path), encoding="utf-8") as fh:
         w = json.load(fh)
+    kinds = {p: "process" for p in w.get("process_ids", [])}
+    kinds.update({p: "thread" for p in w.get("thread_ids", [])})
     return compute_window_energy(raw_path, w["container_name"], w["load_start_epoch"], w["load_end_epoch"],
-                                 pids=set(w["pids"]))
+                                 pids=set(w["pids"]), kinds=kinds)
 
 
 def scaphandre_step_ms():
@@ -125,14 +147,76 @@ def _load_json(file_name):
         return json.load(fh)
 
 
-def load_power_series(file_name, container_name, container_id=None, pids=None, matched=None):
+def _power(c):
+    return c.get("consumption", 0.0) or 0.0
+
+
+def _tgid(pid):
+    """Thread group ID of a live task from /proc/<pid>/status (equals pid for a process), or None."""
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    try:
+        with open(f"/proc/{pid}/status", "r") as fh:
+            for line in fh:
+                if line.startswith("Tgid:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _fallback_keep(unknown, processes):
+    """Which unclassified entries to count, judged from the numbers alone.
+
+    A thread's entry carries part of its process's power, and the process entry carries
+    all of it. So within entries of the same exe and command line: when the process
+    entry (a known process, else the lowest ID) has at least 80% of the power of the
+    other entries, those are taken to be its threads and are skipped. Separate processes
+    of one program (Apache workers under an idle parent) do not pass that test and are
+    kept. Known processes are never dropped here.
+    """
+    by_key = {}
+    for c in unknown:
+        by_key.setdefault((c.get("exe"), c.get("cmdline")), []).append(c)
+    kept = []
+    for key, group in by_key.items():
+        group.sort(key=lambda c: c.get("pid") or 0)
+        heads = sorted((p for p in processes if (p.get("exe"), p.get("cmdline")) == key),
+                       key=lambda c: c.get("pid") or 0)
+        if heads:
+            head, rest = heads[0], group
+        elif len(group) > 1:
+            head, rest = group[0], group[1:]
+            kept.append(head)
+        else:
+            kept.extend(group)
+            continue
+        if not (_power(head) > 0 and _power(head) >= 0.8 * sum(_power(c) for c in rest)):
+            kept.extend(rest)
+    return kept
+
+
+def count_each_process_once(hits, kinds):
+    """The container's entries of one sample without thread entries (kinds: id -> "process"/"thread")."""
+    processes = [c for c in hits if kinds.get(c.get("pid")) == "process"]
+    unknown = [c for c in hits if kinds.get(c.get("pid")) not in ("process", "thread")]
+    return processes + (_fallback_keep(unknown, processes) if unknown else [])
+
+
+def load_power_series(file_name, container_name, container_id=None, pids=None, matched=None, kinds=None):
     """Return [(timestamp, container_W, host_W), ...] from a Scaphandre JSON log.
 
     The container is matched by Scaphandre's container name when Scaphandre reports
     containers at all, otherwise by cgroup (the container must still be running), or by
     an explicit set of `pids` (used when recalculating from a kept raw log). The PIDs that
     were counted are added to the `matched` set when one is given.
+
+    `kinds` (id -> "process" or "thread"): with pids given, the classification saved at
+    measurement time, used as it is. In a live run, pass an empty dict: each matched ID
+    is looked up in /proc and the result is added to it.
     """
+    live = pids is None
+    kinds = {} if kinds is None else kinds
     data = _load_json(file_name)
 
     found_containers = {
@@ -165,7 +249,7 @@ def load_power_series(file_name, container_name, container_id=None, pids=None, m
         started = True
         if t is None:
             continue
-        cont_uw = 0.0
+        hits = []
         for c in consumers:
             cont = c.get("container")
             if pids is not None:
@@ -175,9 +259,15 @@ def load_power_series(file_name, container_name, container_id=None, pids=None, m
             else:
                 hit = bool(cont) and cont.get("name") == container_name
             if hit:
-                cont_uw += c.get("consumption", 0.0) or 0.0
+                hits.append(c)
                 if matched is not None:
                     matched.add(c.get("pid"))
+                pid = c.get("pid")
+                if live and pid not in kinds:
+                    tgid = _tgid(pid)
+                    if tgid is not None:
+                        kinds[pid] = "process" if tgid == pid else "thread"
+        cont_uw = sum(_power(c) for c in count_each_process_once(hits, kinds))
         series.append((float(t), cont_uw * 1e-6, host_uw * 1e-6))
     series.sort(key=lambda s: s[0])
     return series
@@ -206,15 +296,32 @@ def integrate_window(series, t0, t1):
     return cont_j, host_j, n, covered / (t1 - t0)
 
 
-def compute_window_energy(file_name, container_name, t0, t1, container_id=None, pids=None, zero_is_normal=False):
+def thread_handling(matched, kinds):
+    """'tgid' when every matched ID was classified, 'fallback' when none, else 'tgid+fallback'."""
+    ids = [p for p in matched if p is not None]
+    known = sum(1 for p in ids if kinds.get(p) in ("process", "thread"))
+    if not ids or known == len(ids):
+        return "tgid"
+    return "fallback" if known == 0 else "tgid+fallback"
+
+
+def compute_window_energy(file_name, container_name, t0, t1, container_id=None, pids=None, zero_is_normal=False,
+                          kinds=None):
     """Energy of the container and of the host over [t0, t1] (wall-clock epoch seconds).
 
     Returns a dict: energy_j, avg_power_w, host_energy_j, host_avg_power_w, samples,
-    coverage, step_ms, and pids (the process IDs that were counted as the container).
+    coverage, step_ms, pids (the IDs matched to the container), process_ids and thread_ids
+    (their classification) and thread_handling (how processes and threads were told apart).
     `zero_is_normal`: no warning for 0 J (an idle server can use no CPU at all).
+    `kinds`: the saved classification when recalculating (see load_power_series).
     """
     matched = set()
-    series = load_power_series(file_name, container_name, container_id, pids=pids, matched=matched)
+    kinds = {} if kinds is None else dict(kinds)
+    series = load_power_series(file_name, container_name, container_id, pids=pids, matched=matched, kinds=kinds)
+    handling = thread_handling(matched, kinds)
+    if pids is None and handling != "tgid":
+        logger.warning("Could not tell processes from threads for some entries of '%s'; used the fallback rule.",
+                       container_name)
     cont_j, host_j, n, coverage = integrate_window(series, t0, t1)
     dur = t1 - t0
     if coverage < 0.99:
@@ -231,6 +338,9 @@ def compute_window_energy(file_name, container_name, t0, t1, container_id=None, 
         "coverage": coverage,
         "step_ms": scaphandre_step_ms(),
         "pids": sorted(p for p in matched if p is not None),
+        "process_ids": sorted(p for p in matched if kinds.get(p) == "process"),
+        "thread_ids": sorted(p for p in matched if kinds.get(p) == "thread"),
+        "thread_handling": handling,
     }
 
 
@@ -240,4 +350,4 @@ if __name__ == "__main__":
         sys.exit("Usage: python3 tools/scaphandre_energy.py recompute <raw log>.json")
     r = recompute(sys.argv[2])
     print(f"container energy {r['energy_j']:.6f} J, host energy {r['host_energy_j']:.6f} J, "
-          f"{r['samples']} samples, coverage {r['coverage']:.3f}")
+          f"{r['samples']} samples, coverage {r['coverage']:.3f}, processes vs threads: {r['thread_handling']}")
