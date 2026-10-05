@@ -245,6 +245,18 @@ Thermal throttling: the CPU slowing itself down because it is too hot.
 | `1` | not ready while the CPU is throttling (recommended) |
 | `0` | ignore throttling |
 
+### `READY_CPU_SPEED`
+
+Default: `auto`
+
+Not ready while the CPU is capped below its expected speed. The firmware can cap it by itself, e.g. when the charger is too weak for the laptop; software cannot lift that cap.
+
+| Option | Meaning |
+|---|---|
+| `auto` | expect the base speed with turbo off, the maximum with turbo on (recommended) |
+| `off` | do not check |
+| `<MHz>` | expect at least this speed |
+
 ### `READY_CONSECUTIVE_CHECKS`
 
 Default: `2`

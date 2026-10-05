@@ -1195,6 +1195,7 @@ bench_ready_gate() {
         --temp-reference "$BENCH_TEMP_REFERENCE" --temp-margin "$CFG_READY_TEMP_MARGIN_C" \
         --cpu-reference "$BENCH_CPU_REFERENCE" --cpu-margin "$CFG_READY_CPU_BUSY_MARGIN_PERCENT" \
         --no-throttling "$CFG_READY_NO_THROTTLING" \
+        --cpu-speed "$CFG_READY_CPU_SPEED" \
         --check-every "$CFG_READY_CHECK_EVERY_SECONDS" --consecutive "$CFG_READY_CONSECUTIVE_CHECKS" \
         --min-wait "$CFG_READY_MIN_WAIT_SECONDS" --max-wait "$CFG_READY_MAX_WAIT_SECONDS" \
         --on-timeout "$CFG_READY_ON_TIMEOUT" --on-battery "$CFG_ON_BATTERY" || rc=$?
@@ -1543,6 +1544,7 @@ main() {
         export MEASURE_READY_TEMP_REFERENCE_C="$BENCH_TEMP_REFERENCE"
         export MEASURE_READY_TEMP_MARGIN_C="$CFG_READY_TEMP_MARGIN_C"
         export MEASURE_READY_NO_THROTTLING="$CFG_READY_NO_THROTTLING"
+        export MEASURE_READY_CPU_SPEED="$CFG_READY_CPU_SPEED"
         export MEASURE_READY_CHECK_EVERY_SECONDS="$CFG_READY_CHECK_EVERY_SECONDS"
         export MEASURE_READY_CONSECUTIVE_CHECKS="$CFG_READY_CONSECUTIVE_CHECKS"
         export MEASURE_READY_MAX_WAIT_SECONDS="$CFG_READY_MAX_WAIT_SECONDS"
@@ -1572,7 +1574,7 @@ main() {
         --set resting_temp_c="$BENCH_RESTING_TEMP" --set ready_temp_reference_c="$BENCH_TEMP_REFERENCE" \
         --set ready_check_every_s="${CFG_READY_CHECK_EVERY_SECONDS:-}" --set ready_temp_margin_c="${CFG_READY_TEMP_MARGIN_C:-}" \
         --set resting_cpu_busy_percent="$BENCH_RESTING_CPU" --set ready_cpu_busy_reference_percent="$BENCH_CPU_REFERENCE" \
-        --set ready_cpu_busy_margin_percent="${CFG_READY_CPU_BUSY_MARGIN_PERCENT:-}" --set ready_no_throttling="${CFG_READY_NO_THROTTLING:-}" \
+        --set ready_cpu_busy_margin_percent="${CFG_READY_CPU_BUSY_MARGIN_PERCENT:-}" --set ready_no_throttling="${CFG_READY_NO_THROTTLING:-}" --set ready_cpu_speed="${CFG_READY_CPU_SPEED:-}" \
         --set ready_consecutive_checks="${CFG_READY_CONSECUTIVE_CHECKS:-}" --set ready_min_wait_s="${CFG_READY_MIN_WAIT_SECONDS:-}" \
         --set ready_max_wait_s="${CFG_READY_MAX_WAIT_SECONDS:-}" --set ready_on_timeout="${CFG_READY_ON_TIMEOUT:-}" \
         --set env_governor="$CFG_ENV_GOVERNOR" \

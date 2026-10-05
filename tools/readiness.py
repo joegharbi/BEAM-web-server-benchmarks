@@ -7,6 +7,9 @@ Checks, every CHECK_EVERY seconds:
   * CPU busy     - whole-machine CPU use over the last interval <= CPU reference + CPU margin
                    (reference = the resting CPU use measured at the start, or a fixed value)
   * throttling   - the CPU throttle counters did not increase during the last interval
+  * CPU speed    - the CPU may run at its expected speed: not capped below it by the firmware
+                   (e.g. a charger too weak for the laptop). CPU_SPEED: auto = the base speed
+                   with turbo off, the maximum with turbo on; a number = that many MHz; off.
   * charger      - a laptop must run on its charger (ON_BATTERY: wait, stop or ignore;
                    machines without a battery are never affected)
 The machine is ready when every enabled check passes CONSECUTIVE times in a row and
@@ -78,7 +81,21 @@ def check_once(prev, args):
         fails.append(f"throttling ({events - prev['throttle']} new events)")
     if getattr(args, "on_battery", "wait") != "ignore" and run_metadata.ac_power() == "no":
         fails.append(ON_BATTERY_REASON)
+    speed = cpu_speed_problem(getattr(args, "cpu_speed", "off"))
+    if speed:
+        fails.append(speed)
     return now, fails
+
+
+def cpu_speed_problem(setting):
+    """A reason when the CPU is capped below its expected speed, else "" (also when unknown or off)."""
+    if setting in ("off", "", None):
+        return ""
+    expected = run_metadata.expected_cpu_speed_mhz() if setting == "auto" else int(setting)
+    limit = run_metadata.cpu_speed_limit_mhz()
+    if expected and limit and limit < expected:
+        return f"CPU speed capped at {limit} MHz < {expected} MHz (charger or firmware)"
+    return ""
 
 
 def wait(args):
@@ -142,6 +159,7 @@ def pre_load_gate():
         max_wait=float(env.get("MEASURE_READY_MAX_WAIT_SECONDS", "300")),
         on_timeout=env["MEASURE_READY_ON_TIMEOUT"],
         on_battery=env.get("MEASURE_ON_BATTERY", "wait"),
+        cpu_speed=env.get("MEASURE_READY_CPU_SPEED", "auto"),
     )
     return wait(args)
 
@@ -180,6 +198,7 @@ def main():
     w.add_argument("--max-wait", type=float, default=300)
     w.add_argument("--on-timeout", choices=["wait", "stop", "measure"], default="wait")
     w.add_argument("--on-battery", choices=["wait", "stop", "ignore"], default="wait")
+    w.add_argument("--cpu-speed", default="auto", help="auto, off, or a speed in MHz (see CPU speed above)")
     args = ap.parse_args()
 
     if args.cmd == "baseline":

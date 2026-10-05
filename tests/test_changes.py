@@ -1847,3 +1847,74 @@ class ServerPort(unittest.TestCase):
     def test_health_check_passes_port(self):
         with open(os.path.join(ROOT, "scripts", "check_health.sh")) as fh:
             self.assertIn('-e "PORT=${port_mapping##*:}"', fh.read())
+
+
+class CpuSpeedGuard(unittest.TestCase):
+    """Readiness: not ready while the firmware caps the CPU below its expected speed."""
+
+    def problem(self, setting, limit, expected=1800):
+        import readiness
+        from unittest import mock
+        with mock.patch.object(readiness.run_metadata, "cpu_speed_limit_mhz", return_value=limit), \
+                mock.patch.object(readiness.run_metadata, "expected_cpu_speed_mhz", return_value=expected):
+            return readiness.cpu_speed_problem(setting)
+
+    def test_capped_cpu_is_not_ready(self):
+        self.assertIn("capped at 800 MHz < 1800 MHz", self.problem("auto", 800))
+
+    def test_expected_speed_is_ready(self):
+        self.assertEqual(self.problem("auto", 1800), "")
+        self.assertEqual(self.problem("auto", 4900), "")
+
+    def test_off_and_unknown_never_block(self):
+        self.assertEqual(self.problem("off", 800), "")
+        self.assertEqual(self.problem("auto", None), "")
+        self.assertEqual(self.problem("auto", 800, expected=None), "")
+
+    def test_fixed_speed_in_mhz(self):
+        self.assertIn("< 2000 MHz", self.problem("2000", 1800))
+        self.assertEqual(self.problem("1500", 1800), "")
+
+    def test_expected_speed_follows_turbo(self):
+        import run_metadata
+        from unittest import mock
+        mins = {"base_frequency": 1800, "cpuinfo_max_freq": 4900}
+        fake = lambda pattern: next(v for k, v in mins.items() if k in pattern)  # noqa: E731
+        with mock.patch.object(run_metadata, "_min_mhz", side_effect=fake):
+            with mock.patch.object(run_metadata, "turbo_state", return_value="off"):
+                self.assertEqual(run_metadata.expected_cpu_speed_mhz(), 1800)
+            with mock.patch.object(run_metadata, "turbo_state", return_value="on"):
+                self.assertEqual(run_metadata.expected_cpu_speed_mhz(), 4900)
+
+    def test_config_setting(self):
+        import bench_config
+        check = bench_config.SCHEMA["READY_CPU_SPEED"]["check"]
+        self.assertEqual(check("auto"), "auto")
+        self.assertEqual(check("off"), "off")
+        self.assertEqual(check("1800"), "1800")
+        with self.assertRaises(ValueError):
+            check("fast")
+
+
+class PinMinSpeed(unittest.TestCase):
+    """Environment: with the performance governor the minimum speed is pinned to the maximum."""
+
+    def test_pinned_saved_and_restorable(self):
+        import prepare_environment as pe
+        from unittest import mock
+        d = tempfile.mkdtemp()
+        maxes = []
+        for i, (top, low) in enumerate([("1800000", "400000"), ("1800000", "400000")]):
+            os.makedirs(os.path.join(d, f"cpu{i}"))
+            for name, v in (("scaling_max_freq", top), ("scaling_min_freq", low)):
+                with open(os.path.join(d, f"cpu{i}", name), "w") as fh:
+                    fh.write(v)
+            maxes.append(os.path.join(d, f"cpu{i}", "scaling_max_freq"))
+        saved = {}
+        with mock.patch.object(pe.glob, "glob", return_value=maxes):
+            pe.pin_min_speed(saved)
+        for m in maxes:
+            with open(m.replace("max", "min")) as fh:
+                self.assertEqual(fh.read(), "1800000")
+        self.assertEqual(set(saved.values()), {"400000"})
+        shutil.rmtree(d)

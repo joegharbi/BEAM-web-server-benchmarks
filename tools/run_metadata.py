@@ -155,6 +155,31 @@ def cpu_max_freq_mhz():
     return "/".join(str(int(v) // 1000) for v in sorted(vals, key=int))
 
 
+def _min_mhz(pattern):
+    vals = [int(v) for v in (_read(p) for p in glob.glob(pattern)) if v and v.isdigit()]
+    return min(vals) // 1000 if vals else None
+
+
+def cpu_speed_limit_mhz():
+    """The lowest per-core maximum speed the CPU may run at now (MHz), or None.
+
+    Includes limits set by the firmware (e.g. a weak charger), which software cannot lift.
+    """
+    return _min_mhz("/sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq")
+
+
+def expected_cpu_speed_mhz():
+    """The speed limit the CPU should have with the current turbo setting (MHz), or None.
+
+    Turbo off: the base speed (Intel base_frequency). Turbo on: the hardware maximum.
+    """
+    if turbo_state() == "off":
+        base = _min_mhz("/sys/devices/system/cpu/cpu*/cpufreq/base_frequency")
+        if base:
+            return base
+    return _min_mhz("/sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq")
+
+
 def ac_power():
     for p in glob.glob("/sys/class/power_supply/*/type"):
         if _read(p) == "Mains":

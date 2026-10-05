@@ -147,6 +147,15 @@ def _names(v):
     return v
 
 
+def _cpu_speed(v):
+    if v in ("auto", "off"):
+        return v
+    try:
+        return _int(1)(v)
+    except ValueError:
+        raise ValueError("must be auto, off, or a speed in MHz")
+
+
 def _optional_percent(v):
     if v == "":
         return ""
@@ -293,6 +302,11 @@ SCHEMA = {
     "READY_NO_THROTTLING": dict(default="1", check=_choice("0", "1"),
         help="Thermal throttling: the CPU slowing itself down because it is too hot.",
         options={"1": "not ready while the CPU is throttling (recommended)", "0": "ignore throttling"}),
+    "READY_CPU_SPEED": dict(default="auto", check=_cpu_speed, unit="auto, off, or MHz",
+        help="Not ready while the CPU is capped below its expected speed. The firmware can cap it by\n"
+             "itself, e.g. when the charger is too weak for the laptop; software cannot lift that cap.",
+        options={"auto": "expect the base speed with turbo off, the maximum with turbo on (recommended)",
+                 "off": "do not check", "<MHz>": "expect at least this speed"}),
     "READY_CONSECUTIVE_CHECKS": dict(default="2", check=_int(1), unit="checks, 1 or more",
         help="All checks must pass this many times in a row, so a short dip does not count."),
     "READY_MIN_WAIT_SECONDS": dict(default="10", check=_int(0), unit="seconds",
@@ -497,6 +511,7 @@ SHORT = {
     "READY_CPU_BUSY_REFERENCE_PERCENT": "reference CPU use in %; empty = the measured resting use",
     "READY_CPU_BUSY_MARGIN_PERCENT": "ready when CPU use <= reference + this (%); empty = no check",
     "READY_NO_THROTTLING": "1 = not ready while the CPU throttles, 0 = ignore",
+    "READY_CPU_SPEED": "not ready while the CPU is capped below its expected speed: auto | off | MHz",
     "READY_CONSECUTIVE_CHECKS": "checks that must pass in a row",
     "READY_MIN_WAIT_SECONDS": "always wait at least this long before a run",
     "READY_MAX_WAIT_SECONDS": "after this long not ready, READY_ON_TIMEOUT decides",
@@ -544,7 +559,7 @@ DOCS_LAYOUT = EXAMPLE_LAYOUT[:2] + [
       "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH", "ON_BATTERY", "SETTLE_SECONDS", "RESTING_MEASURE_SECONDS"]),
     ("Readiness check before every run (configs/machine/ profiles)",
      ["READY_CHECK_EVERY_SECONDS", "READY_TEMP_REFERENCE_C", "READY_TEMP_MARGIN_C",
-      "READY_CPU_BUSY_REFERENCE_PERCENT", "READY_CPU_BUSY_MARGIN_PERCENT", "READY_NO_THROTTLING",
+      "READY_CPU_BUSY_REFERENCE_PERCENT", "READY_CPU_BUSY_MARGIN_PERCENT", "READY_NO_THROTTLING", "READY_CPU_SPEED",
       "READY_CONSECUTIVE_CHECKS", "READY_MIN_WAIT_SECONDS", "READY_MAX_WAIT_SECONDS", "READY_ON_TIMEOUT"]),
 ] + EXAMPLE_LAYOUT[2:]
 

@@ -166,6 +166,9 @@ def do_apply(args):
     else:
         print("Turbo: not available, skipped")
 
+    if args.governor == "performance":
+        pin_min_speed(state["files"])
+
     if args.screen_brightness != "unchanged":
         set_brightness(BACKLIGHT_GLOB, int(args.screen_brightness), "Screen brightness", state["files"])
     if args.keyboard_light == "off":
@@ -192,6 +195,23 @@ def do_apply(args):
     print("Run 'restore' after your measurements to put everything back.")
 
 
+def pin_min_speed(saved):
+    """With the performance governor: lowest speed = highest speed, so every core runs at one fixed
+    speed (the base speed with turbo off). Saved like the other files and restored afterwards.
+    A core whose maximum is capped by the firmware keeps its minimum (the write is refused)."""
+    pinned = total = 0
+    for max_path in sorted(glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq")):
+        min_path = max_path.replace("scaling_max_freq", "scaling_min_freq")
+        top, low = read(max_path), read(min_path)
+        if not top or low is None:
+            continue
+        total += 1
+        saved[min_path] = low
+        pinned += 1 if write(min_path, top) else 0
+    if total:
+        print(f"CPU minimum speed: pinned to the maximum on {pinned}/{total} cores")
+
+
 def do_restore(args):
     require_root()
     if not os.path.isfile(args.state):
@@ -210,7 +230,7 @@ def do_restore(args):
     files = state.get("files") or {}
     restored = sum(1 for path, prev in files.items() if prev is not None and write(path, prev))
     if files:
-        print(f"Screen and keyboard light: restored {restored} setting(s)")
+        print(f"Screen, keyboard light, CPU minimum speed: restored {restored} setting(s)")
     radios = state.get("radios") or {}
     if radios:
         radios_restore(radios)
