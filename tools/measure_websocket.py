@@ -197,6 +197,8 @@ def start_server_container(server_image, port_mapping, container_name, docker_pa
     cleanup_existing_container(container_name, docker_path)
     # --cgroupns=host: needed for Scaphandre to detect container names on cgroups v2
     cmd = [docker_path, "run", "-d", "--cgroupns=host", "--ulimit", "nofile=100000:100000", "--name", container_name]
+    # The server listens on PORT (server contract, README): the container side of the mapping.
+    cmd.extend(["-e", f"PORT={port_mapping.split(':')[-1]}"])
     if network == "host":
         cmd.extend(["--network", "host"])
     else:

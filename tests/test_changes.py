@@ -1821,3 +1821,29 @@ class StaleImages(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServerPort(unittest.TestCase):
+    """Server contract: the framework tells the server its port in PORT (README, Adding a Server)."""
+
+    def started_with(self, module, mapping, network="bridge"):
+        from unittest import mock
+        done = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(module.subprocess, "run", return_value=done) as run, \
+                mock.patch.object(module.time, "sleep"), \
+                mock.patch.object(module, "cleanup_existing_container"):
+            module.start_server_container("img", mapping, "c", "docker", network)
+        return [c.args[0] for c in run.call_args_list if c.args and "run" in c.args[0]][-1]
+
+    def test_port_is_the_container_side_of_the_mapping(self):
+        import measure_docker, measure_websocket
+        for module in (measure_docker, measure_websocket):
+            cmd = self.started_with(module, "8001:80")
+            self.assertIn("PORT=80", cmd)
+            self.assertEqual(cmd[cmd.index("PORT=80") - 1], "-e")
+            self.assertIn("PORT=8001", self.started_with(module, "8001:8001"))
+            self.assertIn("PORT=80", self.started_with(module, "8001:80", network="host"))
+
+    def test_health_check_passes_port(self):
+        with open(os.path.join(ROOT, "scripts", "check_health.sh")) as fh:
+            self.assertIn('-e "PORT=${port_mapping##*:}"', fh.read())

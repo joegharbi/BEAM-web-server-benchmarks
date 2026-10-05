@@ -118,7 +118,7 @@ check_container_health() {
         print_status "ERROR" "Port $host_port is already in use. Please free the port and rerun the health check."
         exit 1
     fi
-    if ! docker run -d --rm --ulimit nofile=100000:100000 --name "$container_name" -p "$port_mapping" "$image_name" > /dev/null 2>&1; then
+    if ! docker run -d --rm --ulimit nofile=100000:100000 --name "$container_name" -e "PORT=${port_mapping##*:}" -p "$port_mapping" "$image_name" > /dev/null 2>&1; then
         print_status "ERROR" "$image_name: Failed to start container"
         # Print container logs and exit code for debugging
         if docker ps -a --format '{{.Names}}' | grep -q "^$container_name$"; then

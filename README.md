@@ -298,16 +298,27 @@ Each directory containing a `Dockerfile` under `benchmarks/` is one benchmark. T
 
 ## Adding a Server
 
-Any server in any language can be measured. It only has to:
+Any server in any language can be measured. The server contract:
 
-- **HTTP** (`static/`, `dynamic/`): answer `GET /` with status 200 on the port it exposes, and
-  should support HTTP/1.1 keep-alive (the client reuses connections).
+- **Port:** listen on the port given in the environment variable `PORT` (default 8001 when it is
+  unset), and `EXPOSE` the same port in the Dockerfile. The framework sets `PORT` to the exposed
+  port and maps host port 8001 to it.
+- **HTTP** (`static/`, `dynamic/`): answer `GET /` with status 200, and should support HTTP/1.1
+  keep-alive (the client reuses connections).
 - **WebSocket** (`websocket/`): accept a WebSocket on `/ws` and echo every message back.
+- **Runtime options from the environment:** the runtime's own variable (`ERL_FLAGS` for the BEAM,
+  `JAVA_TOOL_OPTIONS` for the JVM) must reach it, so `VARIANTS` can change settings without
+  touching the server.
+- **Lean:** start the server the way it is deployed (a release, not a build tool), with only what
+  it needs. BEAM servers run without a node name, so no `epmd` starts.
+
+Servers built before this contract listen on port 80 and ignore `PORT`; they keep working, because
+the framework maps host port 8001 to whatever port the Dockerfile exposes.
 
 Steps:
 
 1. Create `benchmarks/<type>/<lang>/<framework>/<container>/` with a `Dockerfile`.
-2. Add `EXPOSE 80` (or your port). Ensure ulimit 100000 (health check enforces this).
+2. Read `PORT` (default 8001) and `EXPOSE 8001`. Ensure ulimit 100000 (health check enforces this).
 3. Run `make build` → `make check-health` → `make run-super-quick`.
 
 ## Commands
