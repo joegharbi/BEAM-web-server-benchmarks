@@ -51,6 +51,9 @@ echo "Before: $BEFORE"
 source srv/bin/activate
 bash scripts/run_benchmarks.sh --super-quick --bench "$TMP/bench" --config "$TMP/check.config" static > "$TMP/run.out" 2>&1 &
 RUN=$!
+# A background job of a script ignores Ctrl-C, so pass it on: TERM makes the run stop and restore
+# the machine settings itself; wait for that before leaving.
+trap 'echo "Stopping the check run (it restores the machine settings) ..."; kill -TERM "$RUN" 2>/dev/null; wait "$RUN"; exit 130' INT TERM
 sleep 20
 INHIBITED=$(systemd-inhibit --list --no-pager | grep -c "web-server benchmarks")
 wait $RUN

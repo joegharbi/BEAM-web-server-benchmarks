@@ -1412,7 +1412,11 @@ bench_apply_environment() {
 bench_restore_environment() {
     [ "$BENCH_ENV_APPLIED" -eq 1 ] || return 0
     BENCH_ENV_APPLIED=0
-    print_status "INFO" "Restoring machine settings ..."
+    # A second Ctrl-C must not cut the restore short (prepare_environment.py ignores it as well).
+    # Caught with a no-op rather than ignored: an ignored signal would be inherited as ignored by
+    # every process started afterwards, which then outlives the run.
+    trap ':' INT TERM
+    print_status "INFO" "Restoring machine settings ... (Ctrl-C is ignored until it is done)"
     sudo -n "$PYTHON_PATH" ./tools/prepare_environment.py restore --state "$BENCH_ENV_STATE" \
         || print_status "WARNING" "Restore failed; run: sudo python3 tools/prepare_environment.py restore --state $BENCH_ENV_STATE"
 }
@@ -1496,7 +1500,23 @@ bench_measurement_csvs() {
         ! -name 'failures.csv' -print 2>/dev/null | sort
 }
 
+# Only one measurement at a time: two runs would share port 8001, stop each other's containers and
+# save each other's changed machine settings as "the state before".
+bench_refuse_parallel_run() {
+    local marker pid
+    for marker in "$RESULTS_PARENT_DIR"/*/.running; do
+        [ -f "$marker" ] || continue
+        pid=$(cat "$marker" 2>/dev/null)
+        [ -n "$pid" ] && [ "$pid" != "$$" ] || continue
+        if kill -0 "$pid" 2>/dev/null && tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "run_benchmarks.sh"; then
+            print_status "ERROR" "Another measurement is running ($(dirname "$marker"), process $pid). Wait for it to end, or stop it with one Ctrl-C in its terminal."
+            exit 1
+        fi
+    done
+}
+
 main() {
+    bench_refuse_parallel_run
     export BENCH_MEASURE_QUIET
     # Optional: concurrency/payload modes set this so the shared footer SUCCESS line matches the suite.
     BENCH_SUCCESS_TAIL=""

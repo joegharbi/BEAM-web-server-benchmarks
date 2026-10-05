@@ -1918,3 +1918,67 @@ class PinMinSpeed(unittest.TestCase):
                 self.assertEqual(fh.read(), "1800000")
         self.assertEqual(set(saved.values()), {"400000"})
         shutil.rmtree(d)
+
+
+class SafeInterrupts(unittest.TestCase):
+    """One run at a time; Ctrl-C stops a check's run; a restore cannot be cut short."""
+
+    def refuse(self, marker_pid):
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            src = fh.read()
+        start = src.index("bench_refuse_parallel_run() {")
+        func = src[start:src.index("\n}\n", start) + 3]
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "2026-01-01_000000"))
+        with open(os.path.join(d, "2026-01-01_000000", ".running"), "w") as fh:
+            fh.write(str(marker_pid))
+        script = f'print_status() {{ echo "$2"; }}\nRESULTS_PARENT_DIR="{d}"\n{func}\nbench_refuse_parallel_run\necho started'
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+        shutil.rmtree(d)
+        return r
+
+    def test_refuses_while_another_run_is_alive(self):
+        other = subprocess.Popen(["bash", "-c", "exec -a run_benchmarks.sh sleep 30"])
+        try:
+            time.sleep(0.2)
+            r = self.refuse(other.pid)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("Another measurement is running", r.stdout)
+        finally:
+            other.kill()
+            other.wait()
+
+    def test_starts_when_the_marker_is_stale(self):
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        r = self.refuse(dead.pid)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("started", r.stdout)
+
+    def test_check_passes_ctrl_c_to_its_run(self):
+        with open(os.path.join(ROOT, "tests", "config_check.sh")) as fh:
+            self.assertIn('kill -TERM "$RUN"', fh.read())
+
+    def test_restore_ignores_ctrl_c(self):
+        import signal
+        import prepare_environment as pe
+        from unittest import mock
+        fd, state = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, "w") as fh:
+            json.dump({"governors": {}, "turbo": None, "files": {}, "radios": {}, "stopped_containers": []}, fh)
+        old_int, old_term = signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
+        during = []
+        real_restore = pe._restore
+
+        def restore(args):
+            during.append((signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)))
+            real_restore(args)
+        try:
+            with mock.patch.object(pe, "require_root"), mock.patch.object(pe, "_restore", restore):
+                pe.do_restore(mock.Mock(state=state))
+            self.assertEqual(during, [(signal.SIG_IGN, signal.SIG_IGN)])         # ignored while restoring
+            # and back afterwards: an ignored SIGTERM would be inherited by every process started later
+            self.assertEqual((signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)), (old_int, old_term))
+        finally:
+            signal.signal(signal.SIGINT, old_int)
+            signal.signal(signal.SIGTERM, old_term)

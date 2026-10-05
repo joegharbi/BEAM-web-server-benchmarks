@@ -25,6 +25,7 @@ import argparse
 import glob
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -214,6 +215,18 @@ def pin_min_speed(saved):
 
 def do_restore(args):
     require_root()
+    # Finish the restore even if Ctrl-C is pressed again: a cut-short restore leaves the machine
+    # half changed (e.g. containers not restarted). The old handlers come back afterwards, so a
+    # caller that goes on (and the processes it starts later) does not keep ignoring Ctrl-C.
+    previous = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        _restore(args)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _restore(args):
     if not os.path.isfile(args.state):
         sys.exit(f"No saved state at {args.state}; nothing to restore.")
     with open(args.state, encoding="utf-8") as f:
