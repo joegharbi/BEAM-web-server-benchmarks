@@ -9,10 +9,10 @@ start(_StartType, _StartArgs) ->
             {"/", hello_handler, []}
         ]}
     ]),
-    Port = case application:get_env(simple_cowboy_app, port) of
-        undefined -> 8080; % Default to 8080 if not set
-        {ok, Value} when is_integer(Value) -> Value;
-        _ -> exit({error, invalid_port})
+    % Server contract (framework README): listen on PORT, 8001 when it is unset
+    Port = case os:getenv("PORT") of
+        false -> 8001;
+        Value -> list_to_integer(Value)
     end,
     io:format("Starting Cowboy on port: ~p~n", [Port]), % Debug log to verify the port value
     % Canonical transport opts: num_acceptors=8, max_connections=100000 (see docs/CONFIGURATION_PARITY.md)
