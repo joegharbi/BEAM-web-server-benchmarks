@@ -44,7 +44,7 @@ Unit: kinds, separated by spaces: static dynamic websocket concurrency payload
 
 Default: `(empty)`
 
-Which servers to measure. Empty = every server found in BENCHMARKS_DIR (a folder with a Dockerfile; its place, static/, dynamic/ or websocket/, gives its type). A name is a server folder name, e.g. st-erlang-cowboy-28-4-3. An image built on this machine without a folder is given with its type: static:my-nginx, dynamic:my-app, websocket:my-ws (port from the image). Every name must exist and every image must be built, or the measurement does not start.
+Which servers to measure. Empty = every server found in BENCHMARKS_DIR (a folder with a Dockerfile; its place, static/, dynamic/ or websocket/, gives its type). A name is a server folder name, e.g. st-erlang-cowboy-29-1-1. An image built on this machine without a folder is given with its type: static:my-nginx, dynamic:my-app, websocket:my-ws (port from the image). Every name must exist and every image must be built, or the measurement does not start.
 
 Unit: names separated by spaces, or empty = all servers found
 

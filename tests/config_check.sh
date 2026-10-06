@@ -12,7 +12,7 @@ TMP=$(mktemp -d)
 
 # Two targets whose images are already built
 mkdir -p "$TMP/bench/static/erlang/cowboy" "$TMP/bench/static/elixir/pure" "$TMP/bench/dynamic" "$TMP/bench/websocket"
-cp -r "$BEAM_BENCH/static/erlang/cowboy/st-erlang-cowboy-28-4-3" "$TMP/bench/static/erlang/cowboy/"
+cp -r "$BEAM_BENCH/static/erlang/cowboy/st-erlang-cowboy-29-1-1" "$TMP/bench/static/erlang/cowboy/"
 cp -r "$BEAM_BENCH/static/elixir/pure/st-elixir-pure-1-19-5" "$TMP/bench/static/elixir/pure/"
 cat > "$TMP/check.config" <<'EOF'
 REPEATS=2

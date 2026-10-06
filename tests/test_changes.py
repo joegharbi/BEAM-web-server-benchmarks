@@ -2338,7 +2338,7 @@ class NativeServer(unittest.TestCase):
         import native_server as ns
         import subprocess
         import urllib.request
-        img = "st-erlang-cowboy-28-4-3"
+        img = "st-erlang-cowboy-29-1-1"
         if subprocess.run(["docker", "image", "inspect", img], capture_output=True).returncode != 0:
             self.skipTest(f"image {img} not built")
         if subprocess.run(["ss", "-ltn"], capture_output=True, text=True).stdout.count(":8001 "):

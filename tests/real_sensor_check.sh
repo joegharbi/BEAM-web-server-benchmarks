@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 sudo -v
 OUT=$(mktemp -d)
 MEASURE_STARTUP_WAIT=5 srv/bin/python tools/measure_docker.py \
-  --server_image st-erlang-cowboy-28-4-3 --num_requests 5000 --max_workers 100 \
+  --server_image st-erlang-cowboy-29-1-1 --num_requests 5000 --max_workers 100 \
   --measurement_type static --output_csv "$OUT/run.csv" --output_json "$OUT/run.json"
 srv/bin/python - "$OUT" <<'EOF'
 import csv, json, statistics, sys

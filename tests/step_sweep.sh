@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 STEPS=${STEPS:-"100 250 500 1000 2000"}
 RUNS=${RUNS:-3}
 REQS=${REQS:-20000}
-IMAGE=${IMAGE:-st-erlang-cowboy-28-4-3}
+IMAGE=${IMAGE:-st-erlang-cowboy-29-1-1}
 OUT=$(mktemp -d)
 sudo -v
 ( while true; do sudo -n true; sleep 50; done ) 2>/dev/null &

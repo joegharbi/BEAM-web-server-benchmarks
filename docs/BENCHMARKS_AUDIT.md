@@ -18,10 +18,10 @@ See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for bas
 
 | Language | Framework/Variant | Container(s) | Notes |
 |----------|-------------------|--------------|--------|
-| Erlang  | cowboy  | `st-erlang-cowboy-27`, `st-erlang-cowboy-28-4-3` | Includes latest OTP lane |
-| Erlang  | index   | `st-erlang-index-23`, `st-erlang-index-26`, `st-erlang-index-27`, `st-erlang-index-28-4-3` | Serves index HTML file |
-| Erlang  | pure    | `st-erlang-pure-23`, `st-erlang-pure-26`, `st-erlang-pure-27`, `st-erlang-pure-28-4-3` | HTML in code |
-| Erlang  | yaws    | `st-erlang-yaws-26`, `st-erlang-yaws-27`, `st-erlang-yaws-28-4-3` | Includes latest OTP lane |
+| Erlang  | cowboy  | `st-erlang-cowboy-27`, `st-erlang-cowboy-29-1-1` | Includes latest OTP lane |
+| Erlang  | index   | `st-erlang-index-23`, `st-erlang-index-26`, `st-erlang-index-27`, `st-erlang-index-29-1-1` | Serves index HTML file |
+| Erlang  | pure    | `st-erlang-pure-23`, `st-erlang-pure-26`, `st-erlang-pure-27`, `st-erlang-pure-29-1-1` | HTML in code |
+| Erlang  | yaws    | `st-erlang-yaws-26`, `st-erlang-yaws-27`, `st-erlang-yaws-29-1-1` | Includes latest OTP lane |
 | Elixir  | cowboy  | `st-elixir-cowboy-1-16`, `st-elixir-cowboy-1-19-5` | Includes latest Elixir lane |
 | Elixir  | index   | `st-elixir-index-1-16`, `st-elixir-index-1-19-5` | Serves index HTML file |
 | Elixir  | phoenix | `st-elixir-phoenix-1-8`, `st-elixir-phoenix-1-8-5` | Includes latest Phoenix lane |
@@ -34,10 +34,10 @@ See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for bas
 
 | Language | Framework/Variant | Container(s) | Notes |
 |----------|-------------------|--------------|--------|
-| Erlang  | cowboy  | `dy-erlang-cowboy-27`, `dy-erlang-cowboy-28-4-3` | Includes latest OTP lane |
-| Erlang  | index   | `dy-erlang-index-23`, `dy-erlang-index-26`, `dy-erlang-index-27`, `dy-erlang-index-28-4-3` | ✓ |
-| Erlang  | pure    | `dy-erlang-pure-23`, `dy-erlang-pure-26`, `dy-erlang-pure-27`, `dy-erlang-pure-28-4-3` | ✓ |
-| Erlang  | yaws    | `dy-erlang-yaws-26`, `dy-erlang-yaws-27`, `dy-erlang-yaws-28-4-3` | Includes latest OTP lane |
+| Erlang  | cowboy  | `dy-erlang-cowboy-27`, `dy-erlang-cowboy-29-1-1` | Includes latest OTP lane |
+| Erlang  | index   | `dy-erlang-index-23`, `dy-erlang-index-26`, `dy-erlang-index-27`, `dy-erlang-index-29-1-1` | ✓ |
+| Erlang  | pure    | `dy-erlang-pure-23`, `dy-erlang-pure-26`, `dy-erlang-pure-27`, `dy-erlang-pure-29-1-1` | ✓ |
+| Erlang  | yaws    | `dy-erlang-yaws-26`, `dy-erlang-yaws-27`, `dy-erlang-yaws-29-1-1` | Includes latest OTP lane |
 | Elixir  | cowboy  | `dy-elixir-cowboy-1-16`, `dy-elixir-cowboy-1-19-5` | Includes latest Elixir lane |
 | Elixir  | index   | `dy-elixir-index-1-16`, `dy-elixir-index-1-19-5` | ✓ |
 | Elixir  | phoenix | `dy-elixir-phoenix-1-8`, `dy-elixir-phoenix-1-8-5` | Includes latest Phoenix lane |
@@ -50,8 +50,8 @@ See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for bas
 
 | Language | Framework/Variant | Container(s) | Notes |
 |----------|-------------------|--------------|--------|
-| Erlang  | cowboy | `ws-erlang-cowboy-27`, `ws-erlang-cowboy-28-4-3` | Includes latest OTP lane |
-| Erlang  | yaws   | `ws-erlang-yaws-27`, `ws-erlang-yaws-28-4-3` | Includes latest OTP lane |
+| Erlang  | cowboy | `ws-erlang-cowboy-27`, `ws-erlang-cowboy-29-1-1` | Includes latest OTP lane |
+| Erlang  | yaws   | `ws-erlang-yaws-27`, `ws-erlang-yaws-29-1-1` | Includes latest OTP lane |
 | Elixir  | cowboy | `ws-elixir-cowboy-1-16`, `ws-elixir-cowboy-1-19-5` | Includes latest Elixir lane |
 | Elixir  | bandit | `ws-elixir-bandit-1-8-5` | Bandit + WebSockAdapter echo on `/ws` |
 | Gleam   | mist | `ws-gleam-mist-1-0`, `ws-gleam-mist-1-15-2` | WebSocket echo on `/ws` |

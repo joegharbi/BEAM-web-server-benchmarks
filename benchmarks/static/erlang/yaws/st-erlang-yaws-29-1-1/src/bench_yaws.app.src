@@ -1,0 +1,11 @@
+{application, bench_yaws,
+ [{description, "Yaws embedded for energy benchmarking (static page index.html)"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {bench_yaws_app, []}},
+  {applications, [kernel, stdlib, compiler]},
+  {env, []},
+  {modules, []},
+  {licenses, ["Apache-2.0"]},
+  {links, []}
+ ]}.

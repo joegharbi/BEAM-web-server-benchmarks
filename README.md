@@ -58,7 +58,7 @@ For repeatable measurements, describe the measurement in one short file and run 
 # my.config
 MACHINE=minimal                            # how the machine is prepared (a profile, below)
 MEASURE=static dynamic                     # kinds: static dynamic websocket concurrency payload (default: all)
-SERVERS=st-erlang-cowboy-28-4-3 static:my-nginx   # empty (default) = every server found in BENCHMARKS_DIR
+SERVERS=st-erlang-cowboy-29-1-1 static:my-nginx   # empty (default) = every server found in BENCHMARKS_DIR
 HTTP_REQUESTS=1000 20000 80000             # the load levels
 REPEATS=5
 ```

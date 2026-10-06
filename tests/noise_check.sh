@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 RUNS=${RUNS:-6}
 REQS=${REQS:-20000}
 COOLDOWN=${COOLDOWN:-30}
-IMAGE=${IMAGE:-st-erlang-cowboy-28-4-3}
+IMAGE=${IMAGE:-st-erlang-cowboy-29-1-1}
 OUT=$(mktemp -d)
 sudo -v
 ( while true; do sudo -n true; sleep 50; done ) 2>/dev/null &
