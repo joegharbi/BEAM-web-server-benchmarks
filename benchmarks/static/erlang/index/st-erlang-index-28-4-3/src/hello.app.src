@@ -1,0 +1,11 @@
+{application, hello,
+ [{description, "Plain Erlang HTTP server for energy benchmarking (static page read from priv/index.html)"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {hello_app, []}},
+  {applications, [kernel, stdlib]},
+  {env, []},
+  {modules, []},
+  {licenses, ["Apache-2.0"]},
+  {links, []}
+ ]}.
