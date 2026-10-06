@@ -22,7 +22,7 @@ import time
 
 logger = logging.getLogger()
 
-NATIVE_DIR = "native"
+NATIVE_DIR = os.environ.get("MEASURE_NATIVE_DIR", "native")      # the copies out of the images
 HOST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
@@ -44,8 +44,9 @@ def image_env(image, docker_path="docker"):
     return env
 
 
-def unpack(image, docker_path="docker", root=NATIVE_DIR):
+def unpack(image, docker_path="docker", root=None):
     """Copy /app and /start.sh out of the image into <root>/<image>/; reused while the image is the same."""
+    root = root or NATIVE_DIR
     target = os.path.join(root, image)
     image_id = _docker(docker_path, "image", "inspect", "--format", "{{.Id}}", image)
     stamp = os.path.join(target, ".image_id")
@@ -154,3 +155,33 @@ def collect_stats(unit, stop_event, interval=0.5):
         return {"avg": sum(values) / len(values) if values else 0.0, "peak": max(values, default=0.0),
                 "total": sum(values) * interval}
     return stats(cpu_usage), stats(mem_usage)
+
+
+def problem(image, docker_path="docker"):
+    """Why the image cannot run natively ("" when it can): it must follow the server contract
+    (README): the server under /app, started by /start.sh, which finds it under $APP_DIR."""
+    try:
+        folder = unpack(image, docker_path)
+    except (subprocess.CalledProcessError, OSError) as e:
+        detail = (getattr(e, "stderr", "") or str(e)).strip().splitlines()
+        return f"could not copy /app and /start.sh out of the image ({detail[-1] if detail else e})"
+    try:
+        with open(os.path.join(folder, "start.sh"), encoding="utf-8", errors="replace") as fh:
+            script = fh.read()
+    except OSError:
+        return "no /start.sh in the image"
+    if "APP_DIR" not in script:
+        return "its start.sh does not use APP_DIR (it would run the server from /app, which is not there natively)"
+    return ""
+
+
+if __name__ == "__main__":
+    # check IMAGE...: unpack every image and print one line per image that cannot run natively
+    import sys
+    logging.basicConfig(level=logging.WARNING, format="%(message)s")
+    if sys.argv[1:2] != ["check"]:
+        sys.exit("usage: native_server.py check IMAGE...")
+    for name in sys.argv[2:]:
+        why = problem(name)
+        if why:
+            print(f"  {name}: {why}")

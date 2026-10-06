@@ -2014,7 +2014,7 @@ class BenchmarkGrapher(QMainWindow):
             canvas.draw()
             facts = [f"Container energy {w['energy_j']:.3f} J", f"host energy {w['host_energy_j']:.3f} J",
                      f"load {w['load_end_epoch'] - t0:.1f} s", f"{len(series)} power readings"]
-            for col in ("Variant", "Container CPU Limit", "Host CPU Temp Start (C)", "Host CPU Temp End (C)",
+            for col in ("Variant", "Deploy", "Container CPU Limit", "Host CPU Temp Start (C)", "Host CPU Temp End (C)",
                         "Host Throttled (ms)", "Waited Before Start (s)", "Waited Before Load (s)", "Ready Check",
                         "Energy Window Coverage"):
                 if str(row.get(col) or "").strip():

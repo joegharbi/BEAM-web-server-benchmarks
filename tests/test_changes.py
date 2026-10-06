@@ -1537,7 +1537,7 @@ class WhatToMeasure(unittest.TestCase):
 
     def test_command_line_wins(self):
         rc, out = self.run_until_plan("MEASURE=websocket\n", args=("static",))
-        self.assertIn("The command line chooses what to measure (static); MEASURE, SERVERS and VARIANTS of the config are not used", out)
+        self.assertIn("The command line chooses what to measure (static); MEASURE, SERVERS, VARIANTS and DEPLOY of the config are not used", out)
 
     def test_port_of_an_image_without_folder(self):
         with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
@@ -1638,6 +1638,80 @@ class Variants(WhatToMeasure):
         for bad in ("VARIANTS=NoBW:X=1", "VARIANTS=nobw", "VARIANTS=nobw:+sbwt none"):
             with self.assertRaises(bench_config.ConfigError):
                 bench_config.parse(bad)
+
+
+
+class Deploy(WhatToMeasure):
+    """DEPLOY: each server (and variant) also measured natively as <server>-native, in the same order."""
+    start_script = "APP_DIR"
+
+    def setUp(self):
+        super().setUp()
+        with open(os.path.join(self.bin, "docker")) as fh:         # + docker cp: /app and /start.sh of the image
+            fake = fh.read()
+        fake = fake.replace("#!/bin/sh\n", '#!/bin/sh\nif [ "$1" = "cp" ]; then case "$2" in *:/app) mkdir -p "$3" ;; '
+                            '*:/start.sh) printf "%s" "$FAKE_START" > "$3" ;; esac; exit 0; fi\n'
+                            'if [ "$1 $2 $4" = "image inspect {{.Id}}" ]; then echo "sha256:id-$5"; exit 0; fi\n', 1)
+        with open(os.path.join(self.bin, "docker"), "w") as fh:
+            fh.write(fake)
+        self.native = os.path.join(self.d, "native")
+
+    def run_until_plan(self, config, args=(), images="st-a st-b dy-c ws-d my-img"):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"MEASURE_NATIVE_DIR": self.native, "FAKE_START": self.start_script}):
+            return super().run_until_plan(config, args, images)
+
+    def test_both_ways(self):
+        rc, out = self.run_until_plan("MEASURE=static\nSERVERS=st-a st-b\nHTTP_REQUESTS=1000\nDEPLOY=container native\n"
+                                      "VARIANTS=nobw:ERL_FLAGS=+sbwt none\n")
+        self.assertIn("Static HTTP:     8 containers × 1 levels = 8", out)       # 2 servers x 2 variants x 2 ways
+        self.assertEqual(sorted(os.listdir(self.native)), ["st-a", "st-a-nobw", "st-b", "st-b-nobw"])
+
+    def test_native_only(self):
+        rc, out = self.run_until_plan("MEASURE=static\nSERVERS=st-a\nHTTP_REQUESTS=1000\nDEPLOY=native\n")
+        self.assertIn("Static HTTP:     1 containers × 1 levels = 1", out)
+
+    def test_container_is_the_default(self):
+        rc, out = self.run_until_plan("MEASURE=static\nSERVERS=st-a\nHTTP_REQUESTS=1000\n")
+        self.assertIn("Static HTTP:     1 containers × 1 levels = 1", out)
+        self.assertFalse(os.path.exists(self.native))
+
+    def test_server_without_the_contract_stops_before_anything(self):
+        self.start_script = "exec /app/server"
+        rc, out = self.run_until_plan("MEASURE=static\nSERVERS=st-a\nDEPLOY=container native\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("DEPLOY=native: these servers cannot run without Docker", out)
+        self.assertIn("st-a: its start.sh does not use APP_DIR", out)
+        self.assertNotIn("Machine settings", out)
+
+    def test_config_checks(self):
+        import bench_config
+        self.assertEqual(bench_config.parse("DEPLOY=native  container")["DEPLOY"], "native container")
+        self.assertEqual(bench_config.parse("")["DEPLOY"], "container")
+        for bad in ("DEPLOY=", "DEPLOY=docker", "DEPLOY=native native"):
+            with self.assertRaises(bench_config.ConfigError):
+                bench_config.parse(bad)
+
+    def test_native_items_run_their_image(self):
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            src = fh.read()
+        self.assertIn('[ "$prev" = "--server_image" ] && a="$native_of"', src)
+        self.assertIn('tool_args+=(--container_name "$m_server" --deploy native)', src)
+
+    def test_csv_column_and_summary_key(self):
+        import aggregate_repeats
+        import csv_columns
+        self.assertEqual(csv_columns.RUN[:3], ["Container Name", "Variant", "Deploy"])
+        self.assertEqual(csv_columns.run_fields("native")["Deploy"], "native")
+        self.assertIn("Deploy", aggregate_repeats.KEY_COLS)
+
+    def test_image_id_of_a_native_item(self):
+        import run_metadata
+        from unittest import mock
+        ids = {"st-a": "sha256:0123456789abcdef"}
+        with mock.patch.object(run_metadata, "_run", lambda cmd: ids.get(cmd[-1], "")):
+            self.assertEqual(run_metadata.image_id("st-a-native"), "0123456789ab")
+            self.assertEqual(run_metadata.image_id("st-zzz"), "")
 
 
 class TerminatedMeasurement(unittest.TestCase):
@@ -2069,7 +2143,10 @@ class NativeServer(unittest.TestCase):
             self.skipTest(f"image {img} not built")
         if subprocess.run(["ss", "-ltn"], capture_output=True, text=True).stdout.count(":8001 "):
             self.skipTest("port 8001 in use")
-        unit = ns.start(img, "wseb-test-" + img, 8001)
+        from unittest import mock
+        folder = tempfile.mkdtemp()
+        with mock.patch.object(ns, "NATIVE_DIR", folder):
+            unit = ns.start(img, "test-" + img, 8001)
         try:
             pids = []
             for _ in range(30):
@@ -2085,4 +2162,5 @@ class NativeServer(unittest.TestCase):
         finally:
             ns.stop(unit)
         time.sleep(1)
+        shutil.rmtree(folder)
         self.assertFalse([p for p in pids if os.path.exists(f"/proc/{p}")])   # nothing outlives the stop

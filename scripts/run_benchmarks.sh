@@ -701,6 +701,7 @@ fi
 # Resolved and checked here, before anything starts: every name must exist, every image be built.
 BENCH_DO_STATIC=1; BENCH_DO_DYNAMIC=1; BENCH_DO_WS=1; BENCH_DO_CONC=1; BENCH_DO_PAYLOAD=1
 declare -A BENCH_VARIANT_OF=()     # variant image -> variant name (the "Variant" column)
+declare -A BENCH_NATIVE_OF=()      # native item <image>-native -> the image it runs (DEPLOY)
 BENCH_SELECTED=0
 SELECT_STATIC=(); SELECT_DYNAMIC=(); SELECT_WEBSOCKET=()
 
@@ -742,6 +743,21 @@ bench_add_variants() {
             out+=("$img-$name")
             BENCH_VARIANT_OF["$img-$name"]="$name"
         done
+    done
+    _list=("${out[@]}")
+}
+
+# DEPLOY: with native, every server (and variant) is also an item <image>-native: the image's own
+# program without Docker (tools/native_server.py), measured like any other server in the same shuffled
+# order; bench_measure turns it into --deploy native. Without container, only the native items remain.
+bench_add_native() {
+    local -n _list=$1
+    local img out=()
+    for img in "${_list[@]}"; do
+        [[ " $CFG_DEPLOY " == *" container "* ]] && out+=("$img")
+        out+=("$img-native")
+        BENCH_NATIVE_OF["$img-native"]="$img"
+        BENCH_VARIANT_OF["$img-native"]="${BENCH_VARIANT_OF[$img]:-}"
     done
     _list=("${out[@]}")
 }
@@ -806,12 +822,24 @@ for name, f in m.stale_images(sys.argv[1], sys.argv[2:]): print(f"  {name}: {f} 
         bench_add_variants SELECT_DYNAMIC
         bench_add_variants SELECT_WEBSOCKET
     fi
+    if [[ " ${CFG_DEPLOY:-container} " == *" native "* ]]; then
+        bench_add_native SELECT_STATIC
+        bench_add_native SELECT_DYNAMIC
+        bench_add_native SELECT_WEBSOCKET
+        local problems
+        problems=$("$PYTHON_PATH" ./tools/native_server.py check "${BENCH_NATIVE_OF[@]}")
+        if [ -n "$problems" ]; then
+            echo -e "${RED}[ERROR]${NC} DEPLOY=native: these servers cannot run without Docker (README: server contract):"
+            echo "$problems"
+            bench_stop_early
+        fi
+    fi
     BENCH_SELECTED=1
 }
 
 if [ -n "${CONFIG_FILE:-}" ]; then
     if [ "$RUN_ALL" -eq 0 ]; then
-        echo -e "${BLUE}[INFO]${NC} The command line chooses what to measure ($TARGET_TYPE${TARGET_IMAGES[*]:+ ${TARGET_IMAGES[*]}}); MEASURE, SERVERS and VARIANTS of the config are not used."
+        echo -e "${BLUE}[INFO]${NC} The command line chooses what to measure ($TARGET_TYPE${TARGET_IMAGES[*]:+ ${TARGET_IMAGES[*]}}); MEASURE, SERVERS, VARIANTS and DEPLOY of the config are not used."
     else
         bench_select_from_config
     fi
@@ -1299,9 +1327,22 @@ bench_measure() {
     export MEASURE_VARIANT="${BENCH_VARIANT_OF[$m_server]:-}" MEASURE_REPEAT="${BENCH_PASS:-}" \
         MEASURE_SESSION="${BENCH_SESSION:-}"
     bench_ready_gate
+    # DEPLOY=native: the item <image>-native runs that image's program without Docker
+    local -a tool_args=("$@")
+    local native_of="${BENCH_NATIVE_OF[$m_server]:-}"
+    if [ -n "$native_of" ]; then
+        tool_args=()
+        prev=""
+        for a in "$@"; do
+            [ "$prev" = "--server_image" ] && a="$native_of"
+            tool_args+=("$a")
+            prev="$a"
+        done
+        tool_args+=(--container_name "$m_server" --deploy native)
+    fi
     local reason_file="$RESULTS_DIR/.failure_reason" rc=0
     rm -f "$reason_file"
-    MEASURE_FAILURE_REASON_FILE="$reason_file" "$PYTHON_PATH" "$@" "${BENCH_GATE_ARGS[@]}" || rc=$?
+    MEASURE_FAILURE_REASON_FILE="$reason_file" "$PYTHON_PATH" "${tool_args[@]}" "${BENCH_GATE_ARGS[@]}" || rc=$?
     if [ -n "${CONFIG_FILE:-}" ] && [ "$rc" != 2 ] && [ "$rc" != 3 ] && [ "$rc" != 130 ] && [ "$rc" != 143 ]; then
         local outcome=ok
         [ "$rc" = 0 ] || outcome="failed"
@@ -1335,6 +1376,7 @@ bench_measure() {
             rm -f "$reason_file"
             bench_record_failure "$image" "$reason" "$measurement"
             [ -n "$image" ] && docker rm -f "$image" >/dev/null 2>&1 || true
+            [ -n "${BENCH_NATIVE_OF[$image]:-}" ] && systemctl --user stop "wseb-$image.scope" >/dev/null 2>&1 || true
             BENCH_FAILURES=$((BENCH_FAILURES + 1))
             BENCH_FAILED_IN_A_ROW=$((BENCH_FAILED_IN_A_ROW + 1))
             print_status "WARNING" "Measurement failed ($reason); recorded in failures.csv, continuing"
@@ -1602,7 +1644,7 @@ main() {
         --set http_connection="$CFG_HTTP_CONNECTION" --set failures_stop_after="$CFG_FAILURES_STOP_AFTER" \
         --set idle_s="${CFG_IDLE_SECONDS:-0}" --set warmup_s="${CFG_WARMUP_SECONDS:-0}" \
         --set reproduces="${REPRODUCE_DIR:-}" \
-        --set measure="${CFG_MEASURE:-}" --set servers="${CFG_SERVERS:-}" --set variants="${CFG_VARIANTS:-}" \
+        --set measure="${CFG_MEASURE:-}" --set servers="${CFG_SERVERS:-}" --set variants="${CFG_VARIANTS:-}" --set deploy="${CFG_DEPLOY:-container}" \
         --set variant_order="${CFG_VARIANT_ORDER:-}" \
         --set machine="${CFG_MACHINE:-}" --set machine_file="${BENCH_MACHINE_FILE:-}" \
         --set env_screen_brightness="${CFG_ENV_SCREEN_BRIGHTNESS:-}" --set env_keyboard_light="${CFG_ENV_KEYBOARD_LIGHT:-}" \

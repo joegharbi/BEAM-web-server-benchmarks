@@ -13,6 +13,7 @@ import asyncio
 import websockets
 
 import measure_failure
+import native_server
 import readiness
 import run_metadata
 from scaphandre_energy import compute_window_energy, finish_raw, raw_json_path, scaphandre_json_args, window_record
@@ -55,6 +56,9 @@ def parse_args():
     parser.add_argument('--output_csv', type=str, default=None, help="Output CSV file path (default: results_docker/<container_name>.csv)")
     parser.add_argument('--output_json', type=str, default=None, help="Output JSON file path (default: output/<timestamp>.json)")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging")
+    parser.add_argument('--deploy', choices=['container', 'native'], default='container',
+                        help="container: the image in Docker (default); native: the image's own program without Docker, "
+                             "in a systemd user scope (tools/native_server.py)")
     parser.add_argument('--measurement_type', type=str, default='websocket', help="Type of measurement (websocket)")
     # WebSocket-specific
     parser.add_argument('--mode', choices=['echo'], default='echo', help='Benchmark mode: echo (C→S→C)')
@@ -317,12 +321,12 @@ def thermal_fields(before, after, args, pre_load=(None, "not checked")):
     }
 
 
-def pre_load_check(container_name, docker_path):
-    """Readiness check 2, with the server booted; removes the container if the campaign must stop."""
+def pre_load_check(stop_server):
+    """Readiness check 2, with the server booted; stops the server if the campaign must stop."""
     try:
         return readiness.pre_load_gate()
     except SystemExit:
-        stop_server_container(container_name, docker_path)
+        stop_server()
         raise
 
 
@@ -365,6 +369,7 @@ def run_repeats(args):
     ]
     if args.container_name:
         base_cmd += ["--container_name", args.container_name]
+    base_cmd += ["--deploy", args.deploy]
     if args.verbose:
         base_cmd += ["--verbose"]
 
@@ -438,10 +443,19 @@ def main():
 
     cleanup_existing_scaphandre()
     if is_measure_quiet() and not args.verbose:
-        measure_quiet_msg(f"{container_name} | Docker start + WebSocket readiness wait …")
+        measure_quiet_msg(f"{container_name} | {'native start (no Docker)' if args.deploy == 'native' else 'Docker start'} + WebSocket readiness wait …")
     logger.info(f"Starting container '{container_name}'...")
-    measure_failure.started_container(container_name, docker_path)
-    start_server_container(args.server_image, args.port_mapping, container_name, docker_path, args.network)
+    native = args.deploy == "native"
+    if native:
+        # The scope name takes the place of the container ID (energy by cgroup, stop, statistics)
+        unit = native_server.unit_name(container_name)
+        measure_failure.started_native(unit)
+        native_server.start(args.server_image, container_name, host_port, docker_path)
+        stop_server = lambda: native_server.stop(unit)  # noqa: E731
+    else:
+        measure_failure.started_container(container_name, docker_path)
+        start_server_container(args.server_image, args.port_mapping, container_name, docker_path, args.network)
+        stop_server = lambda: stop_server_container(container_name, docker_path)  # noqa: E731
     url = args.url
     if not url:
         url = f"ws://localhost:{args.port_mapping.split(':')[0]}/ws"
@@ -479,21 +493,24 @@ def main():
     if not health_ok:
         logger.error(f"Container '{container_name}' failed WebSocket health check. Stopping container and exiting.")
         # Show container logs to help diagnose (e.g. crash or port not bound)
-        try:
-            logs_result = subprocess.run(
-                [docker_path, "logs", "--tail", "50", container_name],
-                capture_output=True, text=True, timeout=5
-            )
-            if logs_result.stdout or logs_result.stderr:
-                logger.error("Container logs (last 50 lines):")
-                if logs_result.stdout:
-                    for line in logs_result.stdout.splitlines():
-                        logger.error("  %s", line)
-                if logs_result.stderr:
-                    for line in logs_result.stderr.splitlines():
-                        logger.error("  %s", line)
-        except Exception as e:
-            logger.debug("Could not get container logs: %s", e)
+        if native:
+            logger.error("Server output (last 50 lines):\n%s", native_server.log_tail(unit, 50))
+        else:
+            try:
+                logs_result = subprocess.run(
+                    [docker_path, "logs", "--tail", "50", container_name],
+                    capture_output=True, text=True, timeout=5
+                )
+                if logs_result.stdout or logs_result.stderr:
+                    logger.error("Container logs (last 50 lines):")
+                    if logs_result.stdout:
+                        for line in logs_result.stdout.splitlines():
+                            logger.error("  %s", line)
+                    if logs_result.stderr:
+                        for line in logs_result.stderr.splitlines():
+                            logger.error("  %s", line)
+            except Exception as e:
+                logger.debug("Could not get container logs: %s", e)
         measure_failure.fail("health check failed: no WebSocket echo from the container within the wait time")
 
     if args.warmup_s > 0:
@@ -502,7 +519,7 @@ def main():
         asyncio.run(warm_up(url, args.warmup_s))
 
     # Readiness check 2: booting the server warms the CPU, so wait again right before the load.
-    pre_load = pre_load_check(container_name, docker_path)
+    pre_load = pre_load_check(stop_server)
 
     if is_measure_quiet() and not args.verbose:
         traffic_desc = f"{args.pattern} | clients={args.clients} size_kb={args.size_kb}"
@@ -523,7 +540,10 @@ def main():
     stop_event = threading.Event()
     resource_results = {'cpu': {}, 'mem': {}}
     def collect():
-        cpu_metrics, mem_metrics = collect_resources_docker_stats(container_name, stop_event, docker_path)
+        if native:
+            cpu_metrics, mem_metrics = native_server.collect_stats(unit, stop_event)
+        else:
+            cpu_metrics, mem_metrics = collect_resources_docker_stats(container_name, stop_event, docker_path)
         resource_results['cpu'] = cpu_metrics
         resource_results['mem'] = mem_metrics
     resource_thread = threading.Thread(target=collect)
@@ -586,13 +606,14 @@ def main():
     logger.info("Waiting for Scaphandre...")
     time.sleep(5)
     stop_scaphandre(scaphandre_process)
-    container_id = None
-    result = subprocess.run(
-        [docker_path, "ps", "-q", "-f", f"name={container_name}"],
-        capture_output=True, text=True
-    )
-    if result.returncode == 0 and result.stdout.strip():
-        container_id = result.stdout.strip()
+    container_id = unit if native else None
+    if not native:
+        result = subprocess.run(
+            [docker_path, "ps", "-q", "-f", f"name={container_name}"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            container_id = result.stdout.strip()
     total_msgs = sum(int(r['total']) for r in client_results)
     total_success = sum(int(r['success']) for r in client_results)
     total_fail = sum(int(r['fail']) for r in client_results)
@@ -607,14 +628,14 @@ def main():
         record["idle_start_epoch"], record["idle_end_epoch"] = idle
     output_json = finish_raw(output_json, record)
     total_energy, avg_power, total_samples = energy["energy_j"], energy["avg_power_w"], energy["samples"]
-    cpu_limit = csv_columns.container_cpu_limit(docker_path, container_name)
-    stop_server_container(container_name, docker_path)
+    cpu_limit = "none" if native else csv_columns.container_cpu_limit(docker_path, container_name)
+    stop_server()
 
     min_latency = min(all_latencies) if all_latencies else 0.0
     max_latency = max(all_latencies) if all_latencies else 0.0
     cpu, mem = resource_results['cpu'], resource_results['mem']
     csv_columns.append(output_csv, csv_columns.WS_COLUMNS, {
-        "Container Name": container_name, **csv_columns.run_fields(),
+        "Container Name": container_name, **csv_columns.run_fields(args.deploy),
         "Test Type": args.measurement_type, "Pattern": args.pattern, "Num Clients": args.clients,
         "Message Size (KB)": args.size_kb,
         "Rate (msg/s)": args.rate if args.pattern == 'stream' else '',

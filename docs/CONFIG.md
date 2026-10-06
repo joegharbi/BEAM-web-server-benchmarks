@@ -67,6 +67,14 @@ With VARIANTS: the order of the servers and their variants within each repeat.
 | `separate` | all servers as built, then all of the first variant, ...; which group goes first rotates from repeat to repeat, so each group runs early and late equally often |
 | `mixed` | servers and variants shuffled together |
 
+### `DEPLOY`
+
+Default: `container`
+
+How each selected server runs. container: its image in Docker. native: the same program copied out of the image and run without Docker, in a systemd user scope (only the box differs; same build, same settings). Both: every server (and variant) is measured both ways, the native runs named <server>-native, in the same shuffled order. Native needs a server that follows the contract (README: /app, /start.sh using APP_DIR).
+
+Unit: container native (one or both)
+
 ### `BENCHMARKS_DIR`
 
 Default: `(empty)`

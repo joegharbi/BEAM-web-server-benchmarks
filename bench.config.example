@@ -16,6 +16,8 @@ SERVERS=
 VARIANTS=
 # with VARIANTS: separate (one variant after the other, rotating) | mixed
 VARIANT_ORDER=separate
+# container | native | container native (each server both ways; native = no Docker)
+DEPLOY=container
 # folder searched for servers; empty = benchmarks/
 BENCHMARKS_DIR=
 

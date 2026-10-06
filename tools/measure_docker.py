@@ -349,6 +349,7 @@ def run_repeats(args):
     ]
     if args.container_name:
         base_cmd += ["--container_name", args.container_name]
+    base_cmd += ["--deploy", args.deploy]
     if args.max_workers is not None:
         base_cmd += ["--max_workers", str(args.max_workers)]
     if args.measurement_type:
@@ -450,7 +451,7 @@ def main():
 
     cleanup_existing_scaphandre()
     if is_measure_quiet() and not args.verbose:
-        measure_quiet_msg(f"{container_name} | Docker start + HTTP readiness wait …")
+        measure_quiet_msg(f"{container_name} | {'native start (no Docker)' if args.deploy == 'native' else 'Docker start'} + HTTP readiness wait …")
     logger.info(f"Starting container '{container_name}'...")
     native = args.deploy == "native"
     if native:
@@ -586,7 +587,7 @@ def main():
     http_workers_label = http_max_workers_label(args)
     cpu, mem = resource_results['cpu'], resource_results['mem']
     save_results_to_csv(args.output_csv, {
-        "Container Name": args.server_image, **csv_columns.run_fields(),
+        "Container Name": container_name, **csv_columns.run_fields(args.deploy),
         "Type": measurement_type, "Total Requests": int(results_counter['total']),
         "HTTP Max Workers": http_workers_label, "HTTP Connection Mode": args.connection,
         "Successful Requests": int(results_counter['success']), "Failed Requests": int(results_counter['failure']),

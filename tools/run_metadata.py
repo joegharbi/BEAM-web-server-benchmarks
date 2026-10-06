@@ -101,6 +101,8 @@ def memory_gb():
 def image_id(image):
     """Short content ID of a Docker image, so a rebuilt image is never mistaken for the old one."""
     full = _run(["docker", "image", "inspect", "--format", "{{.Id}}", image])
+    if not full and image.endswith("-native"):
+        return image_id(image[:-len("-native")])        # DEPLOY=native: <image>-native runs <image>
     return full.split(":", 1)[-1][:12] if full else ""
 
 

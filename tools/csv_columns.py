@@ -17,7 +17,7 @@ old files are never rewritten.
 import csv
 import os
 
-RUN = ["Container Name", "Variant", "Repeat", "Session", "Measured At (UTC)"]
+RUN = ["Container Name", "Variant", "Deploy", "Repeat", "Session", "Measured At (UTC)"]
 HTTP_WORKLOAD = ["Type", "Total Requests", "HTTP Max Workers", "HTTP Connection Mode"]
 WS_WORKLOAD = ["Test Type", "Pattern", "Num Clients", "Message Size (KB)", "Rate (msg/s)", "Bursts",
                "Interval (s)", "Duration (s)"]
@@ -59,7 +59,7 @@ RENAMED = {
 }
 
 # Columns that describe a run rather than measure it: never summarised as statistics
-NOT_MEASURED = {"Variant", "Repeat", "Session", "Measured At (UTC)", "Container CPU Limit", "Host CPUs",
+NOT_MEASURED = {"Variant", "Deploy", "Repeat", "Session", "Measured At (UTC)", "Container CPU Limit", "Host CPUs",
                 "Ready Check", "Raw Log", "Energy Sampling Step (ms)"}
 
 SCOPES = ("Container", "Host")
@@ -113,10 +113,11 @@ def append(path, columns, values):
         w.writerow(row)
 
 
-def run_fields():
-    """Block 1 values set by run_benchmarks.sh for every measurement (empty when run by hand)."""
+def run_fields(deploy="container"):
+    """Block 1 values set by run_benchmarks.sh for every measurement (empty when run by hand), and
+    how the server ran (`deploy`: container or native, from the tool's --deploy)."""
     import datetime
-    return {"Variant": os.environ.get("MEASURE_VARIANT", ""),
+    return {"Variant": os.environ.get("MEASURE_VARIANT", ""), "Deploy": deploy,
             "Repeat": os.environ.get("MEASURE_REPEAT", ""),
             "Session": os.environ.get("MEASURE_SESSION", ""),
             "Measured At (UTC)": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}

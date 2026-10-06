@@ -26,8 +26,8 @@ HTTP columns, WebSocket files the same with the WebSocket columns.
 
 | Block | Columns |
 |---|---|
-| 1. What was measured (HTTP) | Container Name, Variant, Repeat, Session, Measured At (UTC), Type, Total Requests, HTTP Max Workers, HTTP Connection Mode |
-| 1. What was measured (WebSocket) | Container Name, Variant, Repeat, Session, Measured At (UTC), Test Type, Pattern, Num Clients, Message Size (KB), Rate (msg/s), Bursts, Interval (s), Duration (s) |
+| 1. What was measured (HTTP) | Container Name, Variant, Deploy, Repeat, Session, Measured At (UTC), Type, Total Requests, HTTP Max Workers, HTTP Connection Mode |
+| 1. What was measured (WebSocket) | Container Name, Variant, Deploy, Repeat, Session, Measured At (UTC), Test Type, Pattern, Num Clients, Message Size (KB), Rate (msg/s), Bursts, Interval (s), Duration (s) |
 | 2. Performance (HTTP) | Successful Requests, Failed Requests, Execution Time (s), Requests/s |
 | 2. Performance (WebSocket) | Total Messages, Successful Messages, Failed Messages, Execution Time (s), Messages/s, Throughput (MB/s), Avg Latency (ms), Min Latency (ms), Max Latency (ms) |
 | 3. Container | Container CPU Limit, Container Energy (J), Container Avg Power (W), Container Avg CPU (%), Container Peak CPU (%), Container Total CPU (%*s), Container Avg Mem (MB), Container Peak Mem (MB), Container Total Mem (MB*s) |
@@ -38,6 +38,11 @@ HTTP columns, WebSocket files the same with the WebSocket columns.
 Files written by earlier releases use older names (for example `Total Energy (J)` for `Container Energy (J)`,
 `Num CPUs` for `Host CPUs`); the statistics and the graph window read them under the current names. The
 full table of renamed columns is in the README.
+
+**Deploy:** how the server ran: `container` (its image in Docker) or `native` (the same program copied out of
+the image, run without Docker in a systemd user scope; `DEPLOY` in the config). Native rows are named
+`<server>-native`; for them the Container columns describe the scope (its cgroup), and Container CPU Limit is
+`none`. Files written before this column read as empty (container).
 
 **HTTP Max Workers:** the client's parallel requests (`HTTP_MAX_WORKERS`, default 100; `system` = Python's
 default pool size, recorded as **System default**).

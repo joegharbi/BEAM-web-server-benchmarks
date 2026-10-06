@@ -117,6 +117,14 @@ def _variants(v):
     return ";".join(out)
 
 
+def _deploy(v):
+    """'container', 'native' or both, each once."""
+    items = v.split()
+    if not items or len(set(items)) != len(items) or not set(items) <= {"container", "native"}:
+        raise ValueError("must be container, native, or both separated by a space")
+    return " ".join(items)
+
+
 def _path(v):
     if any(c.isspace() for c in v):
         raise ValueError("must be a folder path without spaces")
@@ -212,6 +220,12 @@ SCHEMA = {
              "For each variant an image <server>-<NAME> is built at the start (the server's image plus these\n"
              "environment variables) and measured next to the server as it is. Example, BEAM scheduler\n"
              "busy-waiting off: nobw:ERL_FLAGS=+sbwt none +sbwtdcpu none +sbwtdio none. Empty = no variants."),
+    "DEPLOY": dict(default="container", check=_deploy, unit="container native (one or both)",
+        help="How each selected server runs. container: its image in Docker. native: the same program\n"
+             "copied out of the image and run without Docker, in a systemd user scope (only the box differs;\n"
+             "same build, same settings). Both: every server (and variant) is measured both ways, the native\n"
+             "runs named <server>-native, in the same shuffled order. Native needs a server that follows\n"
+             "the contract (README: /app, /start.sh using APP_DIR)."),
     "VARIANT_ORDER": dict(default="separate", check=_choice("separate", "mixed"),
         help="With VARIANTS: the order of the servers and their variants within each repeat.",
         options={"separate": "all servers as built, then all of the first variant, ...; which group goes first\n"
@@ -489,6 +503,7 @@ SHORT = {
     "MEASURE": "kinds: static dynamic websocket concurrency payload",
     "SERVERS": "server folder names, or TYPE:IMAGE; empty = every server found",
     "VARIANTS": "also measure each server with these container settings, e.g. nobw:ERL_FLAGS=+sbwt none",
+    "DEPLOY": "container | native | container native (each server both ways; native = no Docker)",
     "VARIANT_ORDER": "with VARIANTS: separate (one variant after the other, rotating) | mixed",
     "BENCHMARKS_DIR": "folder searched for servers; empty = benchmarks/",
     "REPEATS": "runs of every measurement (each repeat = one pass over all servers)",
@@ -541,7 +556,7 @@ SHORT = {
 # The example measurement file; machine settings live in the profiles (configs/machine/)
 EXAMPLE_LAYOUT = [
     ("Machine profile", ["MACHINE"]),
-    ("What to measure", ["MEASURE", "SERVERS", "VARIANTS", "VARIANT_ORDER", "BENCHMARKS_DIR"]),
+    ("What to measure", ["MEASURE", "SERVERS", "VARIANTS", "VARIANT_ORDER", "DEPLOY", "BENCHMARKS_DIR"]),
     ("How much", ["REPEATS", "HTTP_REQUESTS", "IDLE_SECONDS", "WARMUP_SECONDS"]),
     ("Failures and raw data", ["FAILURES_STOP_AFTER", "RAW_DATA"]),
     ("Order of the runs", ["SHUFFLE", "SHUFFLE_SEED"]),

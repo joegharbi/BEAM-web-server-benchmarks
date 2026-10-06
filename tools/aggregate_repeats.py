@@ -52,7 +52,7 @@ def t95(df):
 
 # Columns that name a configuration. Rows sharing these are repeats of one thing.
 # Everything else that looks numeric is averaged.
-KEY_COLS = ["Container Name", "Variant", "Type", "Test Type", "Total Requests", "HTTP Max Workers",
+KEY_COLS = ["Container Name", "Variant", "Deploy", "Type", "Test Type", "Total Requests", "HTTP Max Workers",
             "HTTP Connection Mode", "Pattern", "Num Clients", "Message Size (KB)",
             "Rate (msg/s)", "Bursts", "Interval (s)", "Duration (s)", "Energy Sampling Step (ms)"]
 
