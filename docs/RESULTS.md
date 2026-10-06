@@ -33,7 +33,7 @@ HTTP columns, WebSocket files the same with the WebSocket columns.
 | 3. Container | Container CPU Limit, Container Energy (J), Container Avg Power (W), Container Avg CPU (%), Container Peak CPU (%), Container Total CPU (%*s), Container Avg Mem (MB), Container Peak Mem (MB), Container Total Mem (MB*s) |
 | 4. Host | Host CPUs, Host Energy (J), Host Avg Power (W), Host CPU Temp Start (C), Host CPU Temp End (C), Host Throttled (ms) |
 | 5. Idle | Idle Time (s), Container Idle Energy (J), Container Idle Avg Power (W), Host Idle Avg Power (W) |
-| 6. How the run went | Warm-up (s), Waited Before Start (s), Waited Before Load (s), Ready Check, Energy Samples, Energy Sampling Step (ms), Energy Window Coverage, Raw Log |
+| 6. How the run went | Warm-up (s), Waited Before Start (s), Waited Before Load (s), Ready Check, Energy Samples, Energy Sampling Step (ms), Energy Window Coverage, Raw Log, Server Processes |
 
 Files written by earlier releases use older names (for example `Total Energy (J)` for `Container Energy (J)`,
 `Num CPUs` for `Host CPUs`); the statistics and the graph window read them under the current names. The
@@ -43,6 +43,10 @@ full table of renamed columns is in the README.
 the image, run without Docker in a systemd user scope; `DEPLOY` in the config). Native rows are named
 `<server>-native`; for them the Container columns describe the scope (its cgroup), and Container CPU Limit is
 `none`. Files written before this column read as empty (container).
+
+**Server Processes:** the processes found in the server's box (container or scope) at the end of the load,
+e.g. `beam.smp, erl_child_setup`. Anything besides the server (`epmd`, a build tool, a keep-alive loop) means
+the run measured more than the server (README: server contract); the tool also prints a warning.
 
 **HTTP Max Workers:** the client's parallel requests (`HTTP_MAX_WORKERS`, default 100; `system` = Python's
 default pool size, recorded as **System default**).

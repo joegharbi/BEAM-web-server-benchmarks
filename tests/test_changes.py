@@ -1714,6 +1714,72 @@ class Deploy(WhatToMeasure):
             self.assertEqual(run_metadata.image_id("st-zzz"), "")
 
 
+
+class ServerContract(unittest.TestCase):
+    """README server contract: only the server runs in its box (recorded), native only on the host's OS."""
+
+    def test_processes_of_a_box(self):
+        import server_box
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "cgroup.procs"), "w") as fh:
+            fh.write(f"{os.getpid()}\n{NOPID}\n")                  # a gone process is skipped
+        with open(f"/proc/{os.getpid()}/comm") as fh:
+            me = fh.read().strip()
+        self.assertEqual(server_box.processes(d), [me])
+        self.assertEqual(server_box.processes(os.path.join(d, "missing")), [])
+        shutil.rmtree(d)
+
+    def test_description_and_helpers(self):
+        import server_box
+        names = ["sh", "beam.smp", "epmd", "sh", "erl_child_setup"]
+        self.assertEqual(server_box.describe(names), "beam.smp, epmd, erl_child_setup, 2x sh")
+        self.assertEqual(server_box.helpers(names), ["epmd (Erlang port mapper (the node has a name))"])
+        self.assertEqual(server_box.helpers(["beam.smp", "erl_child_setup"]), [])
+        self.assertEqual(server_box.helpers(["java"]), [])
+
+    def test_recorded_with_every_run(self):
+        import csv_columns
+        self.assertEqual(csv_columns.RUN_QUALITY[-1], "Server Processes")
+        self.assertIn("Server Processes", csv_columns.NOT_MEASURED)
+        for name in ("measure_docker.py", "measure_websocket.py"):
+            with open(os.path.join(ROOT, "tools", name)) as fh:
+                src = fh.read()
+            self.assertIn('"Server Processes": server_box.describe(box_processes)', src)
+            self.assertLess(src.index("box_processes = server_box.processes(box)"), src.index("\n    stop_server()\n"))
+
+    def bundle(self, start="exec $APP_DIR/bin/x", os_release='ID=debian\nVERSION_ID="13"\n'):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "start.sh"), "w") as fh:
+            fh.write(start)
+        with open(os.path.join(d, "os-release"), "w") as fh:
+            fh.write(os_release)
+        host = os.path.join(d, "host-os-release")
+        with open(host, "w") as fh:
+            fh.write('PRETTY_NAME="Debian GNU/Linux 13 (trixie)"\nID=debian\nVERSION_ID="13"\n')
+        return d, host
+
+    def problem(self, **kw):
+        import native_server
+        from unittest import mock
+        d, host = self.bundle(**kw)
+        with mock.patch.object(native_server, "unpack", return_value=d):
+            why = native_server.problem("img", host_os_release=host)
+        shutil.rmtree(d)
+        return why
+
+    def test_native_same_os(self):
+        self.assertEqual(self.problem(), "")
+        self.assertEqual(self.problem(os_release=""), "")                    # no OS in the image (FROM scratch)
+        self.assertEqual(self.problem(os_release='ID=alpine\nVERSION_ID=3.23.6\n'),
+                         "built on alpine 3.23.6, but this machine runs debian 13 (build it on the host's OS)")
+        self.assertIn("debian 12", self.problem(os_release='ID=debian\nVERSION_ID="12"\n'))
+
+    def test_native_all_problems_listed(self):
+        why = self.problem(start="exec /app/bin/x", os_release="ID=alpine\nVERSION_ID=3.23.6\n")
+        self.assertIn("does not use APP_DIR", why)
+        self.assertIn("built on alpine", why)
+
+
 class TerminatedMeasurement(unittest.TestCase):
     """A measurement stopped by SIGTERM (shutdown, timeout, kill) leaves no container or Scaphandre behind."""
     def test_sigterm_removes_container_and_stops_scaphandre(self):

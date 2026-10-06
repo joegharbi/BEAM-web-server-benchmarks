@@ -45,14 +45,15 @@ def image_env(image, docker_path="docker"):
 
 
 def unpack(image, docker_path="docker", root=None):
-    """Copy /app and /start.sh out of the image into <root>/<image>/; reused while the image is the same."""
+    """Copy /app, /start.sh and the image's OS name (os-release) out of the image into <root>/<image>/;
+    reused while the image is the same."""
     root = root or NATIVE_DIR
     target = os.path.join(root, image)
     image_id = _docker(docker_path, "image", "inspect", "--format", "{{.Id}}", image)
     stamp = os.path.join(target, ".image_id")
     try:
         with open(stamp, encoding="utf-8") as fh:
-            if fh.read().strip() == image_id:
+            if fh.read().strip() == image_id and os.path.exists(os.path.join(target, "os-release")):
                 return os.path.abspath(target)
     except OSError:
         pass
@@ -62,6 +63,10 @@ def unpack(image, docker_path="docker", root=None):
     try:
         _docker(docker_path, "cp", f"{box}:/app", os.path.join(work, "app"))
         _docker(docker_path, "cp", f"{box}:/start.sh", os.path.join(work, "start.sh"))
+        # -L: /etc/os-release is usually a link; empty when the image has none (e.g. FROM scratch)
+        if subprocess.run([docker_path, "cp", "-L", f"{box}:/etc/os-release", os.path.join(work, "os-release")],
+                          capture_output=True, text=True).returncode != 0:
+            open(os.path.join(work, "os-release"), "w").close()
     finally:
         subprocess.run([docker_path, "rm", "-f", box], capture_output=True, text=True, check=False)
     with open(os.path.join(work, ".image_id"), "w", encoding="utf-8") as fh:
@@ -157,9 +162,20 @@ def collect_stats(unit, stop_event, interval=0.5):
     return stats(cpu_usage), stats(mem_usage)
 
 
-def problem(image, docker_path="docker"):
+def os_name(path):
+    """'debian 13' from an os-release file ("" when unknown)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            fields = dict(line.rstrip("\n").split("=", 1) for line in fh if "=" in line)
+    except OSError:
+        return ""
+    return " ".join(fields.get(k, "").strip('"') for k in ("ID", "VERSION_ID")).strip()
+
+
+def problem(image, docker_path="docker", host_os_release="/etc/os-release"):
     """Why the image cannot run natively ("" when it can): it must follow the server contract
-    (README): the server under /app, started by /start.sh, which finds it under $APP_DIR."""
+    (README): the server under /app, started by /start.sh, which finds it under $APP_DIR, built on
+    the host's OS."""
     try:
         folder = unpack(image, docker_path)
     except (subprocess.CalledProcessError, OSError) as e:
@@ -170,9 +186,15 @@ def problem(image, docker_path="docker"):
             script = fh.read()
     except OSError:
         return "no /start.sh in the image"
+    problems = []
     if "APP_DIR" not in script:
-        return "its start.sh does not use APP_DIR (it would run the server from /app, which is not there natively)"
-    return ""
+        problems.append("its start.sh does not use APP_DIR (it would run the server from /app, which is not there natively)")
+    # Natively the bundle uses the host's system libraries (glibc, OpenSSL): the image must be built on
+    # the host's OS. An image without an OS (FROM scratch, e.g. a static Go binary) needs none.
+    image_os, host_os = os_name(os.path.join(folder, "os-release")), os_name(host_os_release)
+    if image_os and host_os and image_os != host_os:
+        problems.append(f"built on {image_os}, but this machine runs {host_os} (build it on the host's OS)")
+    return "; ".join(problems)
 
 
 if __name__ == "__main__":

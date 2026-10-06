@@ -31,7 +31,7 @@ HOST = ["Host CPUs", "Host Energy (J)", "Host Avg Power (W)", "Host CPU Temp Sta
         "Host Throttled (ms)"]
 IDLE = ["Idle Time (s)", "Container Idle Energy (J)", "Container Idle Avg Power (W)", "Host Idle Avg Power (W)"]
 RUN_QUALITY = ["Warm-up (s)", "Waited Before Start (s)", "Waited Before Load (s)", "Ready Check", "Energy Samples",
-               "Energy Sampling Step (ms)", "Energy Window Coverage", "Raw Log"]
+               "Energy Sampling Step (ms)", "Energy Window Coverage", "Raw Log", "Server Processes"]
 
 HTTP_COLUMNS = RUN + HTTP_WORKLOAD + HTTP_PERFORMANCE + CONTAINER + HOST + IDLE + RUN_QUALITY
 WS_COLUMNS = RUN + WS_WORKLOAD + WS_PERFORMANCE + CONTAINER + HOST + IDLE + RUN_QUALITY
@@ -59,7 +59,7 @@ RENAMED = {
 }
 
 # Columns that describe a run rather than measure it: never summarised as statistics
-NOT_MEASURED = {"Variant", "Deploy", "Repeat", "Session", "Measured At (UTC)", "Container CPU Limit", "Host CPUs",
+NOT_MEASURED = {"Variant", "Deploy", "Server Processes", "Repeat", "Session", "Measured At (UTC)", "Container CPU Limit", "Host CPUs",
                 "Ready Check", "Raw Log", "Energy Sampling Step (ms)"}
 
 SCOPES = ("Container", "Host")

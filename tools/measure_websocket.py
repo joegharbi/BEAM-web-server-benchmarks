@@ -14,6 +14,7 @@ import websockets
 
 import measure_failure
 import native_server
+import server_box
 import readiness
 import run_metadata
 from scaphandre_energy import compute_window_energy, finish_raw, raw_json_path, scaphandre_json_args, window_record
@@ -629,6 +630,11 @@ def main():
     output_json = finish_raw(output_json, record)
     total_energy, avg_power, total_samples = energy["energy_j"], energy["avg_power_w"], energy["samples"]
     cpu_limit = "none" if native else csv_columns.container_cpu_limit(docker_path, container_name)
+    # Which processes ran in the server's box (README server contract: only the server runs)
+    box = native_server.cgroup_dir(unit) if native else server_box.container_cgroup(docker_path, container_name)
+    box_processes = server_box.processes(box)
+    for helper in server_box.helpers(box_processes):
+        logger.warning("%s | not only the server ran in its box: %s (README: server contract)", container_name, helper)
     stop_server()
 
     min_latency = min(all_latencies) if all_latencies else 0.0
@@ -656,6 +662,7 @@ def main():
         "Energy Samples": total_samples, "Energy Sampling Step (ms)": energy["step_ms"],
         "Energy Window Coverage": round(energy["coverage"], 4),
         "Raw Log": csv_columns.raw_log_field(output_json),
+        "Server Processes": server_box.describe(box_processes),
     })
 
     if is_measure_quiet() and not args.verbose:

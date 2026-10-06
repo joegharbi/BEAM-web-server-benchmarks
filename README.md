@@ -298,22 +298,33 @@ Each directory containing a `Dockerfile` under `benchmarks/` is one benchmark. T
 
 ## Adding a Server
 
-Any server in any language can be measured. The server contract:
+Any server in any language can be measured. The server contract is the same for every language:
+an image is a **self-contained bundle** that runs **only the server**.
 
+- **Bundle:** the program *and its runtime* live under `/app` (a BEAM release with its own ERTS, a
+  jar with its own Java runtime from `jlink`, a Go binary, ...), started by `/start.sh`, which
+  finds them under `$APP_DIR` (default `/app`). Nothing has to be installed on the host.
 - **Port:** listen on the port given in the environment variable `PORT` (default 8001 when it is
   unset), and `EXPOSE` the same port in the Dockerfile. The framework sets `PORT` to the exposed
   port and maps host port 8001 to it.
-- **HTTP** (`static/`, `dynamic/`): answer `GET /` with status 200, and should support HTTP/1.1
-  keep-alive (the client reuses connections).
-- **WebSocket** (`websocket/`): accept a WebSocket on `/ws` and echo every message back.
 - **Runtime options from the environment:** the runtime's own variable (`ERL_FLAGS` for the BEAM,
   `JAVA_TOOL_OPTIONS` for the JVM) must reach it, so `VARIANTS` can change settings without
   touching the server.
-- **Lean:** start the server the way it is deployed (a release, not a build tool), with only what
-  it needs. BEAM servers run without a node name, so no `epmd` starts.
-- **Native mode:** the image keeps the server under `/app` and starts it with `/start.sh`, which
-  finds it under `$APP_DIR` (default `/app`). Native mode (`tools/native_server.py`) copies both
-  out of the image and runs the same script without Docker, in a systemd user scope.
+- **Only the server runs:** start it the way it is deployed (a release or `java -jar`, not a build
+  tool such as `mix`, `gleam`, `rebar3`, Maven or Gradle), with no helper services and no
+  keep-alive loops. BEAM servers run without a node name, so no `epmd` starts. A system that
+  really needs a helper (e.g. a RabbitMQ cluster needs `epmd`) runs it inside the same image, so
+  its energy is counted with the system, not hidden. The processes found in the server's box
+  (container or scope) are recorded with every run (CSV column `Server Processes`), and known
+  helpers are reported.
+- **HTTP** (`static/`, `dynamic/`): answer `GET /` with status 200, and should support HTTP/1.1
+  keep-alive (the client reuses connections).
+- **WebSocket** (`websocket/`): accept a WebSocket on `/ws` and echo every message back.
+- **Same OS as the host, for native mode:** natively the bundle still uses the host's system
+  libraries (glibc, OpenSSL), so the image must be built on the host's OS and version (Debian 13
+  here: `debian:trixie-slim`). Native mode (`DEPLOY`, `tools/native_server.py`) copies `/app` and
+  `/start.sh` out of the image and runs the same script without Docker, in a systemd user scope;
+  it refuses an image whose OS differs from the host's before anything starts.
 
 Servers built before this contract listen on port 80 and ignore `PORT`; they keep working, because
 the framework maps host port 8001 to whatever port the Dockerfile exposes.
@@ -321,7 +332,8 @@ the framework maps host port 8001 to whatever port the Dockerfile exposes.
 Steps:
 
 1. Create `benchmarks/<type>/<lang>/<framework>/<container>/` with a `Dockerfile`.
-2. Read `PORT` (default 8001) and `EXPOSE 8001`. Ensure ulimit 100000 (health check enforces this).
+2. Follow the contract above: bundle under `/app`, `/start.sh` with `$APP_DIR`, `PORT` (default 8001)
+   and `EXPOSE 8001`, only the server running. Ensure ulimit 100000 (health check enforces this).
 3. Run `make build` → `make check-health` → `make run-super-quick`.
 
 ## Commands
