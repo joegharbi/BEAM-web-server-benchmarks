@@ -810,7 +810,7 @@ bench_select_from_config() {
     # An image built before its recipe last changed would be measured in its old form
     local stale
     stale=$("$PYTHON_PATH" -c 'import sys; sys.path.insert(0, "tools"); import run_metadata as m
-for name, f in m.stale_images(sys.argv[1], sys.argv[2:]): print(f"  {name}: {f} changed after the image was built")' \
+for name, why in m.stale_images(sys.argv[1], sys.argv[2:]): print(f"  {name}: {why}")' \
         "$BENCHMARKS_DIR" "${SELECT_STATIC[@]}" "${SELECT_DYNAMIC[@]}" "${SELECT_WEBSOCKET[@]}")
     if [ -n "$stale" ]; then
         echo -e "${RED}[ERROR]${NC} These images are older than their recipe. Rebuild them first (make build):"
@@ -1223,7 +1223,7 @@ bench_ready_gate() {
         --temp-reference "$BENCH_TEMP_REFERENCE" --temp-margin "$CFG_READY_TEMP_MARGIN_C" \
         --cpu-reference "$BENCH_CPU_REFERENCE" --cpu-margin "$CFG_READY_CPU_BUSY_MARGIN_PERCENT" \
         --no-throttling "$CFG_READY_NO_THROTTLING" \
-        --cpu-speed "$CFG_READY_CPU_SPEED" \
+        --cpu-speed "${BENCH_CPU_SPEED:-$CFG_READY_CPU_SPEED}" \
         --check-every "$CFG_READY_CHECK_EVERY_SECONDS" --consecutive "$CFG_READY_CONSECUTIVE_CHECKS" \
         --min-wait "$CFG_READY_MIN_WAIT_SECONDS" --max-wait "$CFG_READY_MAX_WAIT_SECONDS" \
         --on-timeout "$CFG_READY_ON_TIMEOUT" --on-battery "$CFG_ON_BATTERY" || rc=$?
@@ -1628,7 +1628,22 @@ main() {
         export MEASURE_READY_TEMP_REFERENCE_C="$BENCH_TEMP_REFERENCE"
         export MEASURE_READY_TEMP_MARGIN_C="$CFG_READY_TEMP_MARGIN_C"
         export MEASURE_READY_NO_THROTTLING="$CFG_READY_NO_THROTTLING"
-        export MEASURE_READY_CPU_SPEED="$CFG_READY_CPU_SPEED"
+        # The expected CPU speed, fixed once for the whole run: every check before and during a load
+        # uses this number (live firmware values can move together with a cap)
+        BENCH_CPU_SPEED="$CFG_READY_CPU_SPEED"
+        if [ "$CFG_READY_CPU_SPEED" = "auto" ]; then
+            local speed_mhz="" speed_source=""
+            read -r speed_mhz speed_source <<< "$("$PYTHON_PATH" ./tools/run_metadata.py expected-cpu-speed)"
+            if [ -n "$speed_mhz" ]; then
+                BENCH_CPU_SPEED="$speed_mhz"
+                print_status "INFO" "Expected CPU speed: $speed_mhz MHz ($speed_source); a run capped below it is not ready, or invalid during its load"
+                [ "$speed_source" = "base_frequency" ] && print_status "WARNING" "The CPU states no rated speed; base_frequency can move with a firmware cap. Better: READY_CPU_SPEED=<MHz> in the config"
+            else
+                BENCH_CPU_SPEED=off
+                print_status "INFO" "Expected CPU speed unknown on this machine (CPU speed check off)"
+            fi
+        fi
+        export MEASURE_READY_CPU_SPEED="$BENCH_CPU_SPEED"
         export MEASURE_READY_CHECK_EVERY_SECONDS="$CFG_READY_CHECK_EVERY_SECONDS"
         export MEASURE_READY_CONSECUTIVE_CHECKS="$CFG_READY_CONSECUTIVE_CHECKS"
         export MEASURE_READY_MAX_WAIT_SECONDS="$CFG_READY_MAX_WAIT_SECONDS"
@@ -1658,7 +1673,7 @@ main() {
         --set resting_temp_c="$BENCH_RESTING_TEMP" --set ready_temp_reference_c="$BENCH_TEMP_REFERENCE" \
         --set ready_check_every_s="${CFG_READY_CHECK_EVERY_SECONDS:-}" --set ready_temp_margin_c="${CFG_READY_TEMP_MARGIN_C:-}" \
         --set resting_cpu_busy_percent="$BENCH_RESTING_CPU" --set ready_cpu_busy_reference_percent="$BENCH_CPU_REFERENCE" \
-        --set ready_cpu_busy_margin_percent="${CFG_READY_CPU_BUSY_MARGIN_PERCENT:-}" --set ready_no_throttling="${CFG_READY_NO_THROTTLING:-}" --set ready_cpu_speed="${CFG_READY_CPU_SPEED:-}" \
+        --set ready_cpu_busy_margin_percent="${CFG_READY_CPU_BUSY_MARGIN_PERCENT:-}" --set ready_no_throttling="${CFG_READY_NO_THROTTLING:-}" --set ready_cpu_speed="${CFG_READY_CPU_SPEED:-}" --set ready_cpu_speed_expected_mhz="${BENCH_CPU_SPEED:-}" \
         --set ready_consecutive_checks="${CFG_READY_CONSECUTIVE_CHECKS:-}" --set ready_min_wait_s="${CFG_READY_MIN_WAIT_SECONDS:-}" \
         --set ready_max_wait_s="${CFG_READY_MAX_WAIT_SECONDS:-}" --set ready_on_timeout="${CFG_READY_ON_TIMEOUT:-}" \
         --set env_governor="$CFG_ENV_GOVERNOR" \

@@ -23,6 +23,7 @@ import argparse
 import csv
 import datetime
 import glob
+import hashlib
 import json
 import os
 import platform
@@ -170,16 +171,40 @@ def cpu_speed_limit_mhz():
     return _min_mhz("/sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq")
 
 
-def expected_cpu_speed_mhz():
-    """The speed limit the CPU should have with the current turbo setting (MHz), or None.
+def rated_cpu_speed_mhz(cpuinfo="/proc/cpuinfo"):
+    """The CPU's rated base speed from its model name (Intel: '... CPU @ 1.80GHz'), or None. Unlike
+    base_frequency, which the firmware can lower together with a cap, it never changes."""
+    try:
+        with open(cpuinfo, encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("model name"):
+                    m = re.search(r"@\s*([0-9.]+)\s*GHz", line)
+                    return int(round(float(m.group(1)) * 1000)) if m else None
+    except OSError:
+        pass
+    return None
 
-    Turbo off: the base speed (Intel base_frequency). Turbo on: the hardware maximum.
+
+def expected_cpu_speed():
+    """(MHz, source): the speed limit the CPU should have with the current turbo setting, or (None, "").
+
+    Turbo off: the rated base speed ("rated"); without one in the model name, the firmware's
+    base_frequency ("base_frequency"), which can move with a cap, so a fixed READY_CPU_SPEED is better
+    there. Turbo on: the hardware maximum ("maximum"). run_benchmarks.sh fixes it once per run.
     """
     if turbo_state() == "off":
+        rated = rated_cpu_speed_mhz()
+        if rated:
+            return rated, "rated"
         base = _min_mhz("/sys/devices/system/cpu/cpu*/cpufreq/base_frequency")
         if base:
-            return base
-    return _min_mhz("/sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq")
+            return base, "base_frequency"
+    top = _min_mhz("/sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq")
+    return (top, "maximum") if top else (None, "")
+
+
+def expected_cpu_speed_mhz():
+    return expected_cpu_speed()[0]
 
 
 def ac_power():
@@ -396,12 +421,35 @@ def file_sha256(path):
         return ""
 
 
+# The fingerprint of a server folder's content, stored in its image at build time (make build)
+RECIPE_LABEL = "wseb.recipe"
+_NOT_RECIPE = {"_build", "build", "deps", "node_modules", ".git"}      # build output, not the recipe
+
+
+def recipe_hash(folder):
+    """SHA-256 over the names and content of every file of a server folder (not their times), so it
+    changes exactly when the recipe changes."""
+    h = hashlib.sha256()
+    paths = []
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = [d for d in dirs if d not in _NOT_RECIPE]
+        paths += [os.path.join(root, f) for f in files]
+    for path in sorted(paths, key=lambda p: os.path.relpath(p, folder)):
+        h.update(os.path.relpath(path, folder).encode() + b"\0")
+        with open(path, "rb") as fh:
+            h.update(fh.read())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
 def stale_images(benchmarks_dir, names):
-    """[(image, newest changed file)] for images built before their recipe folder last changed.
+    """[(image, reason)] for images whose recipe folder changed since they were built.
 
     A server whose Dockerfile, code or configuration changed after its image was built would be
-    measured in its old form; `make build` brings it up to date. Images without a folder (variants,
-    images built elsewhere) are not checked.
+    measured in its old form; `make build` brings it up to date. An image built by make build carries
+    the fingerprint of its folder's content (RECIPE_LABEL), compared exactly; an image without it falls
+    back to comparing times (a rebuild that Docker answers from its cache keeps the old time).
+    Images without a folder (variants, images built elsewhere) are not checked.
     """
     folders = {}
     for root, dirs, files in os.walk(benchmarks_dir):
@@ -409,6 +457,11 @@ def stale_images(benchmarks_dir, names):
             folders[os.path.basename(root)] = root
     stale = []
     for name, folder in sorted(folders.items()):
+        label = _run(["docker", "image", "inspect", "--format", "{{index .Config.Labels \"%s\"}}" % RECIPE_LABEL, name])
+        if label and label != "<no value>":
+            if label != recipe_hash(folder):
+                stale.append((name, "its folder changed after the image was built"))
+            continue
         created = _run(["docker", "image", "inspect", "--format", "{{.Created}}", name])
         if not created:
             continue
@@ -424,7 +477,7 @@ def stale_images(benchmarks_dir, names):
                 if t > newest:
                     newest, newest_file = t, os.path.relpath(os.path.join(root, f), benchmarks_dir)
         if newest > built + 1:
-            stale.append((name, newest_file))
+            stale.append((name, f"{newest_file} changed after the image was built"))
     return stale
 
 
@@ -591,11 +644,12 @@ def write_end(path, csv_paths):
 def main():
     ap = argparse.ArgumentParser(description="Write the provenance of one measurement to <folder>/metadata.json.")
     ap.add_argument("phase", choices=["start", "end", "resume", "resume-info", "reproduce-info", "images",
-                                      "latest-unfinished", "temp"],
+                                      "latest-unfinished", "temp", "recipe-hash", "expected-cpu-speed"],
                     help="start/end/resume of a measurement, images: record the image IDs at the start, "
                          "resume-info/reproduce-info: shell assignments to resume or reproduce a folder, "
                          "latest-unfinished: print the newest folder that can be resumed, "
-                         "temp: print the CPU package temperature")
+                         "temp: print the CPU package temperature, "
+                         "recipe-hash: print the fingerprint of a server folder (make build stores it in the image)")
     ap.add_argument("folder", nargs="?", help="Results folder of the measurement (start/end)")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="Extra setting to record at start (repeatable)")
@@ -603,6 +657,13 @@ def main():
     args = ap.parse_args()
     if args.phase == "temp":
         print(cpu_package_temp_c())
+        return
+    if args.phase == "expected-cpu-speed":
+        mhz, source = expected_cpu_speed()
+        print(f"{mhz} {source}" if mhz else "")
+        return
+    if args.phase == "recipe-hash":
+        print(recipe_hash(args.folder))
         return
     if args.phase == "latest-unfinished":
         print(latest_unfinished(args.folder or "results"))

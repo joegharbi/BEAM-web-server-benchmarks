@@ -323,7 +323,8 @@ SCHEMA = {
              "itself, e.g. when the charger is too weak for the laptop; software cannot lift that cap. The\n"
              "cap can come and go, so it is also watched during every load: a run that was capped at any\n"
              "moment is invalid and measured again (INVALID_RUN_RETRIES).",
-        options={"auto": "expect the base speed with turbo off, the maximum with turbo on (recommended)",
+        options={"auto": "expect the CPU's rated base speed with turbo off (from its model name, e.g. @ 1.80GHz),\n"
+                         "#            the maximum with turbo on; fixed once at the start of a run (recommended)",
                  "off": "do not check", "<MHz>": "expect at least this speed"}),
     "READY_CONSECUTIVE_CHECKS": dict(default="2", check=_int(1), unit="checks, 1 or more",
         help="All checks must pass this many times in a row, so a short dip does not count."),

@@ -261,7 +261,7 @@ Not ready while the CPU is capped below its expected speed. The firmware can cap
 
 | Option | Meaning |
 |---|---|
-| `auto` | expect the base speed with turbo off, the maximum with turbo on (recommended) |
+| `auto` | expect the CPU's rated base speed with turbo off (from its model name, e.g. @ 1.80GHz), the maximum with turbo on; fixed once at the start of a run (recommended) |
 | `off` | do not check |
 | `<MHz>` | expect at least this speed |
 

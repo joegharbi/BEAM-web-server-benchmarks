@@ -2085,12 +2085,60 @@ class StaleImages(unittest.TestCase):
         os.utime(os.path.join(d, "static", "x", "st-a", "Dockerfile"), (built - 100, built - 100))   # older: fine
         os.utime(os.path.join(d, "static", "x", "st-b", "Dockerfile"), (built + 100, built + 100))   # changed after
         saved = run_metadata._run
-        run_metadata._run = lambda cmd, cwd=None: "2026-09-21T14:13:20.123456789+00:00"               # = built
+        # no fingerprint label (built by hand): the times are compared
+        run_metadata._run = lambda cmd, cwd=None: "" if "Labels" in cmd[4] else "2026-09-21T14:13:20.123456789+00:00"
         try:
             stale = run_metadata.stale_images(d, ["st-a", "st-b", "st-a-nobw"])
         finally:
             run_metadata._run = saved
-        self.assertEqual(stale, [("st-b", os.path.join("static", "x", "st-b", "Dockerfile"))])
+        self.assertEqual(stale, [("st-b", os.path.join("static", "x", "st-b", "Dockerfile") + " changed after the image was built")])
+
+    def folder(self, files):
+        d = tempfile.mkdtemp()
+        for rel, text in files.items():
+            os.makedirs(os.path.dirname(os.path.join(d, rel)) or d, exist_ok=True)
+            with open(os.path.join(d, rel), "w") as fh:
+                fh.write(text)
+        return d
+
+    def test_fingerprint_follows_content_not_time(self):
+        import run_metadata
+        d = self.folder({"Dockerfile": "FROM x", "src/a.erl": "-module(a)."})
+        h = run_metadata.recipe_hash(d)
+        os.utime(os.path.join(d, "Dockerfile"), (1, 1))                       # only the time changes
+        self.assertEqual(run_metadata.recipe_hash(d), h)
+        os.makedirs(os.path.join(d, "_build"))                                # build output is not the recipe
+        open(os.path.join(d, "_build", "x.beam"), "w").close()
+        self.assertEqual(run_metadata.recipe_hash(d), h)
+        with open(os.path.join(d, "src/a.erl"), "a") as fh:                  # the content changes
+            fh.write("\n")
+        changed = run_metadata.recipe_hash(d)
+        self.assertNotEqual(changed, h)
+        os.rename(os.path.join(d, "src/a.erl"), os.path.join(d, "src/b.erl"))   # a rename changes it too
+        self.assertNotEqual(run_metadata.recipe_hash(d), changed)
+        shutil.rmtree(d)
+
+    def test_image_with_fingerprint_is_compared_exactly(self):
+        import run_metadata
+        from unittest import mock
+        d = self.folder({"static/x/st-a/Dockerfile": "FROM x", "static/x/st-b/Dockerfile": "FROM y"})
+        current = run_metadata.recipe_hash(os.path.join(d, "static/x/st-a"))
+        labels = {"st-a": current, "st-b": "0" * 64}
+
+        def run(cmd, cwd=None):
+            if "Labels" in cmd[4]:
+                return labels[cmd[-1]]
+            return "2000-01-01T00:00:00Z"                                    # an old time: never used here
+        with mock.patch.object(run_metadata, "_run", run):
+            stale = run_metadata.stale_images(d, ["st-a", "st-b"])
+        self.assertEqual(stale, [("st-b", "its folder changed after the image was built")])
+        shutil.rmtree(d)
+
+    def test_build_stores_the_fingerprint(self):
+        with open(os.path.join(ROOT, "scripts", "install_benchmarks.sh")) as fh:
+            src = fh.read()
+        self.assertIn('docker build -t "$name" --label "wseb.recipe=$recipe" "$d"', src)
+        self.assertIn('recipe=$("$PYTHON" ./tools/run_metadata.py recipe-hash "$d")', src)
 
 
 if __name__ == "__main__":
@@ -2154,11 +2202,39 @@ class CpuSpeedGuard(unittest.TestCase):
         from unittest import mock
         mins = {"base_frequency": 1800, "cpuinfo_max_freq": 4900}
         fake = lambda pattern: next(v for k, v in mins.items() if k in pattern)  # noqa: E731
-        with mock.patch.object(run_metadata, "_min_mhz", side_effect=fake):
+        with mock.patch.object(run_metadata, "_min_mhz", side_effect=fake), \
+                mock.patch.object(run_metadata, "rated_cpu_speed_mhz", return_value=None):
             with mock.patch.object(run_metadata, "turbo_state", return_value="off"):
-                self.assertEqual(run_metadata.expected_cpu_speed_mhz(), 1800)
+                self.assertEqual(run_metadata.expected_cpu_speed(), (1800, "base_frequency"))
             with mock.patch.object(run_metadata, "turbo_state", return_value="on"):
-                self.assertEqual(run_metadata.expected_cpu_speed_mhz(), 4900)
+                self.assertEqual(run_metadata.expected_cpu_speed(), (4900, "maximum"))
+
+    def test_rated_speed_does_not_move_with_the_cap(self):
+        # As seen on 2026-10-06: under the firmware cap base_frequency read 800 MHz too, so a cap at
+        # 800 MHz looked like the expected speed and three capped runs were accepted
+        import run_metadata
+        from unittest import mock
+        d = tempfile.mkdtemp()
+        info = os.path.join(d, "cpuinfo")
+        with open(info, "w") as fh:
+            fh.write("processor\t: 0\nmodel name\t: Intel(R) Core(TM) i7-10610U CPU @ 1.80GHz\n")
+        self.assertEqual(run_metadata.rated_cpu_speed_mhz(info), 1800)
+        with open(info, "w") as fh:
+            fh.write("model name\t: AMD Ryzen 7 PRO 4750U with Radeon Graphics\n")       # no rated speed
+        self.assertIsNone(run_metadata.rated_cpu_speed_mhz(info))
+        shutil.rmtree(d)
+        capped = {"base_frequency": 800, "cpuinfo_max_freq": 4900}
+        with mock.patch.object(run_metadata, "_min_mhz", side_effect=lambda p: next(v for k, v in capped.items() if k in p)), \
+                mock.patch.object(run_metadata, "rated_cpu_speed_mhz", return_value=1800), \
+                mock.patch.object(run_metadata, "turbo_state", return_value="off"):
+            self.assertEqual(run_metadata.expected_cpu_speed(), (1800, "rated"))
+
+    def test_expected_speed_fixed_once_per_run(self):
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            src = fh.read()
+        self.assertIn('export MEASURE_READY_CPU_SPEED="$BENCH_CPU_SPEED"', src)           # checks during the load
+        self.assertIn('--cpu-speed "${BENCH_CPU_SPEED:-$CFG_READY_CPU_SPEED}"', src)    # checks before the start
+        self.assertIn('--set ready_cpu_speed_expected_mhz="${BENCH_CPU_SPEED:-}"', src)  # recorded
 
     def test_config_setting(self):
         import bench_config

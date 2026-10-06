@@ -2,6 +2,10 @@
 # Build Docker images for benchmark containers. Discovers types from benchmarks/* (static, dynamic, websocket, grpc, etc.).
 # Called by: make build (default) or make clean-build (with 'clean' arg)
 
+# Python of the project (srv/), else the system one: computes each folder's fingerprint
+PYTHON=./srv/bin/python3
+[ -x "$PYTHON" ] || PYTHON=python3
+
 # Find all container dirs (benchmarks/type/.../container-name with Dockerfile)
 function find_container_dirs() {
     local base="$1"
@@ -50,7 +54,10 @@ function process_container_folder() {
         [ -n "$d" ] || continue
         local name=$(basename "$d")
         echo "Building Docker image for $d/Dockerfile as $name"
-        if ! docker build -t "$name" "$d"; then
+        # The fingerprint of the folder's content: the run checks it to tell whether the image is up to date
+        local recipe
+        recipe=$("$PYTHON" ./tools/run_metadata.py recipe-hash "$d")
+        if ! docker build -t "$name" --label "wseb.recipe=$recipe" "$d"; then
             build_failures+=("$name")
         fi
     done < <(find_container_dirs "$folder")
