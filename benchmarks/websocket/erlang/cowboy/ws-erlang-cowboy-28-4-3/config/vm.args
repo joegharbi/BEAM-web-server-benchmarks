@@ -1,4 +1,3 @@
--name websocket_cowboy_app@127.0.0.1
--setcookie nocookie
-K true
-A 5 
+## Lean release (framework README, server contract): the BEAM's defaults, no node name.
+## Without -sname/-name no distribution starts, so no epmd. Runtime options such as busy-waiting
+## come from ERL_FLAGS, set by the framework.

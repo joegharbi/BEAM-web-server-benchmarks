@@ -8,8 +8,7 @@
     stdlib,
     cowboy
    ]},
-%   {env,[]},
-  {env, [{port, 80}]},
+  {env, []},
   {modules, [simple_cowboy_app, simple_cowboy_sup, hello_handler]},
   {licenses, ["Apache-2.0"]},
   {links, []}

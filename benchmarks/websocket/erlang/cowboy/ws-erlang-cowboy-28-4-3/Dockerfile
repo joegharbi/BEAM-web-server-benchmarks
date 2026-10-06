@@ -12,8 +12,7 @@ RUN rebar3 --version
 RUN mkdir -p src
 COPY src/ /app/src/
 COPY rebar.config .
-COPY config/vm.args config/vm.args
-COPY config/sys.config config/sys.config
+COPY config/ /app/config/
 
 # Get dependencies and compile
 RUN rebar3 get-deps && \
@@ -44,8 +43,9 @@ WORKDIR /app
 # Copy only the built release from builder stage
 COPY --from=builder /app/_build/prod/rel/websocket_cowboy_app /app/websocket_cowboy_app
 
-# Expose the default Cowboy port
-EXPOSE 80
+EXPOSE 8001
 
-# Run the Cowboy WebSocket server
-CMD ["/app/websocket_cowboy_app/bin/websocket_cowboy_app", "foreground"]
+# Start the application
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+CMD ["/start.sh"]

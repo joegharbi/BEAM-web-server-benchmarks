@@ -12,6 +12,7 @@ RUN rebar3 --version
 RUN mkdir -p src
 COPY src/ /app/src/
 COPY rebar.config .
+COPY config/ /app/config/
 
 # Get dependencies and compile
 RUN rebar3 get-deps && \
@@ -42,8 +43,9 @@ WORKDIR /app
 # Copy only the built release from builder stage
 COPY --from=builder /app/_build/prod/rel/simple_cowboy_app /app/simple_cowboy_app
 
-# Expose port 8080
-EXPOSE 80
+EXPOSE 8001
 
 # Start the application
-CMD ["/app/simple_cowboy_app/bin/simple_cowboy_app", "foreground"]
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+CMD ["/start.sh"]
