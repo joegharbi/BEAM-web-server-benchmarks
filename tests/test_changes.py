@@ -1214,21 +1214,16 @@ class OnBattery(ReadinessGate):
         self.m.ac_power = lambda: "no"
         self.assertEqual(self.r.check_once(prev, self.args(on_battery="ignore"))[1], [])
 
-    def test_unplugged_during_the_load_fails_the_run(self):
-        import load_phases
-        saved = os.environ.pop("MEASURE_ON_BATTERY", None)
-        try:
-            self.assertFalse(load_phases.charger_unplugged("yes", "no"))           # no config: not checked
-            os.environ["MEASURE_ON_BATTERY"] = "wait"
-            self.assertTrue(load_phases.charger_unplugged("yes", "no"))
-            self.assertFalse(load_phases.charger_unplugged("yes", "yes"))
-            self.assertFalse(load_phases.charger_unplugged("", ""))                # no battery at all
-            os.environ["MEASURE_ON_BATTERY"] = "ignore"
-            self.assertFalse(load_phases.charger_unplugged("yes", "no"))
-        finally:
-            os.environ.pop("MEASURE_ON_BATTERY", None)
-            if saved is not None:
-                os.environ["MEASURE_ON_BATTERY"] = saved
+    def test_unplugged_during_the_load_makes_the_run_invalid(self):
+        import load_conditions as lc
+        w = lc.Watch()
+        w.power = ["yes", "no", "yes"]                                           # unplugged for a moment
+        self.assertEqual(lc.problems(w, 0, {}), [])                              # no config: not judged
+        self.assertEqual(lc.problems(w, 0, {"on_battery": "wait"}),
+                         ["the laptop ran on battery during the load (charger unplugged)"])
+        self.assertEqual(lc.problems(w, 0, {"on_battery": "ignore"}), [])
+        w.power = ["", ""]                                                       # no battery at all
+        self.assertEqual(lc.problems(w, 0, {"on_battery": "wait"}), [])
 
 
 class SafeResumeAndReproduce(unittest.TestCase):
@@ -1778,6 +1773,145 @@ class ServerContract(unittest.TestCase):
         why = self.problem(start="exec /app/bin/x", os_release="ID=alpine\nVERSION_ID=3.23.6\n")
         self.assertIn("does not use APP_DIR", why)
         self.assertIn("built on alpine", why)
+
+
+
+class LoadConditions(unittest.TestCase):
+    """tools/load_conditions.py: the machine is watched during every load; a run that broke a rule is
+    kept in invalid_runs.csv and measured again (exit code 4), the same way for every server."""
+
+    def watch(self, limits=(1800, 1800), speeds=(1795.0, 1801.0), power=("yes", "yes")):
+        import load_conditions as lc
+        w = lc.Watch()
+        w.limits, w.speeds, w.power = list(limits), list(speeds), list(power)
+        return w
+
+    def test_samples_during_the_load(self):
+        import load_conditions as lc
+        from unittest import mock
+        limits = iter([1800, 800, 1800, 1800, 1800, 1800])
+        with mock.patch.object(lc.run_metadata, "cpu_speed_limit_mhz", lambda: next(limits, 1800)), \
+                mock.patch.object(lc, "cpu_avg_speed_mhz", lambda: 1800.0), \
+                mock.patch.object(lc.run_metadata, "ac_power", lambda: "yes"):
+            w = lc.Watch(interval=0.01).start()
+            time.sleep(0.1)
+            w.stop()
+        self.assertEqual(w.fields(), {"Host CPU Speed Limit Min (MHz)": 800, "Host CPU Avg Speed (MHz)": 1800})
+
+    def test_rules(self):
+        import load_conditions as lc
+        rule = {"cpu_speed": "auto", "no_throttling": True, "on_battery": "wait"}
+        self.assertEqual(lc.problems(self.watch(), 0, rule, expected_mhz=1800), [])
+        self.assertEqual(lc.problems(self.watch(limits=(1800, 800, 1800)), 0, rule, expected_mhz=1800),
+                         ["CPU speed capped at 800 MHz < 1800 MHz during the load (charger or firmware)"])
+        self.assertEqual(lc.problems(self.watch(), 12, rule, expected_mhz=1800),
+                         ["thermal throttling during the load (12 ms)"])
+        self.assertEqual(lc.problems(self.watch(limits=(800,)), 12, {}), [])          # no config: not judged
+        off = {"cpu_speed": "off", "no_throttling": False, "on_battery": "ignore"}
+        self.assertEqual(lc.problems(self.watch(limits=(800,), power=("no",)), 12, off), [])
+        self.assertEqual(lc.problems(self.watch(limits=(1500,)), 0, {"cpu_speed": "1400"}), [])   # fixed MHz
+
+    def test_rules_come_from_the_config(self):
+        import load_conditions as lc
+        self.assertEqual(lc.rules({}), {})
+        env = {"MEASURE_READY_ON_TIMEOUT": "wait", "MEASURE_READY_CPU_SPEED": "auto",
+               "MEASURE_READY_NO_THROTTLING": "0", "MEASURE_ON_BATTERY": "stop"}
+        self.assertEqual(lc.rules(env), {"cpu_speed": "auto", "no_throttling": False, "on_battery": "stop"})
+
+    def test_invalid_run_is_kept_not_added(self):
+        import load_conditions as lc
+        from unittest import mock
+        d = tempfile.mkdtemp()
+        out = os.path.join(d, "static", "st-x.csv")
+        os.makedirs(os.path.dirname(out))
+        values = {"Container Name": "st-x", "Variant": "nobw", "Deploy": "native", "Requests/s": 314.0,
+                  "Host CPU Speed Limit Min (MHz)": 800, "Host Throttled (ms)": 0, "Raw Log": "raw/a.json"}
+        env = {"MEASURE_READY_ON_TIMEOUT": "wait", "MEASURE_READY_CPU_SPEED": "1800"}
+        with mock.patch.dict(os.environ, env), self.assertRaises(SystemExit) as ended, \
+                self.assertLogs(level="WARNING"):
+            lc.judge(self.watch(limits=(800,)), values, out, "static 20000 requests")
+        self.assertEqual(ended.exception.code, lc.EXIT_INVALID)
+        self.assertFalse(os.path.exists(out))                                        # not in the results
+        with open(os.path.join(d, "invalid_runs.csv")) as fh:
+            rows = list(csv.DictReader(fh))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["Container Name"], rows[0]["Deploy"], rows[0]["Rate (/s)"], rows[0]["Measurement"]),
+                         ("st-x", "native", "314.0", "static 20000 requests"))
+        self.assertIn("CPU speed capped at 800 MHz", rows[0]["Reason"])
+        with mock.patch.dict(os.environ, env):
+            lc.judge(self.watch(), values, out, "static 20000 requests")              # valid: returns
+        shutil.rmtree(d)
+
+    def test_wired_into_every_measurement(self):
+        import csv_columns
+        self.assertIn("Host CPU Speed Limit Min (MHz)", csv_columns.HOST)
+        self.assertIn("Host CPU Avg Speed (MHz)", csv_columns.NOT_MEASURED)
+        for name in ("measure_docker.py", "measure_websocket.py"):
+            with open(os.path.join(ROOT, "tools", name)) as fh:
+                src = fh.read()
+            self.assertIn("watch = load_conditions.Watch().start()", src)
+            self.assertLess(src.index("load_conditions.judge("), src.rindex("values)\n"))   # judged before written
+            self.assertNotIn("charger_unplugged", src)
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            src = fh.read()
+        self.assertIn('[ "$rc" = 4 ] || break', src)
+        self.assertIn('if [ "$tries" -gt "${CFG_INVALID_RUN_RETRIES:-3}" ]; then', src)
+
+    def measure(self, invalid_times, retries=3):
+        """Run the script's own bench_measure with a fake tool that ends invalid `invalid_times` times."""
+        d = tempfile.mkdtemp()
+        tool = os.path.join(d, "tool")
+        with open(tool, "w") as fh:
+            fh.write(f'#!/bin/sh\nn=$(cat "{d}/n" 2>/dev/null || echo 0); echo $((n + 1)) > "{d}/n"\n'
+                     f'[ "$n" -lt {invalid_times} ] && exit 4\nexit 0\n')
+        os.chmod(tool, 0o755)
+        harness = f"""
+            print_status() {{ echo "[$1] $2"; }}
+            bench_ready_gate() {{ echo gate >> "{d}/gates"; BENCH_GATE_ARGS=(); }}
+            bench_family() {{ echo static; }}
+            bench_record_failure() {{ echo "failure: $2" >> "{d}/failures"; }}
+            declare -A BENCH_NATIVE_OF=() BENCH_VARIANT_OF=()
+            RESULTS_DIR="{d}"; PYTHON_PATH="{tool}"; CONFIG_FILE=x; BENCH_PASS=1; BENCH_FAILURES=0
+            BENCH_FAILED_IN_A_ROW=0; CFG_FAILURES_STOP_AFTER=0; CFG_INVALID_RUN_RETRIES={retries}
+            eval "$(sed -n '/^bench_measure() {{/,/^}}/p' "{ROOT}/scripts/run_benchmarks.sh")"
+            bench_measure ./tools/measure_docker.py --server_image st-x --num_requests 10 --output_csv "{d}/x.csv"
+            echo "failures=$BENCH_FAILURES"
+        """
+        out = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, timeout=30).stdout
+
+        def read(name):
+            if not os.path.exists(os.path.join(d, name)):
+                return ""
+            with open(os.path.join(d, name)) as fh:
+                return fh.read()
+        result = (int(read("n") or 0), read("gates").count("gate"), read("progress.txt"), read("failures"), out)
+        shutil.rmtree(d)
+        return result
+
+    def test_invalid_run_is_measured_again(self):
+        tries, gates, progress, failures, out = self.measure(invalid_times=2)
+        self.assertEqual(tries, 3)                                   # 2 invalid, then a valid one
+        self.assertEqual(gates, 3)                                   # readiness checked before every try
+        self.assertIn("--server_image st-x", progress)              # done: counted once
+        self.assertEqual(failures, "")
+        self.assertEqual(out.count("measuring it again"), 2)
+
+    def test_still_invalid_after_the_retries_is_a_failure(self):
+        tries, gates, progress, failures, out = self.measure(invalid_times=10, retries=2)
+        self.assertEqual(tries, 3)                                   # the first try + 2 retries
+        self.assertEqual(progress, "")                              # not done: resume measures it again
+        self.assertIn("broke a rule in 3 tries", failures)
+        self.assertIn("failures=1", out)
+
+    def test_run_lists_are_not_results(self):
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import run_metadata
+        d = tempfile.mkdtemp()
+        for name in ("static/st-x.csv", "invalid_runs.csv", "failures.csv"):
+            os.makedirs(os.path.dirname(os.path.join(d, name)), exist_ok=True)
+            open(os.path.join(d, name), "w").close()
+        self.assertEqual([os.path.relpath(p, d) for p in run_metadata.csvs_in(d)], ["static/st-x.csv"])
+        shutil.rmtree(d)
 
 
 class TerminatedMeasurement(unittest.TestCase):

@@ -31,7 +31,7 @@ HTTP columns, WebSocket files the same with the WebSocket columns.
 | 2. Performance (HTTP) | Successful Requests, Failed Requests, Execution Time (s), Requests/s |
 | 2. Performance (WebSocket) | Total Messages, Successful Messages, Failed Messages, Execution Time (s), Messages/s, Throughput (MB/s), Avg Latency (ms), Min Latency (ms), Max Latency (ms) |
 | 3. Container | Container CPU Limit, Container Energy (J), Container Avg Power (W), Container Avg CPU (%), Container Peak CPU (%), Container Total CPU (%*s), Container Avg Mem (MB), Container Peak Mem (MB), Container Total Mem (MB*s) |
-| 4. Host | Host CPUs, Host Energy (J), Host Avg Power (W), Host CPU Temp Start (C), Host CPU Temp End (C), Host Throttled (ms) |
+| 4. Host | Host CPUs, Host Energy (J), Host Avg Power (W), Host CPU Temp Start (C), Host CPU Temp End (C), Host Throttled (ms), Host CPU Speed Limit Min (MHz), Host CPU Avg Speed (MHz) |
 | 5. Idle | Idle Time (s), Container Idle Energy (J), Container Idle Avg Power (W), Host Idle Avg Power (W) |
 | 6. How the run went | Warm-up (s), Waited Before Start (s), Waited Before Load (s), Ready Check, Energy Samples, Energy Sampling Step (ms), Energy Window Coverage, Raw Log, Server Processes |
 
@@ -47,6 +47,14 @@ the image, run without Docker in a systemd user scope; `DEPLOY` in the config). 
 **Server Processes:** the processes found in the server's box (container or scope) at the end of the load,
 e.g. `beam.smp, erl_child_setup`. Anything besides the server (`epmd`, a build tool, a keep-alive loop) means
 the run measured more than the server (README: server contract); the tool also prints a warning.
+
+**Conditions during the load:** the machine is watched every 0.5 s while each load runs (`tools/load_conditions.py`).
+**Host CPU Speed Limit Min (MHz)** is the lowest speed limit seen (the firmware can cap the CPU, and the cap can
+come and go); **Host CPU Avg Speed (MHz)** the average speed of all cores. A run that broke a rule of the config
+(CPU capped below the expected speed, throttling, charger unplugged) is **invalid**: it is not in these CSVs but
+kept in `invalid_runs.csv` of the results folder (time, server, variant, deploy, measurement, reason, its values and
+raw log) and measured again (`INVALID_RUN_RETRIES`). The end of a run lists the invalid runs per server: if they
+pile up on one configuration, the cause may be that server rather than the machine.
 
 **HTTP Max Workers:** the client's parallel requests (`HTTP_MAX_WORKERS`, default 100; `system` = Python's
 default pool size, recorded as **System default**).

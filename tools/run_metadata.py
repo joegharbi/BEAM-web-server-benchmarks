@@ -326,7 +326,7 @@ def tool_settings():
 
 def csvs_in(folder):
     return [p for p in glob.glob(os.path.join(folder, "**", "*.csv"), recursive=True)
-            if not p.endswith("_summary.csv") and os.path.basename(p) not in ("failures.csv", "summary.csv")]
+            if not p.endswith("_summary.csv") and os.path.basename(p) not in ("failures.csv", "invalid_runs.csv", "summary.csv")]
 
 
 def images_in(csv_paths):

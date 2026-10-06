@@ -19,6 +19,7 @@ import readiness
 import run_metadata
 from scaphandre_energy import compute_window_energy, finish_raw, raw_json_path, scaphandre_json_args, window_record
 import load_phases
+import load_conditions
 import csv_columns
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -584,7 +585,8 @@ def main():
         hb_thread.start()
 
     thermal_before = thermal_reading()
-    charger_before = run_metadata.ac_power()
+    # Conditions during the load (CPU speed, throttling, charger), judged before the row is written
+    watch = load_conditions.Watch().start()
     start_time = time.time()
     try:
         asyncio.run(run_all())
@@ -593,9 +595,8 @@ def main():
             hb_stop.set()
             hb_thread.join(timeout=3)
     end_time = time.time()
+    watch.stop()
     thermal_after = thermal_reading()
-    if load_phases.charger_unplugged(charger_before, run_metadata.ac_power()):
-        measure_failure.fail("the laptop ran on battery during the load (charger unplugged)")
     runtime = end_time - start_time
 
     time.sleep(3)
@@ -640,7 +641,7 @@ def main():
     min_latency = min(all_latencies) if all_latencies else 0.0
     max_latency = max(all_latencies) if all_latencies else 0.0
     cpu, mem = resource_results['cpu'], resource_results['mem']
-    csv_columns.append(output_csv, csv_columns.WS_COLUMNS, {
+    values = {
         "Container Name": container_name, **csv_columns.run_fields(args.deploy),
         "Test Type": args.measurement_type, "Pattern": args.pattern, "Num Clients": args.clients,
         "Message Size (KB)": args.size_kb,
@@ -657,13 +658,16 @@ def main():
         "Container Peak Mem (MB)": mem.get('peak', 0.0), "Container Total Mem (MB*s)": mem.get('total', 0.0),
         "Host CPUs": int(num_cores) if num_cores is not None else 1,
         "Host Energy (J)": round(energy["host_energy_j"], 6), "Host Avg Power (W)": round(energy["host_avg_power_w"], 6),
-        **thermal_fields(thermal_before, thermal_after, args, pre_load),
+        **thermal_fields(thermal_before, thermal_after, args, pre_load), **watch.fields(),
         **phases,
         "Energy Samples": total_samples, "Energy Sampling Step (ms)": energy["step_ms"],
         "Energy Window Coverage": round(energy["coverage"], 4),
         "Raw Log": csv_columns.raw_log_field(output_json),
         "Server Processes": server_box.describe(box_processes),
-    })
+    }
+    load_conditions.judge(watch, values, output_csv,
+                          f"{args.measurement_type} {args.pattern} clients={args.clients} size_kb={args.size_kb}")
+    csv_columns.append(output_csv, csv_columns.WS_COLUMNS, values)
 
     if is_measure_quiet() and not args.verbose:
         ok = total_success == total_msgs

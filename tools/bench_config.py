@@ -283,7 +283,8 @@ SCHEMA = {
         options={"off": "switch it off, restored after (recommended)", "unchanged": "leave it as it is"}),
     "ON_BATTERY": dict(default="wait", check=_choice("wait", "stop", "ignore"),
         help="A laptop not on its charger: the CPU can run under other power limits on battery. Checked at\n"
-             "the start and before every run; a run during which the charger was unplugged counts as failed.\n"
+             "the start and before every run; a run during which the charger was unplugged is invalid and\n"
+             "measured again (INVALID_RUN_RETRIES).\n"
              "Machines without a battery are never affected.",
         options={"wait": "do not measure on battery; wait until the charger is back (recommended)",
                  "stop": "stop the measurement; continue later with make resume",
@@ -315,10 +316,13 @@ SCHEMA = {
              "reference 0 + margin 5 = never start above 5% (your own quiet machine)."),
     "READY_NO_THROTTLING": dict(default="1", check=_choice("0", "1"),
         help="Thermal throttling: the CPU slowing itself down because it is too hot.",
-        options={"1": "not ready while the CPU is throttling (recommended)", "0": "ignore throttling"}),
+        options={"1": "not ready while the CPU is throttling, and a run that throttled during its load is\n"
+                      "#            invalid and measured again (recommended)", "0": "ignore throttling"}),
     "READY_CPU_SPEED": dict(default="auto", check=_cpu_speed, unit="auto, off, or MHz",
         help="Not ready while the CPU is capped below its expected speed. The firmware can cap it by\n"
-             "itself, e.g. when the charger is too weak for the laptop; software cannot lift that cap.",
+             "itself, e.g. when the charger is too weak for the laptop; software cannot lift that cap. The\n"
+             "cap can come and go, so it is also watched during every load: a run that was capped at any\n"
+             "moment is invalid and measured again (INVALID_RUN_RETRIES).",
         options={"auto": "expect the base speed with turbo off, the maximum with turbo on (recommended)",
                  "off": "do not check", "<MHz>": "expect at least this speed"}),
     "READY_CONSECUTIVE_CHECKS": dict(default="2", check=_int(1), unit="checks, 1 or more",
@@ -335,6 +339,11 @@ SCHEMA = {
                  "measure": "measure anyway and write the reason in the CSV (cloud or shared servers)"}),
 
     # --- Failures ---
+    "INVALID_RUN_RETRIES": dict(default="3", check=_int(0), unit="tries",
+        help="A run whose conditions during the load broke a rule (CPU speed capped, throttling, charger\n"
+             "unplugged; the READY_CPU_SPEED, READY_NO_THROTTLING and ON_BATTERY settings) is not added to the\n"
+             "results: it is kept in invalid_runs.csv and measured again, after the readiness check, up to\n"
+             "this many times; then it counts as a failed measurement. 0 = never measure again."),
     "FAILURES_STOP_AFTER": dict(default="5", check=_int(0), unit="failed measurements in a row",
         help="What to do when a measurement fails (server did not start, health check failed, ...).\n"
              "Every failure is written to failures.csv.",
@@ -406,7 +415,7 @@ SCHEMA = {
 
 # Settings that describe how the machine is prepared; the only ones a machine profile may contain
 MACHINE_KEYS = [k for k in SCHEMA if k.startswith(("ENV_", "READY_"))] + [
-    "ON_BATTERY", "SETTLE_SECONDS", "RESTING_MEASURE_SECONDS"]
+    "ON_BATTERY", "SETTLE_SECONDS", "RESTING_MEASURE_SECONDS", "INVALID_RUN_RETRIES"]
 PROFILES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "machine")
 
 
@@ -531,6 +540,7 @@ SHORT = {
     "READY_MIN_WAIT_SECONDS": "always wait at least this long before a run",
     "READY_MAX_WAIT_SECONDS": "after this long not ready, READY_ON_TIMEOUT decides",
     "READY_ON_TIMEOUT": "still not ready: wait | stop | measure (and record why)",
+    "INVALID_RUN_RETRIES": "measure a run again this many times when the conditions during its load broke a rule",
     "FAILURES_STOP_AFTER": "stop after this many failed measurements in a row (1 = first failure, 0 = never)",
     "RAW_DATA": "Scaphandre's raw power logs: keep | delete",
     "HTTP_REQUESTS": "HTTP load levels (request counts)",
@@ -572,10 +582,11 @@ DOCS_LAYOUT = EXAMPLE_LAYOUT[:2] + [
     ("Machine settings (configs/machine/ profiles)",
      ["ENV_GOVERNOR", "ENV_TURBO", "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "ENV_SCREEN_BRIGHTNESS",
       "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH", "ON_BATTERY", "SETTLE_SECONDS", "RESTING_MEASURE_SECONDS"]),
-    ("Readiness check before every run (configs/machine/ profiles)",
+    ("Readiness check before every run, and the conditions during its load (configs/machine/ profiles)",
      ["READY_CHECK_EVERY_SECONDS", "READY_TEMP_REFERENCE_C", "READY_TEMP_MARGIN_C",
       "READY_CPU_BUSY_REFERENCE_PERCENT", "READY_CPU_BUSY_MARGIN_PERCENT", "READY_NO_THROTTLING", "READY_CPU_SPEED",
-      "READY_CONSECUTIVE_CHECKS", "READY_MIN_WAIT_SECONDS", "READY_MAX_WAIT_SECONDS", "READY_ON_TIMEOUT"]),
+      "READY_CONSECUTIVE_CHECKS", "READY_MIN_WAIT_SECONDS", "READY_MAX_WAIT_SECONDS", "READY_ON_TIMEOUT",
+      "INVALID_RUN_RETRIES"]),
 ] + EXAMPLE_LAYOUT[2:]
 
 

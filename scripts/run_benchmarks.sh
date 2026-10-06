@@ -1340,9 +1340,23 @@ bench_measure() {
         done
         tool_args+=(--container_name "$m_server" --deploy native)
     fi
-    local reason_file="$RESULTS_DIR/.failure_reason" rc=0
-    rm -f "$reason_file"
-    MEASURE_FAILURE_REASON_FILE="$reason_file" "$PYTHON_PATH" "${tool_args[@]}" "${BENCH_GATE_ARGS[@]}" || rc=$?
+    local reason_file="$RESULTS_DIR/.failure_reason" rc=0 tries=0
+    # Exit code 4: the conditions during the load broke a rule (tools/load_conditions.py); the run is
+    # kept in invalid_runs.csv and measured again once the machine is ready, INVALID_RUN_RETRIES times
+    while :; do
+        rc=0
+        rm -f "$reason_file"
+        MEASURE_FAILURE_REASON_FILE="$reason_file" "$PYTHON_PATH" "${tool_args[@]}" "${BENCH_GATE_ARGS[@]}" || rc=$?
+        [ "$rc" = 4 ] || break
+        tries=$((tries + 1))
+        if [ "$tries" -gt "${CFG_INVALID_RUN_RETRIES:-3}" ]; then
+            echo "the conditions during the load broke a rule in $tries tries (see invalid_runs.csv)" > "$reason_file"
+            rc=1
+            break
+        fi
+        print_status "WARNING" "Invalid run (conditions during the load, see invalid_runs.csv); measuring it again ($tries/${CFG_INVALID_RUN_RETRIES:-3})"
+        bench_ready_gate
+    done
     if [ -n "${CONFIG_FILE:-}" ] && [ "$rc" != 2 ] && [ "$rc" != 3 ] && [ "$rc" != 130 ] && [ "$rc" != 143 ]; then
         local outcome=ok
         [ "$rc" = 0 ] || outcome="failed"
@@ -1390,6 +1404,14 @@ bench_measure() {
 }
 
 bench_report_failures() {
+    if [ -f "$RESULTS_DIR/invalid_runs.csv" ]; then
+        # Counted per configuration: if they pile up on one, the cause may be the server, not the machine
+        print_status "WARNING" "Invalid runs measured again (conditions during the load; see $RESULTS_DIR/invalid_runs.csv):"
+        "$PYTHON_PATH" -c 'import csv, collections, sys
+rows = list(csv.DictReader(open(sys.argv[1], encoding="utf-8")))
+for name, n in sorted(collections.Counter(r["Container Name"] for r in rows).items()):
+    print(f"  {name}: {n}")' "$RESULTS_DIR/invalid_runs.csv" || true
+    fi
     [ "$BENCH_FAILURES" -gt 0 ] || return 0
     print_status "WARNING" "$BENCH_FAILURES measurement(s) failed; see $RESULTS_DIR/failures.csv"
 }

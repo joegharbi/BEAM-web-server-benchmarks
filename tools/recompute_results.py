@@ -35,7 +35,7 @@ CHANGED = ("Container Energy (J)", "Container Avg Power (W)")
 
 def measurement_csvs(folder):
     return sorted(f for f in glob.glob(os.path.join(folder, "*.csv"))
-                  if not f.endswith("_summary.csv") and os.path.basename(f) not in ("summary.csv", "failures.csv"))
+                  if not f.endswith("_summary.csv") and os.path.basename(f) not in ("summary.csv", "failures.csv", "invalid_runs.csv"))
 
 
 def recompute_csv(results_dir, path):

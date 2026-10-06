@@ -176,7 +176,7 @@ Bluetooth radio during the measurement.
 
 Default: `wait`
 
-A laptop not on its charger: the CPU can run under other power limits on battery. Checked at the start and before every run; a run during which the charger was unplugged counts as failed. Machines without a battery are never affected.
+A laptop not on its charger: the CPU can run under other power limits on battery. Checked at the start and before every run; a run during which the charger was unplugged is invalid and measured again (INVALID_RUN_RETRIES). Machines without a battery are never affected.
 
 | Option | Meaning |
 |---|---|
@@ -200,7 +200,7 @@ How long the resting temperature and CPU use are measured, after SETTLE_SECONDS.
 
 Unit: seconds, 1 or more (one reading per second)
 
-## Readiness check before every run (configs/machine/ profiles)
+## Readiness check before every run, and the conditions during its load (configs/machine/ profiles)
 
 ### `READY_CHECK_EVERY_SECONDS`
 
@@ -250,14 +250,14 @@ Thermal throttling: the CPU slowing itself down because it is too hot.
 
 | Option | Meaning |
 |---|---|
-| `1` | not ready while the CPU is throttling (recommended) |
+| `1` | not ready while the CPU is throttling, and a run that throttled during its load is invalid and measured again (recommended) |
 | `0` | ignore throttling |
 
 ### `READY_CPU_SPEED`
 
 Default: `auto`
 
-Not ready while the CPU is capped below its expected speed. The firmware can cap it by itself, e.g. when the charger is too weak for the laptop; software cannot lift that cap.
+Not ready while the CPU is capped below its expected speed. The firmware can cap it by itself, e.g. when the charger is too weak for the laptop; software cannot lift that cap. The cap can come and go, so it is also watched during every load: a run that was capped at any moment is invalid and measured again (INVALID_RUN_RETRIES).
 
 | Option | Meaning |
 |---|---|
@@ -300,6 +300,14 @@ What to do when the machine is still not ready after READY_MAX_WAIT_SECONDS.
 | `wait` | keep waiting; never measure in a bad state; prints every minute what fails (recommended) |
 | `stop` | stop the whole measurement with an error |
 | `measure` | measure anyway and write the reason in the CSV (cloud or shared servers) |
+
+### `INVALID_RUN_RETRIES`
+
+Default: `3`
+
+A run whose conditions during the load broke a rule (CPU speed capped, throttling, charger unplugged; the READY_CPU_SPEED, READY_NO_THROTTLING and ON_BATTERY settings) is not added to the results: it is kept in invalid_runs.csv and measured again, after the readiness check, up to this many times; then it counts as a failed measurement. 0 = never measure again.
+
+Unit: tries
 
 ## How much
 

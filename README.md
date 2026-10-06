@@ -118,7 +118,7 @@ With a config, a measurement:
    error or Ctrl-C. Each one can be `unchanged`, for machines you do not control.
 2. **Keeps the machine awake.** Sleep and lid-close suspend are blocked while it runs. A laptop must run
    on its charger (`ON_BATTERY`): by default it waits for the charger before measuring, and a run during
-   which the charger was unplugged is recorded as failed.
+   which the charger was unplugged is invalid and measured again (point 6).
    It also stops cleanly (resumable) before the disk fills up: below 2 GB free (`BENCH_MIN_FREE_GB`).
    Kept raw data takes about 45 KB per second of measuring, a few GB for a full campaign.
 3. **Measures the resting state** of the machine (CPU temperature and CPU use) after a settle period.
@@ -126,14 +126,19 @@ With a config, a measurement:
    shuffled order (`SHUFFLE`, `SHUFFLE_SEED`), so slow drift such as heat is spread evenly.
 5. **Waits until the machine is ready before every run**: CPU temperature back within a margin of the
    resting temperature, CPU use within a margin of the resting use, no thermal throttling, on the
-   charger. It checks again after the server has started, right before the load, because starting a
-   server warms the CPU. `READY_ON_TIMEOUT` decides what happens if the machine does not become ready
-   (keep waiting, stop, or measure and record why).
-6. **Optionally warms the server up and measures it idle** (`WARMUP_SECONDS`, `IDLE_SECONDS`, both off
+   charger, CPU not capped below its expected speed. It checks again after the server has started, right
+   before the load, because starting a server warms the CPU. `READY_ON_TIMEOUT` decides what happens if
+   the machine does not become ready (keep waiting, stop, or measure and record why).
+6. **Watches the machine during every load** (`tools/load_conditions.py`, the same for every server): the
+   CPU speed limit and speed, throttling and the charger, every 0.5 s. A run that broke one of the rules
+   above at any moment of its load is invalid: kept in `invalid_runs.csv` with its values and reason, not
+   added to the results, and measured again after the readiness check (`INVALID_RUN_RETRIES`, default 3).
+   The end of the run lists the invalid runs per server.
+7. **Optionally warms the server up and measures it idle** (`WARMUP_SECONDS`, `IDLE_SECONDS`, both off
    by default). Order: start, warm-up (not measured), readiness check, idle window, load window.
-7. **Records failed measurements** in `failures.csv` and continues; `FAILURES_STOP_AFTER` decides when
+8. **Records failed measurements** in `failures.csv` and continues; `FAILURES_STOP_AFTER` decides when
    to stop (1 = at the first failure).
-8. **Writes statistics per configuration** at the end.
+9. **Writes statistics per configuration** at the end.
 
 ### Before leaving a long measurement alone
 

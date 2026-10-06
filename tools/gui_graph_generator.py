@@ -516,6 +516,11 @@ def is_summary_csv(path):
     return name == "summary.csv" or name.endswith("_summary.csv")
 
 
+def is_run_list(path):
+    """failures.csv and invalid_runs.csv list measurements that are not results; never loaded."""
+    return os.path.basename(path) in ("failures.csv", "invalid_runs.csv")
+
+
 def safe_float(val, default=0.0):
     """Convert value to float; return default on failure (avoids GUI crash on bad CSV data)."""
     if val is None or val == '' or (isinstance(val, str) and val.strip().upper() in ('', 'NAN', 'N/A', '-', '--')):
@@ -2100,7 +2105,7 @@ class BenchmarkGrapher(QMainWindow):
 
     def add_files(self, files):
         skipped = [f for f in files if is_summary_csv(f)]
-        files = [f for f in files if not is_summary_csv(f)]
+        files = [f for f in files if not is_summary_csv(f) and not is_run_list(f)]
         if skipped:
             # A quiet note, no window: loading a results folder always brings its summary files along
             self.summary_label.setText(
