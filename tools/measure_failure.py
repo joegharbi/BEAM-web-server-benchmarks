@@ -21,17 +21,23 @@ READINESS_STOP = 2
 SETUP_BROKEN = 3
 
 # What is running for the current measurement, so a failure can clean it up.
-_running = {"container": None, "docker": None}
+_running = {"container": None, "docker": None, "native": None}
 
 
 def started_container(name, docker_path):
     _running["container"], _running["docker"] = name, docker_path
 
 
+def started_native(unit):
+    _running["native"] = unit
+
+
 def _cleanup():
     name, docker = _running["container"], _running["docker"]
     if name and docker:
         subprocess.run([docker, "rm", "-f", name], capture_output=True, text=True, check=False)
+    if _running["native"]:
+        subprocess.run(["systemctl", "--user", "stop", _running["native"]], capture_output=True, text=True, check=False)
     subprocess.run(["sudo", "-n", "pkill", "-9", "scaphandre"], capture_output=True, text=True, check=False)
 
 

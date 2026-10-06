@@ -311,6 +311,9 @@ Any server in any language can be measured. The server contract:
   touching the server.
 - **Lean:** start the server the way it is deployed (a release, not a build tool), with only what
   it needs. BEAM servers run without a node name, so no `epmd` starts.
+- **Native mode:** the image keeps the server under `/app` and starts it with `/start.sh`, which
+  finds it under `$APP_DIR` (default `/app`). Native mode (`tools/native_server.py`) copies both
+  out of the image and runs the same script without Docker, in a systemd user scope.
 
 Servers built before this contract listen on port 80 and ignore `PORT`; they keep working, because
 the framework maps host port 8001 to whatever port the Dockerfile exposes.

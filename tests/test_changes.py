@@ -1982,3 +1982,107 @@ class SafeInterrupts(unittest.TestCase):
         finally:
             signal.signal(signal.SIGINT, old_int)
             signal.signal(signal.SIGTERM, old_term)
+
+
+class NativeServer(unittest.TestCase):
+    """Native mode (tools/native_server.py): the image's own program without Docker, in a systemd scope."""
+
+    def test_scope_name_matches_only_its_own_server(self):
+        import native_server as ns
+        plain, nobw = ns.unit_name("st-x"), ns.unit_name("st-x-nobw")
+        self.assertEqual(plain, "wseb-st-x.scope")
+        line = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/" + nobw
+        self.assertNotIn(plain, line)                       # the energy match is by this name in /proc/<pid>/cgroup
+        self.assertIn(nobw, line)
+
+    def test_image_settings_without_path(self):
+        import native_server as ns
+        from unittest import mock
+        env = '["PATH=/usr/local/lib/erlang/bin:/usr/bin","ERL_FLAGS=+sbwt none +sbwtdcpu none","A=b=c"]'
+        with mock.patch.object(ns, "_docker", return_value=env):
+            self.assertEqual(ns.image_env("img"), {"ERL_FLAGS": "+sbwt none +sbwtdcpu none", "A": "b=c"})
+
+    def test_command_has_only_the_image_settings(self):
+        import native_server as ns
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"MEASURE_SECRET": "leak"}):
+            cmd = ns.command("wseb-s.scope", "/n/s", {"ERL_FLAGS": "+sbwt none"}, 8001)
+        self.assertEqual(cmd[:6], ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit=wseb-s.scope"])
+        self.assertEqual(cmd[6:8], ["env", "-i"])           # nothing of the measuring tool's environment
+        self.assertEqual(cmd[-1], "/n/s/start.sh")
+        self.assertIn("ERL_FLAGS=+sbwt none", cmd)
+        self.assertIn("PORT=8001", cmd)
+        self.assertIn("APP_DIR=/n/s/app", cmd)
+        self.assertIn("PATH=" + ns.HOST_PATH, cmd)
+        self.assertFalse([a for a in cmd if "MEASURE_SECRET" in a])
+
+    def test_statistics_from_the_cgroup(self):
+        import native_server as ns
+        import threading
+        from unittest import mock
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "memory.current"), "w") as fh:
+            fh.write(str(100 * 1024 * 1024))
+        clock = [0.0]
+
+        def cpu(folder):                                    # half a core: 0.5 s of CPU per second
+            clock[0] += 1.0
+            return int(clock[0] * 0.5e6)
+        stop = threading.Event()
+        calls = [0]
+
+        def tick(_):
+            calls[0] += 1
+            if calls[0] >= 4:
+                stop.set()
+        with mock.patch.object(ns, "cgroup_dir", return_value=d), mock.patch.object(ns, "_cpu_usec", cpu), \
+                mock.patch.object(ns.time, "monotonic", lambda: clock[0]), mock.patch.object(ns.time, "sleep", tick):
+            cpu_stats, mem = ns.collect_stats("u", stop)
+        shutil.rmtree(d)
+        self.assertAlmostEqual(cpu_stats["avg"], 50.0)          # % of one core, as docker stats
+        self.assertAlmostEqual(mem["peak"], 100.0)              # MB
+
+    def test_failure_stops_the_scope(self):
+        import measure_failure
+        from unittest import mock
+        with mock.patch.object(measure_failure.subprocess, "run") as run:
+            measure_failure.started_native("wseb-s.scope")
+            try:
+                measure_failure._cleanup()
+            finally:
+                measure_failure._running["native"] = None
+        self.assertIn(["systemctl", "--user", "stop", "wseb-s.scope"], [c.args[0] for c in run.call_args_list])
+
+    def test_measure_docker_has_deploy(self):
+        with open(os.path.join(ROOT, "tools", "measure_docker.py")) as fh:
+            src = fh.read()
+        self.assertIn("'--deploy', choices=['container', 'native']", src)
+        self.assertIn("container_id = unit if native else None", src)   # energy by the scope's cgroup
+
+    @unittest.skipUnless(shutil.which("systemd-run") and shutil.which("docker"), "needs systemd and Docker")
+    def test_real_server_runs_and_stops_completely(self):
+        import native_server as ns
+        import subprocess
+        import urllib.request
+        img = "st-erlang-cowboy-28-4-3"
+        if subprocess.run(["docker", "image", "inspect", img], capture_output=True).returncode != 0:
+            self.skipTest(f"image {img} not built")
+        if subprocess.run(["ss", "-ltn"], capture_output=True, text=True).stdout.count(":8001 "):
+            self.skipTest("port 8001 in use")
+        unit = ns.start(img, "wseb-test-" + img, 8001)
+        try:
+            pids = []
+            for _ in range(30):
+                try:
+                    with urllib.request.urlopen("http://localhost:8001/", timeout=2) as r:
+                        self.assertEqual(r.status, 200)
+                    break
+                except OSError:
+                    time.sleep(1)
+            with open(os.path.join(ns.cgroup_dir(unit), "cgroup.procs")) as fh:
+                pids = fh.read().split()
+            self.assertTrue(pids)
+        finally:
+            ns.stop(unit)
+        time.sleep(1)
+        self.assertFalse([p for p in pids if os.path.exists(f"/proc/{p}")])   # nothing outlives the stop

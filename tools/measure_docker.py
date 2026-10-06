@@ -14,6 +14,7 @@ import logging
 import psutil
 
 import measure_failure
+import native_server
 import readiness
 import run_metadata
 from scaphandre_energy import compute_window_energy, finish_raw, raw_json_path, scaphandre_json_args, window_record
@@ -309,12 +310,12 @@ def thermal_fields(before, after, args, pre_load=(None, "not checked")):
     }
 
 
-def pre_load_check(container_name, docker_path):
-    """Readiness check 2, with the server booted; removes the container if the campaign must stop."""
+def pre_load_check(stop_server):
+    """Readiness check 2, with the server booted; stops the server if the campaign must stop."""
     try:
         return readiness.pre_load_gate()
     except SystemExit:
-        stop_server_container(container_name, docker_path)
+        stop_server()
         raise
 
 
@@ -399,6 +400,9 @@ def main():
     parser.add_argument('--output_csv', type=str, default=None, help="Output CSV file path (default: results_docker/<container_name>.csv)")
     parser.add_argument('--output_json', type=str, default=None, help="Output JSON file path (default: output/<timestamp>.json)")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging")
+    parser.add_argument('--deploy', choices=['container', 'native'], default='container',
+                        help="container: the image in Docker (default); native: the image's own program without Docker, "
+                             "in a systemd user scope (tools/native_server.py)")
     parser.add_argument('--measurement_type', type=str, default=None, help="Type of measurement (static, dynamic, etc.)")
     parser.add_argument('--connection', choices=['reuse', 'per-request'], default='reuse',
                         help="HTTP connection handling: 'reuse' keeps one keep-alive connection per worker (default); "
@@ -448,20 +452,32 @@ def main():
     if is_measure_quiet() and not args.verbose:
         measure_quiet_msg(f"{container_name} | Docker start + HTTP readiness wait …")
     logger.info(f"Starting container '{container_name}'...")
-    measure_failure.started_container(container_name, docker_path)
-    start_server_container(args.server_image, args.port_mapping, container_name, docker_path, args.network)
+    native = args.deploy == "native"
+    if native:
+        # The scope name takes the place of the container ID (energy by cgroup, stop, statistics)
+        unit = native_server.unit_name(container_name)
+        measure_failure.started_native(unit)
+        native_server.start(args.server_image, container_name, host_port, docker_path)
+        stop_server = lambda: native_server.stop(unit)  # noqa: E731
+    else:
+        measure_failure.started_container(container_name, docker_path)
+        start_server_container(args.server_image, args.port_mapping, container_name, docker_path, args.network)
+        stop_server = lambda: stop_server_container(container_name, docker_path)  # noqa: E731
 
     if not check_container_health(url):
         logger.error("Container health check failed (no HTTP 200 within wait time).")
-        try:
-            out = subprocess.run(
-                [docker_path, "logs", "--tail", "30", container_name],
-                capture_output=True, text=True, timeout=5
-            )
-            if out.stdout or out.stderr:
-                logger.error("Container logs (last 30 lines):\n%s%s", out.stdout or "", out.stderr or "")
-        except Exception as e:
-            logger.debug("Could not get container logs: %s", e)
+        if native:
+            logger.error("Server output (last 30 lines):\n%s", native_server.log_tail(unit))
+        else:
+            try:
+                out = subprocess.run(
+                    [docker_path, "logs", "--tail", "30", container_name],
+                    capture_output=True, text=True, timeout=5
+                )
+                if out.stdout or out.stderr:
+                    logger.error("Container logs (last 30 lines):\n%s%s", out.stdout or "", out.stderr or "")
+            except Exception as e:
+                logger.debug("Could not get container logs: %s", e)
         logger.error("To allow more boot time: MEASURE_STARTUP_WAIT=25 MEASURE_HEALTH_RETRIES=30 make run")
         measure_failure.fail("health check failed: no HTTP 200 from the container within the wait time")
 
@@ -471,7 +487,7 @@ def main():
         warm_up(url, args.warmup_s, args.max_workers, args.connection)
 
     # Readiness check 2: booting the server warms the CPU, so wait again right before the load.
-    pre_load = pre_load_check(container_name, docker_path)
+    pre_load = pre_load_check(stop_server)
 
     if is_measure_quiet() and not args.verbose:
         measure_quiet_msg(
@@ -490,7 +506,10 @@ def main():
     stop_event = threading.Event()
     resource_results = {'cpu': {}, 'mem': {}}
     def collect():
-        cpu_metrics, mem_metrics = collect_resources_docker_stats(container_name, stop_event, docker_path)
+        if native:
+            cpu_metrics, mem_metrics = native_server.collect_stats(unit, stop_event)
+        else:
+            cpu_metrics, mem_metrics = collect_resources_docker_stats(container_name, stop_event, docker_path)
         resource_results['cpu'] = cpu_metrics
         resource_results['mem'] = mem_metrics
 
@@ -546,13 +565,14 @@ def main():
     logger.info("Waiting for Scaphandre...")
     time.sleep(5)
     stop_scaphandre(scaphandre_process)
-    container_id = None
-    result = subprocess.run(
-        [docker_path, "ps", "-q", "-f", f"name={container_name}"],
-        capture_output=True, text=True
-    )
-    if result.returncode == 0 and result.stdout.strip():
-        container_id = result.stdout.strip()
+    container_id = unit if native else None
+    if not native:
+        result = subprocess.run(
+            [docker_path, "ps", "-q", "-f", f"name={container_name}"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            container_id = result.stdout.strip()
     energy = compute_window_energy(output_json, container_name, start_time, end_time, container_id=container_id)
     phases = load_phases.idle_fields(output_json, container_name, container_id, idle, args.warmup_s)
     record = window_record(container_name, container_id, start_time, end_time, energy)
@@ -560,8 +580,8 @@ def main():
         record["idle_start_epoch"], record["idle_end_epoch"] = idle
     output_json = finish_raw(output_json, record)
     total_energy, average_power, total_samples = energy["energy_j"], energy["avg_power_w"], energy["samples"]
-    cpu_limit = csv_columns.container_cpu_limit(docker_path, container_name)
-    stop_server_container(container_name, docker_path)
+    cpu_limit = "none" if native else csv_columns.container_cpu_limit(docker_path, container_name)
+    stop_server()
     measurement_type = getattr(args, 'measurement_type', None) or "unknown"
     http_workers_label = http_max_workers_label(args)
     cpu, mem = resource_results['cpu'], resource_results['mem']
