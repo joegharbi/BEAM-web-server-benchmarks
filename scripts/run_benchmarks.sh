@@ -508,25 +508,38 @@ fi
 
 # A fresh run of a config that has an unfinished measurement: continue it (same folder), start from
 # zero (the old one is marked abandoned: never resumed, skipped by graphs and reports), or stop.
-# No answer within 30 s, or no terminal to answer on: continue (no work is repeated).
+# No answer within 30 s, or no terminal to answer on: continue (no work is repeated). When it can no
+# longer be continued (framework, machine or images changed since it started), only from zero (then the
+# default) or stop are offered.
 # BENCH_UNFINISHED_ANSWER=c|n|s answers in advance (scripts, tests).
 _cfg=""
 for ((_i = 1; _i <= $#; _i++)); do
     if [ "${!_i}" = "--config" ]; then _j=$((_i + 1)); _cfg="${!_j:-}"; fi
 done
 if [ -z "$RESUME_DIR" ] && [ -z "$REPRODUCE_DIR" ] && [ -n "$_cfg" ] && [ -f "$_cfg" ]; then
-    read -r _kind _folder _done _total <<< "$("$PYTHON_PATH" "$REPO_ROOT/tools/run_metadata.py" unfinished results "$_cfg")"
+    read -r _kind _folder _done _total _resumable <<< "$("$PYTHON_PATH" "$REPO_ROOT/tools/run_metadata.py" unfinished results "$_cfg")"
     if [ "$_kind" = "SAME" ]; then
         _answer="${BENCH_UNFINISHED_ANSWER:-}"
+        _default=c
+        if [ "$_resumable" = "no" ]; then
+            _default=n
+            echo "[INFO] An unfinished measurement of this config exists: $_folder ($_done of $_total done), but it" \
+                 "cannot be continued: the framework, machine or images changed since it started (details: make resume RESUME=$_folder)."
+            case "$_answer" in [cC]*) _answer=n ;; esac                     # continuing would only be refused
+        fi
         if [ -z "$_answer" ]; then
             _tty="${BENCH_TTY:-/dev/tty}"
             if { : < "$_tty"; } 2>/dev/null; then
-                printf '[QUESTION] An unfinished measurement of this config exists: %s (%s of %s done).\n           c = continue it (same folder), n = start from zero (the old one is marked abandoned),\n           s = stop; no answer within 30 s = continue: ' "$_folder" "$_done" "$_total" >&2
+                if [ "$_resumable" = "no" ]; then
+                    printf '[QUESTION] n = start from zero (the old one is marked abandoned; its data stays), s = stop;\n           no answer within 30 s = start from zero: ' >&2
+                else
+                    printf '[QUESTION] An unfinished measurement of this config exists: %s (%s of %s done).\n           c = continue it (same folder), n = start from zero (the old one is marked abandoned),\n           s = stop; no answer within 30 s = continue: ' "$_folder" "$_done" "$_total" >&2
+                fi
                 read -r -t 30 _answer < "$_tty" || true
                 printf '\n' >&2
             fi
         fi
-        case "${_answer:-c}" in
+        case "${_answer:-$_default}" in
             [nN]*)
                 "$PYTHON_PATH" "$REPO_ROOT/tools/run_metadata.py" abandon "$_folder" "started again from zero"
                 echo "[INFO] $_folder is marked abandoned (kept on disk; never resumed; graphs and reports skip it). Starting from zero."

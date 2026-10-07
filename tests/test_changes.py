@@ -1720,7 +1720,7 @@ class UnfinishedMeasurement(unittest.TestCase):
         with open(cfg, "w") as fh:
             fh.write(WhatToMeasure.config_text(self.CONFIG))
         self.assertEqual(run_metadata.unfinished(os.path.join(ROOT, "results"), cfg),
-                         f"SAME {self.old} 2 48")
+                         f"SAME {self.old} 2 48 yes")
         with open(cfg, "a") as fh:
             fh.write("REPEATS=2\n")                                       # another config: only a notice
         self.assertTrue(run_metadata.unfinished(os.path.join(ROOT, "results"), cfg).startswith("OTHER "))
@@ -1744,6 +1744,29 @@ class UnfinishedMeasurement(unittest.TestCase):
         # no terminal in the test (like a run started in the background): continue the unfinished one
         rc, out = self.h.run_until_plan(self.CONFIG)
         self.assertIn("Continuing the unfinished measurement results/2000-01-01_000000-unfinished-test", out)
+
+    def make_unresumable(self):
+        with open(os.path.join(self.old, "metadata.json"), "w") as fh:     # an image it used is gone now
+            json.dump({"started_at_utc": "2000-01-01T00:00:00Z", "images_at_start": {"st-zzz-gone": "sha256:x"}}, fh)
+
+    def test_cannot_be_continued_starts_from_zero(self):
+        import run_metadata
+        self.make_unresumable()
+        cfg = os.path.join(self.h.d, "same.config")
+        with open(cfg, "w") as fh:
+            fh.write(WhatToMeasure.config_text(self.CONFIG))
+        self.assertEqual(run_metadata.unfinished(os.path.join(ROOT, "results"), cfg), f"SAME {self.old} 2 48 no")
+        rc, out = self.h.run_until_plan(self.CONFIG)                         # no answer: from zero, not continue
+        self.assertIn("cannot be continued", out)
+        self.assertIn("is marked abandoned", out)
+        self.assertNotIn("Continuing the unfinished measurement", out)
+        self.assertIn("Static HTTP:     1 containers", out)
+
+    def test_cannot_be_continued_even_when_asked(self):
+        self.make_unresumable()
+        rc, out = self.h.run_until_plan(self.CONFIG, extra_env={"BENCH_UNFINISHED_ANSWER": "c"})
+        self.assertIn("is marked abandoned", out)
+        self.assertNotIn("Continuing the unfinished measurement", out)
 
     def test_graphs_skip_an_abandoned_measurement(self):
         sys.path.insert(0, os.path.join(ROOT, "tools"))

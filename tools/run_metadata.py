@@ -632,8 +632,9 @@ ABANDONED = ".abandoned"
 
 
 def unfinished(results_root, config_path):
-    """For a fresh run of `config_path`: "SAME <folder> <done> <total>" for the newest unfinished
-    measurement made with the same config (same file content), else "OTHER <folder>" for the newest
+    """For a fresh run of `config_path`: "SAME <folder> <done> <total> <yes|no>" for the newest unfinished
+    measurement made with the same config (same file content; yes/no: whether it can still be continued,
+    i.e. the framework, machine and images are unchanged), else "OTHER <folder>" for the newest
     unfinished one of another config, else ""."""
     try:
         with open(config_path, "rb") as fh:
@@ -652,9 +653,9 @@ def unfinished(results_root, config_path):
             continue
         if "finished_at_utc" in meta or "abandoned_at_utc" in meta:
             continue
-        (same if config == wanted else other).append((meta.get("started_at_utc", ""), folder))
+        (same if config == wanted else other).append((meta.get("started_at_utc", ""), folder, meta))
     if same:
-        folder = max(same)[1]
+        _, folder, meta = max(same, key=lambda s: (s[0], s[1]))
         try:
             with open(os.path.join(folder, "progress.txt"), encoding="utf-8") as fh:
                 done = sum(1 for line in fh if line.strip())
@@ -665,8 +666,12 @@ def unfinished(results_root, config_path):
                 total = json.load(fh).get("total", "?")
         except (OSError, ValueError):
             total = "?"
-        return f"SAME {folder} {done} {total}"
-    return f"OTHER {max(other)[1]}" if other else ""
+        try:
+            resumable = os.environ.get("RESUME_ANYWAY") == "1" or not differences(meta, folder)
+        except Exception:                                   # unknown: let the resume itself say why
+            resumable = True
+        return f"SAME {folder} {done} {total} {'yes' if resumable else 'no'}"
+    return f"OTHER {max(other, key=lambda s: (s[0], s[1]))[1]}" if other else ""
 
 
 def abandon(folder, reason):

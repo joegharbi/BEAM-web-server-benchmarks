@@ -49,7 +49,9 @@ BEFORE=$(state)
 echo "Before: $BEFORE"
 
 source srv/bin/activate
-bash scripts/run_benchmarks.sh --super-quick --bench "$TMP/bench" --config "$TMP/check.config" static > "$TMP/run.out" 2>&1 &
+ls -d results/*/ 2>/dev/null | sort > "$TMP/folders.before"
+# A check always measures from zero: an unfinished earlier check run is marked abandoned, not continued
+BENCH_UNFINISHED_ANSWER=n bash scripts/run_benchmarks.sh --super-quick --bench "$TMP/bench" --config "$TMP/check.config" static > "$TMP/run.out" 2>&1 &
 RUN=$!
 # A background job of a script ignores Ctrl-C, so pass it on: TERM makes the run stop and restore
 # the machine settings itself; wait for that before leaving.
@@ -61,7 +63,12 @@ RC=$?
 cat "$TMP/run.out"
 AFTER=$(state)
 echo "After:  $AFTER"
-D=$(ls -d results/*/ | tail -1)
+# Only the folder this check run made (never an older measurement's)
+D=$(ls -d results/*/ 2>/dev/null | sort | comm -13 "$TMP/folders.before" - | tail -1)
+if [ -z "$D" ]; then
+    echo "  [FAIL] the check run made no results folder (exit code $RC); see its output above"
+    exit 1
+fi
 
 srv/bin/python - "$D" "$RC" "$BEFORE" "$AFTER" "$INHIBITED" <<'EOF'
 import csv, glob, json, os, sys
