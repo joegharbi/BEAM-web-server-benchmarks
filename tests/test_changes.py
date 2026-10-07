@@ -1471,16 +1471,22 @@ class WhatToMeasure(unittest.TestCase):
             os.makedirs(os.path.join(self.bench, rel))
             open(os.path.join(self.bench, rel, "Dockerfile"), "w").close()
 
-    def run_until_plan(self, config, args=(), images="st-a st-b dy-c ws-d my-img"):
+    @staticmethod
+    def config_text(config, config_cpu_speed="unchanged"):
+        return ("SETTLE_SECONDS=0\nRESTING_MEASURE_SECONDS=1\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\n"
+                f"ENV_CPU_SPEED={config_cpu_speed}\n"
+                "ENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\n"
+                "ENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n" + config)
+
+    def run_until_plan(self, config, args=(), images="st-a st-b dy-c ws-d my-img", config_cpu_speed="unchanged",
+                       extra_env=None):
         import signal
         cfg = os.path.join(self.d, "c.config")
         with open(cfg, "w") as fh:
-            fh.write("SETTLE_SECONDS=0\nRESTING_MEASURE_SECONDS=1\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\n"
-                     "ENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\n"
-                     "ENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n" + config)
+            fh.write(self.config_text(config, config_cpu_speed))
         before = set(os.listdir(os.path.join(ROOT, "results")))
         env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], FAKE_IMAGES=images,
-                   FAKE_BUILDS=os.path.join(self.d, "build"), FAKE_BUILD_FAIL=self.build_fail)
+                   FAKE_BUILDS=os.path.join(self.d, "build"), FAKE_BUILD_FAIL=self.build_fail, **(extra_env or {}))
         out_file = os.path.join(self.d, "out.txt")
         with open(out_file, "w") as fh:
             p = subprocess.Popen(["bash", "scripts/run_benchmarks.sh", "--bench", self.bench, "--config", cfg, *args],
@@ -1636,6 +1642,98 @@ class Variants(WhatToMeasure):
             with self.assertRaises(bench_config.ConfigError):
                 bench_config.parse(bad)
 
+
+
+
+class LeftoverSettings(unittest.TestCase):
+    """A run that never restored the machine (kill -9, crash, power loss) blocks the next one that would
+    change the settings: it would save the changed settings as the state before."""
+
+    def setUp(self):
+        self.h = WhatToMeasure("test_selected_servers_and_kinds")  # its harness only, not its tests
+        self.h.setUp()
+        self.run_until_plan = self.h.run_until_plan
+        self.old = os.path.join(ROOT, "results", "2000-01-01_000000-leftover-test")
+        os.makedirs(self.old)
+        with open(os.path.join(self.old, ".environment_state.json"), "w") as fh:
+            fh.write("{}")
+
+    def tearDown(self):
+        shutil.rmtree(self.old, ignore_errors=True)
+
+    def test_refuses_to_change_settings(self):
+        rc, out = self.run_until_plan("MEASURE=static\nSERVERS=st-a\n", config_cpu_speed="max")
+        self.assertEqual(rc, 1)
+        self.assertIn("The machine settings of an earlier run were never restored", out)
+        self.assertIn("prepare_environment.py restore --state results/2000-01-01_000000-leftover-test/.environment_state.json", out)
+        self.assertNotIn("CPU governor: set", out)
+
+    def test_unchanged_settings_still_run(self):
+        rc, out = self.run_until_plan("MEASURE=static\nSERVERS=st-a\nHTTP_REQUESTS=1000\n")
+        self.assertNotIn("never restored", out)
+        self.assertIn("Static HTTP:     1 containers", out)
+
+
+
+class UnfinishedMeasurement(unittest.TestCase):
+    """A fresh run of a config with an unfinished measurement asks: continue (default), from zero, stop."""
+    CONFIG = "MEASURE=static\nSERVERS=st-a\nHTTP_REQUESTS=1000\n# unfinished-test\n"
+
+    def setUp(self):
+        self.h = WhatToMeasure("test_selected_servers_and_kinds")
+        self.h.setUp()
+        self.old = os.path.join(ROOT, "results", "2000-01-01_000000-unfinished-test")
+        os.makedirs(self.old)
+        with open(os.path.join(self.old, "bench.config"), "w") as fh:
+            fh.write(WhatToMeasure.config_text(self.CONFIG))
+        with open(os.path.join(self.old, "metadata.json"), "w") as fh:
+            json.dump({"started_at_utc": "2000-01-01T00:00:00Z"}, fh)
+        with open(os.path.join(self.old, "progress.txt"), "w") as fh:
+            fh.write("pass 1 | a\npass 1 | b\n")
+        with open(os.path.join(self.old, "plan.json"), "w") as fh:
+            json.dump({"total": 48}, fh)
+
+    def tearDown(self):
+        shutil.rmtree(self.old, ignore_errors=True)
+
+    def test_found_with_progress(self):
+        import run_metadata
+        cfg = os.path.join(self.h.d, "same.config")
+        with open(cfg, "w") as fh:
+            fh.write(WhatToMeasure.config_text(self.CONFIG))
+        self.assertEqual(run_metadata.unfinished(os.path.join(ROOT, "results"), cfg),
+                         f"SAME {self.old} 2 48")
+        with open(cfg, "a") as fh:
+            fh.write("REPEATS=2\n")                                       # another config: only a notice
+        self.assertTrue(run_metadata.unfinished(os.path.join(ROOT, "results"), cfg).startswith("OTHER "))
+
+    def test_stop(self):
+        rc, out = self.h.run_until_plan(self.CONFIG, extra_env={"BENCH_UNFINISHED_ANSWER": "s"})
+        self.assertEqual(rc, 0)
+        self.assertIn("Stopped. Continue later with: make resume RESUME=results/2000-01-01_000000-unfinished-test", out)
+
+    def test_from_zero_marks_the_old_one_abandoned(self):
+        import run_metadata
+        rc, out = self.h.run_until_plan(self.CONFIG, extra_env={"BENCH_UNFINISHED_ANSWER": "n"})
+        self.assertIn("is marked abandoned", out)
+        self.assertIn("Static HTTP:     1 containers", out)                   # the new run went on
+        self.assertTrue(os.path.exists(os.path.join(self.old, ".abandoned")))
+        with open(os.path.join(self.old, "metadata.json")) as fh:
+            self.assertIn("abandoned_at_utc", json.load(fh))
+        self.assertEqual(run_metadata.latest_unfinished(os.path.join(ROOT, "results")).endswith("unfinished-test"), False)
+
+    def test_no_answer_continues(self):
+        # no terminal in the test (like a run started in the background): continue the unfinished one
+        rc, out = self.h.run_until_plan(self.CONFIG)
+        self.assertIn("Continuing the unfinished measurement results/2000-01-01_000000-unfinished-test", out)
+
+    def test_graphs_skip_an_abandoned_measurement(self):
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import gui_graph_generator as g
+        f = os.path.join(self.old, "static", "st-a.csv")
+        self.assertFalse(g.in_abandoned_measurement(f))
+        open(os.path.join(self.old, ".abandoned"), "w").close()
+        self.assertTrue(g.in_abandoned_measurement(f))
 
 
 class Deploy(WhatToMeasure):
@@ -1875,6 +1973,7 @@ class LoadConditions(unittest.TestCase):
             declare -A BENCH_NATIVE_OF=() BENCH_VARIANT_OF=()
             RESULTS_DIR="{d}"; PYTHON_PATH="{tool}"; CONFIG_FILE=x; BENCH_PASS=1; BENCH_FAILURES=0
             BENCH_FAILED_IN_A_ROW=0; CFG_FAILURES_STOP_AFTER=0; CFG_INVALID_RUN_RETRIES={retries}
+            eval "$(sed -n '/^BENCH_CHILD=""$/,/^bench_restore_environment() {{$/p' "{ROOT}/scripts/run_benchmarks.sh" | sed '$d')"
             eval "$(sed -n '/^bench_measure() {{/,/^}}/p' "{ROOT}/scripts/run_benchmarks.sh")"
             bench_measure ./tools/measure_docker.py --server_image st-x --num_requests 10 --output_csv "{d}/x.csv"
             echo "failures=$BENCH_FAILURES"
@@ -1914,6 +2013,91 @@ class LoadConditions(unittest.TestCase):
             open(os.path.join(d, name), "w").close()
         self.assertEqual([os.path.relpath(p, d) for p in run_metadata.csvs_in(d)], ["static/st-x.csv"])
         shutil.rmtree(d)
+
+
+
+class ConfirmStop(unittest.TestCase):
+    """Ctrl-C asks whether to stop (y = stop, else or no answer = continue); the running step goes on."""
+
+    def harness(self, answer=None, tty_exists=True, body=""):
+        d = tempfile.mkdtemp()
+        tty = os.path.join(d, "tty")
+        if tty_exists:
+            with open(tty, "w") as fh:
+                fh.write(answer or "")
+        script = f"""
+            print_status() {{ echo "[$1] $2"; }}
+            BENCH_TTY="{tty}"; BENCH_STOP_CONFIRM_SECONDS=2
+            eval "$(sed -n '/^BENCH_CHILD=""$/,/^bench_restore_environment() {{$/p' "{ROOT}/scripts/run_benchmarks.sh" | sed '$d')"
+            trap 'echo "exit $? interrupted=${{BENCH_INTERRUPTED:-0}}"' EXIT
+            {body}
+        """
+        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30).stdout
+        shutil.rmtree(d)
+        return out
+
+    def test_y_stops(self):
+        out = self.harness("y\n", body="bench_on_ctrl_c; echo after")
+        self.assertIn("Stopping (Ctrl-C confirmed)", out)
+        self.assertNotIn("after", out)
+        self.assertIn("exit 130 interrupted=1", out)
+
+    def test_anything_else_or_no_answer_continues(self):
+        for answer in ("n\n", "", "\n"):
+            out = self.harness(answer, body="bench_on_ctrl_c; echo after")
+            self.assertIn("continuing (nothing was interrupted)", out, repr(answer))
+            self.assertIn("after", out)
+
+    def test_without_a_terminal_stops_at_once(self):
+        out = self.harness(tty_exists=False, body="bench_on_ctrl_c; echo after")
+        self.assertNotIn("after", out)
+        self.assertIn("exit 130 interrupted=1", out)
+
+    def test_the_step_goes_on_and_its_exit_code_comes_back(self):
+        # a Ctrl-C (SIGINT to the script) during a step, answered "no": the step is not disturbed
+        body = """trap bench_on_ctrl_c INT
+            ( sleep 1; kill -INT $$ ) &
+            bench_run sh -c 'sleep 2; exit 7'; echo "step exit $?" """
+        out = self.harness("n\n", body=body)
+        self.assertIn("continuing", out)
+        self.assertIn("step exit 7", out)
+
+    def test_stop_ends_the_step(self):
+        body = """trap bench_on_ctrl_c INT
+            ( sleep 1; kill -INT $$ ) &
+            bench_run sleep 20; echo "not reached" """
+        out = self.harness("y\n", body=body)
+        self.assertNotIn("not reached", out)
+        self.assertIn("exit 130 interrupted=1", out)
+
+    def test_second_ctrl_c_while_asking_stops(self):
+        d = tempfile.mkdtemp()
+        fifo = os.path.join(d, "tty")
+        os.mkfifo(fifo)
+        script = f"""
+            print_status() {{ echo "[$1] $2"; }}
+            BENCH_TTY="{fifo}"; BENCH_STOP_CONFIRM_SECONDS=10
+            eval "$(sed -n '/^BENCH_CHILD=""$/,/^bench_restore_environment() {{$/p' "{ROOT}/scripts/run_benchmarks.sh" | sed '$d')"
+            trap 'echo "exit $? interrupted=${{BENCH_INTERRUPTED:-0}}"' EXIT
+            sleep 8 <> "{fifo}" >/dev/null 2>&1 &       # a terminal nobody types on
+            trap bench_on_ctrl_c INT
+            ( sleep 1; kill -INT $$; sleep 1; kill -INT $$ ) >/dev/null 2>&1 &
+            bench_run sleep 20; echo "not reached"
+        """
+        t0 = time.monotonic()
+        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30).stdout
+        shutil.rmtree(d)
+        self.assertIn("exit 130 interrupted=1", out)
+        self.assertNotIn("not reached", out)
+        self.assertLess(time.monotonic() - t0, 8)                  # stopped by the second Ctrl-C, not the timeout
+
+    def test_restore_cannot_be_reached_by_ctrl_c(self):
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            src = fh.read()
+        self.assertIn("""( trap '' INT TERM; exec sudo -n "$PYTHON_PATH" ./tools/prepare_environment.py restore""", src)
+        self.assertNotIn("setsid -w sudo", src)                          # sudo would ask for the password again
+        self.assertIn("trap bench_on_ctrl_c INT", src)
+        self.assertIn("trap bench_stop TERM", src)
 
 
 class TerminatedMeasurement(unittest.TestCase):

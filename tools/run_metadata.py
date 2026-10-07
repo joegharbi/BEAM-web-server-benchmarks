@@ -185,6 +185,32 @@ def rated_cpu_speed_mhz(cpuinfo="/proc/cpuinfo"):
     return None
 
 
+def cpu_cap_clues():
+    """What the machine reports that can make its firmware cap the CPU, for the waiting message:
+    laptop lap mode, the USB-C power contract, the power profile, the battery, the temperature.
+    Each clue only when the machine has it."""
+    clues = []
+    lap = _read("/sys/devices/platform/thinkpad_acpi/dytc_lapmode")
+    if lap is not None:
+        clues.append(f"lap mode {'on' if lap == '1' else 'off'}")
+    for psy in sorted(glob.glob("/sys/class/power_supply/*")):
+        if _read(os.path.join(psy, "online")) == "1" and _read(os.path.join(psy, "type")) == "USB":
+            volts, amps = _read(os.path.join(psy, "voltage_now")), _read(os.path.join(psy, "current_max"))
+            if volts and amps and volts.isdigit() and amps.isdigit():
+                clues.append(f"USB-C charger contract {int(volts) / 1e6:g} V {int(amps) / 1e6:g} A")
+    profile = _read("/sys/firmware/acpi/platform_profile")
+    if profile:
+        clues.append(f"power profile {profile}")
+    for bat in sorted(glob.glob("/sys/class/power_supply/BAT*")):
+        status = _read(os.path.join(bat, "status"))
+        if status:
+            clues.append(f"battery {status.lower()}")
+    temp = cpu_package_temp_c()
+    if temp != "":
+        clues.append(f"CPU {temp:g} C")
+    return ", ".join(clues)
+
+
 def expected_cpu_speed(set_speed=None):
     """(MHz, source): the speed limit the CPU should have, or (None, "") when unknown.
 
@@ -596,9 +622,65 @@ def latest_unfinished(results_root):
                 meta = json.load(fh)
         except (OSError, ValueError):
             continue
-        if "finished_at_utc" not in meta and os.path.isfile(os.path.join(folder, "bench.config")):
+        if "finished_at_utc" not in meta and "abandoned_at_utc" not in meta \
+                and os.path.isfile(os.path.join(folder, "bench.config")):
             found.append((meta.get("started_at_utc", ""), folder))
     return max(found)[1] if found else ""
+
+
+ABANDONED = ".abandoned"
+
+
+def unfinished(results_root, config_path):
+    """For a fresh run of `config_path`: "SAME <folder> <done> <total>" for the newest unfinished
+    measurement made with the same config (same file content), else "OTHER <folder>" for the newest
+    unfinished one of another config, else ""."""
+    try:
+        with open(config_path, "rb") as fh:
+            wanted = fh.read()
+    except OSError:
+        return ""
+    same, other = [], []
+    for path in glob.glob(os.path.join(results_root, "*", FILENAME)):
+        folder = os.path.dirname(path)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                meta = json.load(fh)
+            with open(os.path.join(folder, "bench.config"), "rb") as fh:
+                config = fh.read()
+        except (OSError, ValueError):
+            continue
+        if "finished_at_utc" in meta or "abandoned_at_utc" in meta:
+            continue
+        (same if config == wanted else other).append((meta.get("started_at_utc", ""), folder))
+    if same:
+        folder = max(same)[1]
+        try:
+            with open(os.path.join(folder, "progress.txt"), encoding="utf-8") as fh:
+                done = sum(1 for line in fh if line.strip())
+        except OSError:
+            done = 0
+        try:
+            with open(os.path.join(folder, "plan.json"), encoding="utf-8") as fh:
+                total = json.load(fh).get("total", "?")
+        except (OSError, ValueError):
+            total = "?"
+        return f"SAME {folder} {done} {total}"
+    return f"OTHER {max(other)[1]}" if other else ""
+
+
+def abandon(folder, reason):
+    """Mark an unfinished measurement as abandoned: never resumed, skipped by the graphs and reports.
+    Its data stays as it is."""
+    path = os.path.join(folder, FILENAME)
+    with open(path, encoding="utf-8") as fh:
+        meta = json.load(fh)
+    meta["abandoned_at_utc"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    meta["abandoned_because"] = reason
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, indent=2)
+    with open(os.path.join(folder, ABANDONED), "w", encoding="utf-8") as fh:
+        fh.write(f"{meta['abandoned_at_utc']} {reason}\n")
 
 
 def reproduce_info(folder):
@@ -644,7 +726,8 @@ def write_end(path, csv_paths):
 def main():
     ap = argparse.ArgumentParser(description="Write the provenance of one measurement to <folder>/metadata.json.")
     ap.add_argument("phase", choices=["start", "end", "resume", "resume-info", "reproduce-info", "images",
-                                      "latest-unfinished", "temp", "recipe-hash", "expected-cpu-speed"],
+                                      "latest-unfinished", "temp", "recipe-hash", "expected-cpu-speed",
+                                      "unfinished", "abandon"],
                     help="start/end/resume of a measurement, images: record the image IDs at the start, "
                          "resume-info/reproduce-info: shell assignments to resume or reproduce a folder, "
                          "latest-unfinished: print the newest folder that can be resumed, "
@@ -664,6 +747,12 @@ def main():
         return
     if args.phase == "recipe-hash":
         print(recipe_hash(args.folder))
+        return
+    if args.phase == "unfinished":                         # unfinished <results root> <config file>
+        print(unfinished(args.folder or "results", (args.names or [""])[0]))
+        return
+    if args.phase == "abandon":                            # abandon <folder> <reason words>
+        abandon(args.folder, " ".join(args.names) or "started again from zero")
         return
     if args.phase == "latest-unfinished":
         print(latest_unfinished(args.folder or "results"))

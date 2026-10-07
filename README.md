@@ -185,8 +185,19 @@ every measurement.
 
 ### Stopping and resuming
 
-Ctrl-C stops the measurement, restores the machine settings and prints the command to continue. A full
-campaign can take days; after Ctrl-C, a crash or a reboot:
+Ctrl-C first asks whether to stop, so an accidental one does not end a long campaign: `y` stops (the
+machine settings are restored and the command to continue is printed); anything else, or no answer
+within 30 s, continues, and the running measurement is not disturbed while it asks. A second Ctrl-C while
+it asks stops at once; without a terminal (e.g. started in the background), a shutdown or `kill`, it
+stops at once (`BENCH_STOP_CONFIRM_SECONDS=0` always stops at once). The restore itself cannot be cut
+short by Ctrl-C. The machine settings are restored however the run ends; only `kill -9`, a crash or a
+power loss leave them changed, and then the next run that would change them refuses to start and prints
+the restore command.
+
+Starting `make run CONFIG=...` again for a config that has an unfinished measurement asks: `c` continues
+it in its folder, `n` starts from zero (the old folder is kept but marked abandoned: never resumed, skipped
+by the graph window), `s` stops; no answer within 30 s, or no terminal, continues. A full campaign can take
+days; after Ctrl-C, a crash or a reboot:
 
 ```bash
 make resume                            # the most recent unfinished measurement

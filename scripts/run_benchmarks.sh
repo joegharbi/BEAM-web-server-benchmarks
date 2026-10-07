@@ -506,6 +506,45 @@ if [ -n "$REPRODUCE_DIR" ]; then
     ORIGINAL_ARGS="$*"
 fi
 
+# A fresh run of a config that has an unfinished measurement: continue it (same folder), start from
+# zero (the old one is marked abandoned: never resumed, skipped by graphs and reports), or stop.
+# No answer within 30 s, or no terminal to answer on: continue (no work is repeated).
+# BENCH_UNFINISHED_ANSWER=c|n|s answers in advance (scripts, tests).
+_cfg=""
+for ((_i = 1; _i <= $#; _i++)); do
+    if [ "${!_i}" = "--config" ]; then _j=$((_i + 1)); _cfg="${!_j:-}"; fi
+done
+if [ -z "$RESUME_DIR" ] && [ -z "$REPRODUCE_DIR" ] && [ -n "$_cfg" ] && [ -f "$_cfg" ]; then
+    read -r _kind _folder _done _total <<< "$("$PYTHON_PATH" "$REPO_ROOT/tools/run_metadata.py" unfinished results "$_cfg")"
+    if [ "$_kind" = "SAME" ]; then
+        _answer="${BENCH_UNFINISHED_ANSWER:-}"
+        if [ -z "$_answer" ]; then
+            _tty="${BENCH_TTY:-/dev/tty}"
+            if { : < "$_tty"; } 2>/dev/null; then
+                printf '[QUESTION] An unfinished measurement of this config exists: %s (%s of %s done).\n           c = continue it (same folder), n = start from zero (the old one is marked abandoned),\n           s = stop; no answer within 30 s = continue: ' "$_folder" "$_done" "$_total" >&2
+                read -r -t 30 _answer < "$_tty" || true
+                printf '\n' >&2
+            fi
+        fi
+        case "${_answer:-c}" in
+            [nN]*)
+                "$PYTHON_PATH" "$REPO_ROOT/tools/run_metadata.py" abandon "$_folder" "started again from zero"
+                echo "[INFO] $_folder is marked abandoned (kept on disk; never resumed; graphs and reports skip it). Starting from zero."
+                ;;
+            [sS]*)
+                echo "[INFO] Stopped. Continue later with: make resume RESUME=$_folder"
+                exit 0
+                ;;
+            *)
+                echo "[INFO] Continuing the unfinished measurement $_folder (make resume)"
+                exec bash "$REPO_ROOT/scripts/run_benchmarks.sh" --resume "$_folder"
+                ;;
+        esac
+    elif [ "$_kind" = "OTHER" ]; then
+        echo "[INFO] An unfinished measurement of another config exists: $_folder (make resume RESUME=$_folder continues it)"
+    fi
+fi
+
 RESULTS_PARENT_DIR="results"
 TIMESTAMP=$(date +"%Y-%m-%d_%H%M%S")
 RESULTS_DIR="${RESUME_DIR:-$RESULTS_PARENT_DIR/$TIMESTAMP}"
@@ -1219,7 +1258,7 @@ bench_ready_gate() {
     [ -n "${CONFIG_FILE:-}" ] || return 0
     bench_check_disk
     local result="$RESULTS_DIR/.ready.json" rc=0
-    "$PYTHON_PATH" ./tools/readiness.py wait --result "$result" \
+    bench_run "$PYTHON_PATH" ./tools/readiness.py wait --result "$result" \
         --temp-reference "$BENCH_TEMP_REFERENCE" --temp-margin "$CFG_READY_TEMP_MARGIN_C" \
         --cpu-reference "$BENCH_CPU_REFERENCE" --cpu-margin "$CFG_READY_CPU_BUSY_MARGIN_PERCENT" \
         --no-throttling "$CFG_READY_NO_THROTTLING" \
@@ -1346,7 +1385,7 @@ bench_measure() {
     while :; do
         rc=0
         rm -f "$reason_file"
-        MEASURE_FAILURE_REASON_FILE="$reason_file" "$PYTHON_PATH" "${tool_args[@]}" "${BENCH_GATE_ARGS[@]}" || rc=$?
+        bench_run env MEASURE_FAILURE_REASON_FILE="$reason_file" "$PYTHON_PATH" "${tool_args[@]}" "${BENCH_GATE_ARGS[@]}" || rc=$?
         [ "$rc" = 4 ] || break
         tries=$((tries + 1))
         if [ "$tries" -gt "${CFG_INVALID_RUN_RETRIES:-3}" ]; then
@@ -1455,6 +1494,15 @@ bench_apply_environment() {
         print_status "INFO" "Machine settings: left unchanged"
         return 0
     fi
+    # Settings of an earlier run that never restored them (kill -9, crash, power loss): saving the
+    # machine now would record those changed settings as "the state before". Restore them first.
+    local leftover
+    for leftover in "$RESULTS_PARENT_DIR"/*/.environment_state.json; do
+        [ -f "$leftover" ] || continue
+        print_status "ERROR" "The machine settings of an earlier run were never restored ($(dirname "$leftover")). Restore them first, then start again:"
+        echo "  sudo \"$PYTHON_PATH\" ./tools/prepare_environment.py restore --state $leftover"
+        bench_stop_early
+    done
     local env_args=(--governor "$CFG_ENV_GOVERNOR" --turbo "$CFG_ENV_TURBO" --cpu-speed "${CFG_ENV_CPU_SPEED:-unchanged}"
         --keep "$CFG_ENV_KEEP_CONTAINERS"
         --screen-brightness "$CFG_ENV_SCREEN_BRIGHTNESS" --keyboard-light "$CFG_ENV_KEYBOARD_LIGHT"
@@ -1475,6 +1523,77 @@ bench_apply_environment() {
     fi
 }
 
+# Long steps (a measurement, the readiness check, the settle wait) run in the background and are
+# waited for. Background commands of a script ignore Ctrl-C, so a Ctrl-C reaches only this script,
+# which asks whether to stop (bench_on_ctrl_c) while the step goes on undisturbed. Returns the step's
+# exit code.
+BENCH_CHILD=""
+bench_run() {
+    "$@" &
+    BENCH_CHILD=$!
+    local rc
+    while :; do
+        wait "$BENCH_CHILD"
+        rc=$?
+        # A wait cut short by a handled signal (> 128) while the step still runs: after a Ctrl-C ask
+        # whether to stop (here, outside the signal handler, so a second Ctrl-C is handled at once),
+        # then wait again
+        if [ "$rc" -gt 128 ] && kill -0 "$BENCH_CHILD" 2>/dev/null; then
+            [ -n "$BENCH_CTRL_C" ] && { BENCH_CTRL_C=""; bench_ask_stop; }
+            continue
+        fi
+        [ "$rc" -gt 128 ] && { wait "$BENCH_CHILD" 2>/dev/null; rc=$?; }
+        break
+    done
+    BENCH_CHILD=""
+    return "$rc"
+}
+
+# Stop now: end the running step (it cleans up: container, Scaphandre), then exit; the EXIT trap
+# restores the machine settings.
+bench_stop() {
+    BENCH_INTERRUPTED=1
+    if [ -n "$BENCH_CHILD" ] && kill -0 "$BENCH_CHILD" 2>/dev/null; then
+        kill -TERM "$BENCH_CHILD" 2>/dev/null
+        wait "$BENCH_CHILD" 2>/dev/null
+    fi
+    exit 130
+}
+
+# Ctrl-C: ask, so an accidental one does not end a long measurement. y = stop; anything else or no
+# answer within BENCH_STOP_CONFIRM_SECONDS (default 30) = continue; a second Ctrl-C while asking =
+# stop. Without a terminal to answer on, or with BENCH_STOP_CONFIRM_SECONDS=0, stop at once.
+# During a long step the handler only notes the Ctrl-C and bench_run asks.
+BENCH_ASKING=""
+BENCH_CTRL_C=""
+bench_on_ctrl_c() {
+    [ -n "$BENCH_ASKING" ] && bench_stop
+    if [ -n "$BENCH_CHILD" ]; then
+        BENCH_CTRL_C=1
+        return 0
+    fi
+    bench_ask_stop
+}
+
+bench_ask_stop() {
+    local tty="${BENCH_TTY:-/dev/tty}" seconds="${BENCH_STOP_CONFIRM_SECONDS:-30}" answer="" t0=$SECONDS rc
+    if [ "$seconds" -le 0 ] || ! { : < "$tty"; } 2>/dev/null; then
+        bench_stop
+    fi
+    BENCH_ASKING=1
+    printf '\n[QUESTION] Stop the measurement? y = stop (settings restored; continue later with make resume),\n           anything else or no answer within %ss = continue: ' "$seconds" >&2
+    read -r -t "$seconds" answer < "$tty"
+    rc=$?
+    BENCH_ASKING=""
+    # read cut short before the timeout (a second Ctrl-C), or y: stop
+    if [[ "$answer" == [yY]* ]] || { [ "$rc" -gt 128 ] && [ $((SECONDS - t0)) -lt "$seconds" ]; }; then
+        print_status "WARNING" "Stopping (Ctrl-C confirmed)"
+        bench_stop
+    fi
+    printf '\n' >&2
+    print_status "INFO" "Ctrl-C: continuing (nothing was interrupted)"
+}
+
 bench_restore_environment() {
     [ "$BENCH_ENV_APPLIED" -eq 1 ] || return 0
     BENCH_ENV_APPLIED=0
@@ -1483,7 +1602,10 @@ bench_restore_environment() {
     # every process started afterwards, which then outlives the run.
     trap ':' INT TERM
     print_status "INFO" "Restoring machine settings ... (Ctrl-C is ignored until it is done)"
-    sudo -n "$PYTHON_PATH" ./tools/prepare_environment.py restore --state "$BENCH_ENV_STATE" \
+    # Started with Ctrl-C and TERM already ignored (only in this subshell), so the restore ignores them
+    # from its first instruction, even while Python starts up; it stays on this terminal, where sudo
+    # remembers the password (a separate session, e.g. setsid, would need it again)
+    ( trap '' INT TERM; exec sudo -n "$PYTHON_PATH" ./tools/prepare_environment.py restore --state "$BENCH_ENV_STATE" ) \
         || print_status "WARNING" "Restore failed; run: sudo python3 tools/prepare_environment.py restore --state $BENCH_ENV_STATE"
 }
 
@@ -1589,7 +1711,8 @@ main() {
     start_sudo_keepalive
     # Restore machine settings on any exit (normal end, error, Ctrl-C), then stop the sudo keepalive.
     trap bench_on_exit EXIT
-    trap 'BENCH_INTERRUPTED=1; exit 130' INT TERM
+    trap bench_on_ctrl_c INT
+    trap bench_stop TERM
     echo $$ > "$RESULTS_DIR/.running"
     bench_block_sleep
     if [ -n "${CONFIG_FILE:-}" ]; then
@@ -1606,7 +1729,7 @@ main() {
     if [ -n "${CONFIG_FILE:-}" ]; then
         if [ "$CFG_SETTLE_SECONDS" -gt 0 ]; then
             print_status "INFO" "Letting the machine settle for ${CFG_SETTLE_SECONDS}s ..."
-            sleep "$CFG_SETTLE_SECONDS"
+            bench_run sleep "$CFG_SETTLE_SECONDS"
         fi
         print_status "INFO" "Measuring the resting state for ${CFG_RESTING_MEASURE_SECONDS}s ..."
         read -r BENCH_RESTING_TEMP BENCH_RESTING_CPU < <("$PYTHON_PATH" ./tools/readiness.py baseline --seconds "$CFG_RESTING_MEASURE_SECONDS")

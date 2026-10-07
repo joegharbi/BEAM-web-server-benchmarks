@@ -521,6 +521,12 @@ def is_run_list(path):
     return os.path.basename(path) in ("failures.csv", "invalid_runs.csv")
 
 
+def in_abandoned_measurement(path):
+    """A run file of a measurement that was abandoned (started again from zero): <folder>/.abandoned."""
+    folder = os.path.dirname(os.path.dirname(os.path.abspath(path)))
+    return os.path.exists(os.path.join(folder, ".abandoned"))
+
+
 def safe_float(val, default=0.0):
     """Convert value to float; return default on failure (avoids GUI crash on bad CSV data)."""
     if val is None or val == '' or (isinstance(val, str) and val.strip().upper() in ('', 'NAN', 'N/A', '-', '--')):
@@ -2105,7 +2111,11 @@ class BenchmarkGrapher(QMainWindow):
 
     def add_files(self, files):
         skipped = [f for f in files if is_summary_csv(f)]
-        files = [f for f in files if not is_summary_csv(f) and not is_run_list(f)]
+        abandoned = [f for f in files if in_abandoned_measurement(f)]
+        files = [f for f in files if not is_summary_csv(f) and not is_run_list(f) and f not in abandoned]
+        if abandoned:
+            self.summary_label.setText(f"Skipped {len(abandoned)} file(s) of an abandoned measurement "
+                                       "(started again from zero; see its .abandoned file).")
         if skipped:
             # A quiet note, no window: loading a results folder always brings its summary files along
             self.summary_label.setText(

@@ -94,7 +94,8 @@ def cpu_speed_problem(setting):
     expected = run_metadata.expected_cpu_speed_mhz() if setting == "auto" else int(setting)
     limit = run_metadata.cpu_speed_limit_mhz()
     if expected and limit and limit < expected:
-        return f"CPU speed capped at {limit} MHz < {expected} MHz (charger or firmware)"
+        clues = run_metadata.cpu_cap_clues()
+        return f"CPU speed capped at {limit} MHz < {expected} MHz (charger or firmware" + (f"; {clues})" if clues else ")")
     return ""
 
 
