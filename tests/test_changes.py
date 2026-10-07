@@ -1059,7 +1059,7 @@ class IdleAndWarmup(unittest.TestCase):
             self.assertIn(key, bench_config.SHORT)
             in_example = example.count(f"\n{key}=")
             self.assertEqual(in_example, 0 if key in bench_config.MACHINE_KEYS else 1, key)   # machine keys: profiles
-        self.assertLess(len(example.splitlines()), 80)
+        self.assertLess(len(example.splitlines()), 85)                       # short: one line per setting
 
     def test_generated_files_are_up_to_date(self):
         import bench_config
@@ -2060,6 +2060,79 @@ class RestoreContainers(unittest.TestCase):
         self.assertIn("NOT restarted: b (docker: Error: network not found)", out)
         self.assertIn("docker start b", out)
         self.assertEqual(starts, [["docker", "start", "a", "b"], ["docker", "start", "b"]])   # b tried once more
+
+
+
+class Tidy(unittest.TestCase):
+    """NATIVE_COPIES at the end of a run, and make tidy: only what can be regenerated, never results."""
+
+    def native_dir(self):
+        d = tempfile.mkdtemp()
+        for name, image_id in (("st-current", "sha256:aaa"), ("st-rebuilt", "sha256:old"), ("st-gone", "sha256:x")):
+            os.makedirs(os.path.join(d, name, "app"))
+            with open(os.path.join(d, name, ".image_id"), "w") as fh:
+                fh.write(image_id)
+        os.makedirs(os.path.join(d, ".st-current-cut"))                  # an unpacking that was cut off
+        open(os.path.join(d, "wseb-st-current.scope.log"), "w").close()
+        return d
+
+    def fake_docker(self):
+        ids = {"st-current": "sha256:aaa", "st-rebuilt": "sha256:new"}
+        from unittest import mock
+        return mock.patch.object(__import__("native_server").subprocess, "run",
+                                 lambda cmd, **kw: mock.Mock(stdout=ids.get(cmd[-1], "")))
+
+    def test_prune_deletes_only_copies_never_used_again(self):
+        import native_server as ns
+        d = self.native_dir()
+        with self.fake_docker():
+            why = {os.path.basename(f): r for f, _, r in ns.stale_copies(root=d)}
+            self.assertEqual(why, {"st-rebuilt": "its image was rebuilt", "st-gone": "its image no longer exists",
+                                   ".st-current-cut": "unpacking was cut off"})
+            self.assertEqual(ns.tidy("prune", root=d)[0], 3)
+        self.assertEqual(sorted(os.listdir(d)), ["st-current", "wseb-st-current.scope.log"])
+        self.assertEqual(ns.tidy("keep", root=d), (0, 0))
+        self.assertEqual(ns.tidy("delete", root=d)[0], 1)
+        self.assertEqual(os.listdir(d), ["wseb-st-current.scope.log"])   # small logs stay
+        shutil.rmtree(d)
+
+    def test_never_deletes_outside_its_folder(self):
+        import native_server as ns
+        import tidy
+        d = tempfile.mkdtemp()
+        with self.assertRaises(ValueError):
+            ns.remove_copy(os.path.join(d, ".."), root=d)
+        with self.assertRaises(ValueError):
+            tidy.remove_result_folder("/tmp", results_dir=d)
+        shutil.rmtree(d)
+
+    def test_old_server_images(self):
+        import tidy
+        folders = {"st-erlang-cowboy-29-1-1", "dy-gleam-pure-1-19-0"}
+        images = ["st-erlang-cowboy-29-1-1", "st-erlang-cowboy-29-1-1-nobw", "dy-gleam-pure-1-15-2",
+                  "st-erlang-cowboy-28-4-3-fix", "green-coding-nginx", "erlang", "ws-elixir-bandit-1-8-5"]
+        self.assertEqual(tidy.old_server_images(images, folders),
+                         ["dy-gleam-pure-1-15-2", "st-erlang-cowboy-28-4-3-fix", "ws-elixir-bandit-1-8-5"])
+
+    def test_results_only_empty_or_abandoned(self):
+        import tidy
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "empty", "static"))
+        os.makedirs(os.path.join(d, "done", "static"))
+        open(os.path.join(d, "done", "static", "a.csv"), "w").close()
+        os.makedirs(os.path.join(d, "old"))
+        open(os.path.join(d, "old", ".abandoned"), "w").close()
+        found = {os.path.basename(f): why for f, _, why in tidy.empty_or_abandoned_results(d)}
+        self.assertEqual(found, {"empty": "empty", "old": "abandoned"})            # "done" is a result: never
+        shutil.rmtree(d)
+
+    def test_run_end_and_config(self):
+        import bench_config
+        self.assertEqual(bench_config.parse("")["NATIVE_COPIES"], "prune")
+        with self.assertRaises(bench_config.ConfigError):
+            bench_config.parse("NATIVE_COPIES=all")
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            self.assertIn('./tools/native_server.py tidy "${CFG_NATIVE_COPIES:-prune}" || true', fh.read())
 
 
 class ConfirmStop(unittest.TestCase):

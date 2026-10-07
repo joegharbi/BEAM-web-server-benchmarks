@@ -1659,6 +1659,10 @@ bench_on_exit() {
     rm -f "$RESULTS_DIR/.running"
     bench_restore_environment
     bench_unblock_sleep
+    # Native copies (NATIVE_COPIES): by default the ones that can never be used again are deleted
+    if [ -d native ]; then
+        "$PYTHON_PATH" ./tools/native_server.py tidy "${CFG_NATIVE_COPIES:-prune}" || true
+    fi
     # Stopped before the measurement wrote anything (e.g. during the settle wait): nothing to keep or to
     # continue, so remove its empty folder (empty folders only; a file is never removed here)
     if [ -z "$RESUME_DIR" ] && [ ! -f "$RESULTS_DIR/metadata.json" ] && [ -z "$(find "$RESULTS_DIR" -type f 2>/dev/null | head -1)" ]; then

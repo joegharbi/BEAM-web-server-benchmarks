@@ -197,12 +197,90 @@ def problem(image, docker_path="docker", host_os_release="/etc/os-release"):
     return "; ".join(problems)
 
 
+def _size(path):
+    total = 0
+    for root, _, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(root, f)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def stale_copies(docker_path="docker", root=None):
+    """[(folder, bytes, reason)] of copies that can never be used again: their image is gone or was
+    rebuilt (another image ID), or an unpacking was cut off (a hidden .<image>-... work folder)."""
+    root = root or NATIVE_DIR
+    stale = []
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return stale
+    for name in names:
+        folder = os.path.join(root, name)
+        if not os.path.isdir(folder):
+            continue
+        if name.startswith("."):
+            stale.append((folder, _size(folder), "unpacking was cut off"))
+            continue
+        try:
+            with open(os.path.join(folder, ".image_id"), encoding="utf-8") as fh:
+                copied = fh.read().strip()
+        except OSError:
+            copied = ""
+        now = subprocess.run([docker_path, "image", "inspect", "--format", "{{.Id}}", name],
+                             capture_output=True, text=True).stdout.strip()
+        if not now:
+            stale.append((folder, _size(folder), "its image no longer exists"))
+        elif now != copied:
+            stale.append((folder, _size(folder), "its image was rebuilt"))
+    return stale
+
+
+def all_copies(root=None):
+    """[(folder, bytes)] of every copy (folders only; the small scope logs stay)."""
+    root = root or NATIVE_DIR
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return []
+    return [(os.path.join(root, n), _size(os.path.join(root, n))) for n in names
+            if os.path.isdir(os.path.join(root, n))]
+
+
+def remove_copy(folder, root=None):
+    """Delete one copy; only ever a folder directly inside the native folder."""
+    root = os.path.realpath(root or NATIVE_DIR)
+    real = os.path.realpath(folder)
+    if os.path.dirname(real) != root or real == root:
+        raise ValueError(f"not a native copy: {folder}")
+    shutil.rmtree(real)
+
+
+def tidy(mode, docker_path="docker", root=None):
+    """NATIVE_COPIES at the end of a run: prune = delete the copies that can never be used again,
+    delete = delete every copy, keep = nothing. Returns (number deleted, bytes freed)."""
+    if mode == "keep":
+        return 0, 0
+    targets = [(f, b) for f, b, _ in stale_copies(docker_path, root)] if mode == "prune" else all_copies(root)
+    for folder, _ in targets:
+        remove_copy(folder, root)
+    return len(targets), sum(b for _, b in targets)
+
+
 if __name__ == "__main__":
     # check IMAGE...: unpack every image and print one line per image that cannot run natively
+    # tidy MODE: NATIVE_COPIES at the end of a run (prune, delete, keep)
     import sys
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
+    if sys.argv[1:2] == ["tidy"] and len(sys.argv) == 3:
+        n, freed = tidy(sys.argv[2])
+        if n:
+            print(f"Native copies: deleted {n} ({freed / 1e9:.1f} GB; NATIVE_COPIES={sys.argv[2]})")
+        sys.exit(0)
     if sys.argv[1:2] != ["check"]:
-        sys.exit("usage: native_server.py check IMAGE...")
+        sys.exit("usage: native_server.py check IMAGE... | tidy prune|delete|keep")
     for name in sys.argv[2:]:
         why = problem(name)
         if why:

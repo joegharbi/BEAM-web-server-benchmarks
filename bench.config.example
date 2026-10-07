@@ -36,6 +36,8 @@ WARMUP_SECONDS=0
 FAILURES_STOP_AFTER=5
 # Scaphandre's raw power logs: keep | delete
 RAW_DATA=keep
+# native-mode copies at the end of a run: prune (stale ones) | keep | delete
+NATIVE_COPIES=prune
 
 # ===== Order of the runs =====
 # 1 = shuffle the server order in every repeat, 0 = same order

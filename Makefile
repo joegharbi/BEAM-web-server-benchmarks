@@ -10,7 +10,7 @@ BENCH_DIR ?= benchmarks
 # Optional benchmark config: make run CONFIG=bench.config (see bench.config.example)
 CONFIG_ARG = $(if $(CONFIG),--config $(CONFIG),)
 
-.PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-env clean-nuclear build run setup graph validate check-health build-test-run run-single run-single-super-quick clean-all clean-build-run clean-all-build-run test
+.PHONY: help install clean-build clean-repo clean-results clean-benchmarks clean-env clean-nuclear build run setup graph validate check-health build-test-run run-single run-single-super-quick clean-all clean-build-run clean-all-build-run test tidy
 
 # --- Colors ---
 GREEN=\033[0;32m
@@ -141,6 +141,12 @@ resume: check-env ## Continue an unfinished measurement (the newest one, or RESU
 		if [ -f "$$v" ]; then . "$$v"; break; fi; \
 	done; \
 	BENCHMARKS_DIR="$(BENCH_DIR)" bash scripts/make_with_sudo_keepalive.sh bash scripts/run_benchmarks.sh --resume "$$R"
+
+tidy: ## Free disk space: lists old server images, Docker build cache, stale native copies, empty/abandoned result folders; deletes after a yes per group (never results)
+	@for v in ./*/bin/activate; do \
+		if [ -f "$$v" ]; then . "$$v"; break; fi; \
+	done; \
+	python3 tools/tidy.py $(TIDY_ARGS)
 
 status: ## Progress of the running (or newest) measurement: make status [RESULTS=results/<folder>]
 	@for v in ./*/bin/activate; do \

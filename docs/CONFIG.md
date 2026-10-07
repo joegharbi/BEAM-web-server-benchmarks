@@ -380,6 +380,18 @@ Scaphandre's raw power log of each run, after its energy has been calculated.
 | `keep` | keep it as it is (plain JSON) in <results>/raw/ (energy can be recalculated later; recommended) |
 | `delete` | delete it (saves disk space) |
 
+### `NATIVE_COPIES`
+
+Default: `prune`
+
+Native mode runs each server from a copy taken out of its image (native/<image>/, reused while the image is the same). Copies hold no results; any copy is made again when needed. At the end of a run:
+
+| Option | Meaning |
+|---|---|
+| `prune` | delete the copies that can never be used again: image gone or rebuilt (recommended) |
+| `keep` | keep every copy |
+| `delete` | delete every copy (the next native run copies again, a few seconds per server) |
+
 ## Order of the runs
 
 ### `SHUFFLE`

@@ -374,6 +374,12 @@ SCHEMA = {
         help="Scaphandre's raw power log of each run, after its energy has been calculated.",
         options={"keep": "keep it as it is (plain JSON) in <results>/raw/ (energy can be recalculated later; recommended)",
                  "delete": "delete it (saves disk space)"}),
+    "NATIVE_COPIES": dict(default="prune", check=_choice("prune", "keep", "delete"),
+        help="Native mode runs each server from a copy taken out of its image (native/<image>/, reused while the\n"
+             "image is the same). Copies hold no results; any copy is made again when needed. At the end of a run:",
+        options={"prune": "delete the copies that can never be used again: image gone or rebuilt (recommended)",
+                 "keep": "keep every copy",
+                 "delete": "delete every copy (the next native run copies again, a few seconds per server)"}),
 
     # --- Workloads (full runs; --quick and --super-quick keep their short built-in lists) ---
     "HTTP_REQUESTS": dict(default="100 1000 5000 8000 10000 15000 20000 30000 40000 50000 60000 70000 80000",
@@ -562,6 +568,7 @@ SHORT = {
     "INVALID_RUN_RETRIES": "measure a run again this many times when the conditions during its load broke a rule",
     "FAILURES_STOP_AFTER": "stop after this many failed measurements in a row (1 = first failure, 0 = never)",
     "RAW_DATA": "Scaphandre's raw power logs: keep | delete",
+    "NATIVE_COPIES": "native-mode copies at the end of a run: prune (stale ones) | keep | delete",
     "HTTP_REQUESTS": "HTTP load levels (request counts)",
     "WS_BURST_CLIENTS": "burst test: client counts",
     "WS_BURST_SIZES_KB": "burst test: message sizes (KB)",
@@ -587,7 +594,7 @@ EXAMPLE_LAYOUT = [
     ("Machine profile", ["MACHINE"]),
     ("What to measure", ["MEASURE", "SERVERS", "VARIANTS", "VARIANT_ORDER", "DEPLOY", "BENCHMARKS_DIR"]),
     ("How much", ["REPEATS", "HTTP_REQUESTS", "IDLE_SECONDS", "WARMUP_SECONDS"]),
-    ("Failures and raw data", ["FAILURES_STOP_AFTER", "RAW_DATA"]),
+    ("Failures and raw data", ["FAILURES_STOP_AFTER", "RAW_DATA", "NATIVE_COPIES"]),
     ("Order of the runs", ["SHUFFLE", "SHUFFLE_SEED"]),
     ("Load and energy measurement", ["HTTP_MAX_WORKERS", "HTTP_CONNECTION", "SCAPH_STEP_MS"]),
     ("WebSocket workloads (full runs; --quick and --super-quick keep their short lists)",

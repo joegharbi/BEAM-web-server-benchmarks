@@ -362,6 +362,7 @@ Steps:
 | Benchmarks     | `make run-quick`, `make run-all`|
 | Graphs         | `make graph`                    |
 | Clean results  | `make clean-results`            |
+| Free disk space | `make tidy`: lists old server images, Docker build cache, stale native copies, empty or abandoned result folders, and deletes each group only after a yes (never results; `TIDY_ARGS=--dry-run` only lists). Runs delete their stale native copies themselves (`NATIVE_COPIES=prune`) |
 | Clean env      | `make clean-env` (venv + __pycache__) |
 | Clean Docker   | `make clean-build`              |
 | Clean all      | `make clean-all` (results + env + Docker; run `make setup` after) |
