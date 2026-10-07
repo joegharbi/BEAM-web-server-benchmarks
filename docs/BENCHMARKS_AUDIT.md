@@ -32,7 +32,7 @@ Bandit 1.12.5, Plug.Cowboy 2.9.0); Gleam 1.19.0 on OTP 29.1.1 (mist 6.0.3); Java
 | Elixir | index   | `st-elixir-index-1-20-4` | Raw sockets; reads the index HTML file per request |
 | Elixir | phoenix | `st-elixir-phoenix-1-8-15` | |
 | Elixir | pure    | `st-elixir-pure-1-20-4` | Raw sockets; HTML in code |
-| Gleam  | index   | `st-gleam-index-1-19-0` | mist; reads the index HTML file per request |
+| Gleam  | index   | `st-gleam-index-1-19-0` | Raw sockets (gen_tcp via a small Erlang helper); reads the index HTML file per request |
 | Gleam  | mist    | `st-gleam-mist-1-19-0` | |
 | Gleam  | pure    | `st-gleam-pure-1-19-0` | Raw sockets (gen_tcp via a small Erlang helper); HTML in code |
 | Java   | netty   | `st-java-netty-4-2-19` | Reference; no busy-waiting variant (does not read `ERL_FLAGS`) |
@@ -71,7 +71,7 @@ discovered by `make build` or `make run`.
 
 Every one of the 29 servers, in Docker and natively (`DEPLOY=native`):
 - answers `GET /` with 200 (WebSocket: the upgrade on `/ws` with 101);
-- dynamic servers return a different page one second later;
+- dynamic servers return a different page one second later, and answer `POST /` with 204;
 - runs only the server (`beam.smp` and `erl_child_setup`, or `java`): no `epmd`, no build tool;
 - is built from its current folder (the `wseb.recipe` fingerprint matches).
 
