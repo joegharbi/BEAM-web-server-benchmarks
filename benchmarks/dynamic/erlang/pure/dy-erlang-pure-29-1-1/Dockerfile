@@ -7,7 +7,8 @@ WORKDIR /app
 
 # Plain Erlang HTTP server (page with the current time), built as a lean release (kernel, stdlib, the app)
 COPY src/ /app/src/
-COPY rebar.config .
+# rebar.lock pins every dependency (also cowlib, ranch) to the exact version and checksum
+COPY rebar.config rebar.lock ./
 COPY config/ /app/config/
 
 # Build release
@@ -29,6 +30,11 @@ WORKDIR /app
 
 # Copy only the built release from builder stage
 COPY --from=builder /app/_build/prod/rel/hello /app/hello
+
+# What this server is, for the results index and the graphs (README: server contract)
+LABEL wseb.language="erlang" wseb.language_version="29.1.1" \
+      wseb.runtime="beam" wseb.runtime_version="OTP 29.1.1" \
+      wseb.kind="pure" wseb.framework="none" wseb.framework_version=""
 
 EXPOSE 8001
 

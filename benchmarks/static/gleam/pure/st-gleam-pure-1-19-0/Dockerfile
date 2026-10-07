@@ -31,6 +31,11 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/erlang /app/erlang
 COPY --from=builder /app/build/erlang-shipment /app/shipment
 
+# What this server is, for the results index and the graphs (README: server contract)
+LABEL wseb.language="gleam" wseb.language_version="1.19.0" \
+      wseb.runtime="beam" wseb.runtime_version="OTP 29.1.1" \
+      wseb.kind="pure" wseb.framework="none" wseb.framework_version=""
+
 EXPOSE 8001
 
 COPY start.sh /start.sh

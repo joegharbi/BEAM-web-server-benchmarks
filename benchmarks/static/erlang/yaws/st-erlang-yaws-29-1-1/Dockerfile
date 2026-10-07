@@ -11,7 +11,8 @@ WORKDIR /app
 # Yaws embedded in a lean release (static page index.html)
 COPY src/ /app/src/
 COPY priv/ /app/priv/
-COPY rebar.config .
+# rebar.lock pins every dependency (also cowlib, ranch) to the exact version and checksum
+COPY rebar.config rebar.lock ./
 COPY config/ /app/config/
 
 # Build release
@@ -33,6 +34,11 @@ WORKDIR /app
 
 # Copy only the built release from builder stage
 COPY --from=builder /app/_build/prod/rel/bench_yaws /app/bench_yaws
+
+# What this server is, for the results index and the graphs (README: server contract)
+LABEL wseb.language="erlang" wseb.language_version="29.1.1" \
+      wseb.runtime="beam" wseb.runtime_version="OTP 29.1.1" \
+      wseb.kind="framework" wseb.framework="yaws" wseb.framework_version="2.3.1"
 
 EXPOSE 8001
 

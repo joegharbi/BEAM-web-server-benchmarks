@@ -31,6 +31,11 @@ COPY --from=builder /build/target/app.jar /app/app.jar
 # Runtime options come from JAVA_TOOL_OPTIONS; ERL_FLAGS variants (busy-waiting) do not apply here
 LABEL wseb.options="JAVA_TOOL_OPTIONS"
 
+# What this server is, for the results index and the graphs (README: server contract)
+LABEL wseb.language="java" wseb.language_version="27" \
+      wseb.runtime="jvm" wseb.runtime_version="Temurin 27+35" \
+      wseb.kind="framework" wseb.framework="netty" wseb.framework_version="4.2.19.Final"
+
 EXPOSE 8001
 
 COPY start.sh /start.sh

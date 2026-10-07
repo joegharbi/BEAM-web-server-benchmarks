@@ -34,6 +34,11 @@ WORKDIR /app
 
 COPY --from=builder /app/_build/prod/rel/ws_bandit /app/ws_bandit
 
+# What this server is, for the results index and the graphs (README: server contract)
+LABEL wseb.language="elixir" wseb.language_version="1.20.4" \
+      wseb.runtime="beam" wseb.runtime_version="OTP 29.1.1" \
+      wseb.kind="framework" wseb.framework="bandit" wseb.framework_version="1.12.5"
+
 EXPOSE 8001
 
 COPY start.sh /start.sh
