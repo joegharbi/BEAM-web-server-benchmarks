@@ -72,6 +72,23 @@ def docker_running():
         return []
 
 
+def restart_containers(names, wait_s=3):
+    """Start the containers again and check each one really runs; a failed one is tried once more after
+    `wait_s` seconds. Returns (running, not_running, docker's last error message)."""
+    error = ""
+    for attempt in range(2):
+        running = docker_running()
+        todo = [n for n in names if n not in running]
+        if not todo:
+            break
+        if attempt:
+            time.sleep(wait_s)
+        out = subprocess.run(["docker", "start"] + todo, capture_output=True, text=True)
+        error = (out.stderr or "").strip() or error
+    running = docker_running()
+    return [n for n in names if n in running], [n for n in names if n not in running], error
+
+
 def set_brightness(pattern, percent, label, saved):
     """Set every light matching `pattern` to `percent` of its maximum; previous values go to `saved`."""
     dirs = [d for d in sorted(glob.glob(pattern)) if (read(os.path.join(d, "max_brightness")) or "").isdigit()]
@@ -277,10 +294,23 @@ def _restore(args):
         print(f"Radios restored: {', '.join({'wlan': 'Wi-Fi', 'bluetooth': 'Bluetooth'}[k] for k in radios)}")
 
     stopped = state.get("stopped_containers") or []
+    # A setting whose file is gone (the device disappeared) cannot be restored and must not block runs
+    not_restored = [f"{os.path.basename(os.path.dirname(p))}/{os.path.basename(p)}" for p, _ in failed
+                    if os.path.exists(p)]
     if stopped:
-        subprocess.run(["docker", "start"] + stopped, capture_output=True, text=True)
-        print(f"Restarted containers: {', '.join(stopped)}")
+        up, down, error = restart_containers(stopped)
+        if up:
+            print(f"Restarted containers: {', '.join(up)}")
+        if down:
+            print(f"NOT restarted: {', '.join(down)}" + (f" (docker: {error})" if error else ""))
+            print(f"  Start them yourself: docker start {' '.join(down)}")
+            not_restored += down
 
+    if not_restored:
+        # Keep the saved state: the next run refuses to start until the restore is done again
+        print(f"\nNot everything was restored ({', '.join(not_restored)}); kept {args.state}.")
+        print(f"Run the restore again: sudo python3 tools/prepare_environment.py restore --state {args.state}")
+        sys.exit(1)
     os.remove(args.state)
     print(f"\nRestored. Removed {args.state}.")
 

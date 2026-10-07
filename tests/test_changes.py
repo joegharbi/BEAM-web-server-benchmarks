@@ -2016,6 +2016,52 @@ class LoadConditions(unittest.TestCase):
 
 
 
+
+class RestoreContainers(unittest.TestCase):
+    """The restore checks that every stopped container runs again; if not, it says so and keeps the state."""
+
+    def run_restore(self, can_start):
+        import prepare_environment as pe
+        from unittest import mock
+        fd, state = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, "w") as fh:
+            json.dump({"governors": {}, "turbo": None, "files": {}, "radios": {},
+                       "stopped_containers": ["a", "b"]}, fh)
+        running, starts = set(), []
+
+        def run(cmd, **kw):                                  # a fake docker start: some containers fail
+            starts.append(cmd)
+            running.update(n for n in cmd[2:] if n in can_start)
+            bad = [n for n in cmd[2:] if n not in can_start]
+            return mock.Mock(returncode=1 if bad else 0, stderr="Error: network not found" if bad else "")
+        out = []
+        with mock.patch.object(pe, "require_root"), mock.patch.object(pe.subprocess, "run", run), \
+                mock.patch.object(pe, "docker_running", lambda: sorted(running)), \
+                mock.patch.object(pe.time, "sleep"), mock.patch("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a)))):
+            try:
+                pe.do_restore(mock.Mock(state=state))
+                code = 0
+            except SystemExit as e:
+                code = e.code
+        kept = os.path.exists(state)
+        if kept:
+            os.remove(state)
+        return code, kept, "\n".join(out), starts
+
+    def test_all_running_again(self):
+        code, kept, out, starts = self.run_restore(["a", "b"])
+        self.assertEqual((code, kept), (0, False))
+        self.assertIn("Restarted containers: a, b", out)
+
+    def test_one_did_not_start(self):
+        code, kept, out, starts = self.run_restore(["a"])
+        self.assertEqual((code, kept), (1, True))                       # state kept: the next run refuses
+        self.assertIn("Restarted containers: a", out)
+        self.assertIn("NOT restarted: b (docker: Error: network not found)", out)
+        self.assertIn("docker start b", out)
+        self.assertEqual(starts, [["docker", "start", "a", "b"], ["docker", "start", "b"]])   # b tried once more
+
+
 class ConfirmStop(unittest.TestCase):
     """Ctrl-C asks whether to stop (y = stop, else or no answer = continue); the running step goes on."""
 
