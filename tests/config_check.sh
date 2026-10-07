@@ -51,7 +51,10 @@ echo "Before: $BEFORE"
 source srv/bin/activate
 ls -d results/*/ 2>/dev/null | sort > "$TMP/folders.before"
 # A check always measures from zero: an unfinished earlier check run is marked abandoned, not continued
-BENCH_UNFINISHED_ANSWER=n bash scripts/run_benchmarks.sh --super-quick --bench "$TMP/bench" --config "$TMP/check.config" static > "$TMP/run.out" 2>&1 &
+echo "The check run takes about 5 minutes; its output follows live, then the checks."
+# Shown live (and kept for the checks); tee ignores Ctrl-C so the restore messages still appear
+BENCH_UNFINISHED_ANSWER=n bash scripts/run_benchmarks.sh --super-quick --bench "$TMP/bench" --config "$TMP/check.config" static \
+    > >(trap '' INT TERM; exec tee "$TMP/run.out") 2>&1 &
 RUN=$!
 # A background job of a script ignores Ctrl-C, so pass it on: TERM makes the run stop and restore
 # the machine settings itself; wait for that before leaving.
@@ -60,7 +63,6 @@ sleep 20
 INHIBITED=$(systemd-inhibit --list --no-pager | grep -c "web-server benchmarks")
 wait $RUN
 RC=$?
-cat "$TMP/run.out"
 AFTER=$(state)
 echo "After:  $AFTER"
 # Only the folder this check run made (never an older measurement's)
