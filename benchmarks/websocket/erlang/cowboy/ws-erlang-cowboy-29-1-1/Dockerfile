@@ -30,12 +30,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Minimal Erlang = Erlang runtime only (no Elixir, no build tools)
-COPY --from=builder /usr/local/lib/erlang /usr/local/lib/erlang
-
-# Set up environment
-ENV PATH="/usr/local/lib/erlang/bin:${PATH}"
-ENV ERLANG_HOME="/usr/local/lib/erlang"
+# The release carries its own Erlang runtime (include_erts), so no second copy is needed
 
 # Set working directory
 WORKDIR /app
