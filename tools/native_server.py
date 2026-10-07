@@ -32,8 +32,12 @@ def unit_name(name):
     return "wseb-" + re.sub(r"[^A-Za-z0-9_.-]", "_", name) + ".scope"
 
 
+DOCKER_TIMEOUT_S = 300      # a Docker call that does not answer within this ends with an error, not a hang
+
+
 def _docker(docker_path, *args):
-    return subprocess.run([docker_path, *args], capture_output=True, text=True, check=True).stdout.strip()
+    return subprocess.run([docker_path, *args], capture_output=True, text=True, check=True,
+                          timeout=DOCKER_TIMEOUT_S).stdout.strip()
 
 
 def image_env(image, docker_path="docker"):
@@ -178,6 +182,8 @@ def problem(image, docker_path="docker", host_os_release="/etc/os-release"):
     the host's OS."""
     try:
         folder = unpack(image, docker_path)
+    except subprocess.TimeoutExpired:
+        return f"Docker did not answer within {DOCKER_TIMEOUT_S // 60} min while copying the image (try again; docker info)"
     except (subprocess.CalledProcessError, OSError) as e:
         detail = (getattr(e, "stderr", "") or str(e)).strip().splitlines()
         return f"could not copy /app and /start.sh out of the image ({detail[-1] if detail else e})"
@@ -281,7 +287,10 @@ if __name__ == "__main__":
         sys.exit(0)
     if sys.argv[1:2] != ["check"]:
         sys.exit("usage: native_server.py check IMAGE... | tidy prune|delete|keep")
-    for name in sys.argv[2:]:
+    names = sys.argv[2:]
+    for i, name in enumerate(names, 1):
+        # Progress on stderr (the problems on stdout are what the run script collects)
+        print(f"  Preparing native copies: {i} of {len(names)} ({name}) ...", file=sys.stderr, flush=True)
         why = problem(name)
         if why:
             print(f"  {name}: {why}")
