@@ -114,18 +114,9 @@ defmodule ElixirDynamic.Server do
       :io_lib.format("~4..0w-~2..0w-~2..0w ~2..0w:~2..0w:~2..0w", [year, month, day, hour, min, sec])
       |> :erlang.iolist_to_binary()
 
-    """
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>Energy Test</title>
-      </head>
-      <body>
-        <h1>Hello, Energy Test!</h1>
-        <p>Current time: #{time}</p>
-      </body>
-    </html>
-    """
+    # The same page, byte for byte, as the Erlang, Gleam and Java pure servers
+    "<!DOCTYPE html><html><head><title>Energy Test</title></head><body><h1>Hello, Energy Test!</h1>" <>
+      "<p>Current time: #{time}</p></body></html>"
   end
 end
 

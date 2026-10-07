@@ -52,5 +52,5 @@ connection(true) -> <<"keep-alive">>;
 connection(false) -> <<"close">>.
 respond(Conn, Keep) ->
     {ok, Html} = file:read_file(filename:join(code:priv_dir(hello), "index.html")),
-    Response = [<<"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ">>, integer_to_binary(byte_size(Html)), <<"\r\nConnection: ">>, connection(Keep), <<"\r\n\r\n">>, Html],
+    Response = [<<"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ">>, integer_to_binary(byte_size(Html)), <<"\r\nConnection: ">>, connection(Keep), <<"\r\n\r\n">>, Html],
     gen_tcp:send(Conn, Response).

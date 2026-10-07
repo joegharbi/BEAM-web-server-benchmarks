@@ -9,17 +9,8 @@ defmodule ElixirStatic.Server do
 
   require Logger
 
-  @response_body """
-  <!DOCTYPE html>
-  <html>
-  <head>
-      <title>Energy Test</title>
-  </head>
-  <body>
-      <h1>Hello, Energy Test!</h1>
-  </body>
-  </html>
-  """
+  # The same page, byte for byte, as the Erlang, Gleam and Java pure servers
+  @response_body "<!DOCTYPE html><html><head><title>Energy Test</title></head><body><h1>Hello, Energy Test!</h1></body></html>"
 
   def start(port) when is_integer(port) do
     {:ok, socket} =
