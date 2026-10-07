@@ -4,6 +4,7 @@ Run from the repo root:  venv/bin/python -m unittest tests/test_changes.py -v
 Needs no sudo, Docker or Scaphandre.
 """
 import csv
+import glob
 import json
 import os
 import shutil
@@ -613,7 +614,7 @@ class ThermalColumns(unittest.TestCase):
 class PreLoadGate(unittest.TestCase):
     KEYS = ("MEASURE_READY_TEMP_REFERENCE_C", "MEASURE_READY_TEMP_MARGIN_C", "MEASURE_READY_NO_THROTTLING",
             "MEASURE_READY_CHECK_EVERY_SECONDS", "MEASURE_READY_CONSECUTIVE_CHECKS",
-            "MEASURE_READY_MAX_WAIT_SECONDS", "MEASURE_READY_ON_TIMEOUT")
+            "MEASURE_READY_MAX_WAIT_SECONDS", "MEASURE_READY_ON_TIMEOUT", "MEASURE_READY_CPU_SPEED")
 
     def setUp(self):
         import readiness, run_metadata
@@ -632,7 +633,8 @@ class PreLoadGate(unittest.TestCase):
         os.environ.update({"MEASURE_READY_TEMP_REFERENCE_C": "40", "MEASURE_READY_TEMP_MARGIN_C": "2",
                            "MEASURE_READY_NO_THROTTLING": "1", "MEASURE_READY_CHECK_EVERY_SECONDS": "0.01",
                            "MEASURE_READY_CONSECUTIVE_CHECKS": "2", "MEASURE_READY_MAX_WAIT_SECONDS": "0.2",
-                           "MEASURE_READY_ON_TIMEOUT": on_timeout})
+                           "MEASURE_READY_ON_TIMEOUT": on_timeout,
+                           "MEASURE_READY_CPU_SPEED": "off"})           # not this laptop's current CPU speed
 
     def test_off_without_config(self):
         self.assertEqual(self.r.pre_load_gate(), (None, "not checked"))
@@ -1149,7 +1151,7 @@ class LaptopSettings(unittest.TestCase):
 
     def args(self, **kw):
         import argparse
-        d = dict(governor="unchanged", turbo="unchanged", stop_containers=False, keep="",
+        d = dict(governor="unchanged", turbo="unchanged", cpu_speed="unchanged", stop_containers=False, keep="",
                  screen_brightness="20", keyboard_light="off", wifi="off", bluetooth="off",
                  state=os.path.join(self.root, "state.json"))
         d.update(kw)
@@ -2205,7 +2207,7 @@ class CpuSpeedGuard(unittest.TestCase):
         with mock.patch.object(run_metadata, "_min_mhz", side_effect=fake), \
                 mock.patch.object(run_metadata, "rated_cpu_speed_mhz", return_value=None):
             with mock.patch.object(run_metadata, "turbo_state", return_value="off"):
-                self.assertEqual(run_metadata.expected_cpu_speed(), (1800, "base_frequency"))
+                self.assertEqual(run_metadata.expected_cpu_speed(), (None, ""))   # base_frequency is never used
             with mock.patch.object(run_metadata, "turbo_state", return_value="on"):
                 self.assertEqual(run_metadata.expected_cpu_speed(), (4900, "maximum"))
 
@@ -2246,28 +2248,107 @@ class CpuSpeedGuard(unittest.TestCase):
             check("fast")
 
 
-class PinMinSpeed(unittest.TestCase):
-    """Environment: with the performance governor the minimum speed is pinned to the maximum."""
+class SetCpuSpeed(unittest.TestCase):
+    """ENV_CPU_SPEED: every core fixed at one speed (lowest = highest), saved, verified and restored."""
 
-    def test_pinned_saved_and_restorable(self):
+    def cores(self, low="400000", top="1800000", hw="1800000", n=2):
+        d = tempfile.mkdtemp()
+        for i in range(n):
+            f = os.path.join(d, f"cpu{i}", "cpufreq")
+            os.makedirs(f)
+            for name, v in (("scaling_min_freq", low), ("scaling_max_freq", top), ("cpuinfo_max_freq", hw)):
+                with open(os.path.join(f, name), "w") as fh:
+                    fh.write(v)
+        return d, os.path.join(d, "cpu*", "cpufreq")
+
+    def limits(self, d):
+        out = set()
+        for f in sorted(glob.glob(os.path.join(d, "cpu*", "cpufreq"))):
+            with open(os.path.join(f, "scaling_min_freq")) as a, open(os.path.join(f, "scaling_max_freq")) as b:
+                out.add((a.read(), b.read()))
+        return out
+
+    def test_max_fixes_at_the_hardware_maximum(self):
+        import prepare_environment as pe
+        d, pattern = self.cores(top="800000")                       # applied while the firmware capped it
+        saved = {}
+        pe.set_cpu_speed(None, saved, pattern)
+        self.assertEqual(self.limits(d), {("1800000", "1800000")})  # not the cap's 800 MHz
+        self.assertEqual(sorted(set(saved.values())), ["400000", "800000"])
+        shutil.rmtree(d)
+
+    def test_lower_speed_and_restore_in_any_order(self):
         import prepare_environment as pe
         from unittest import mock
-        d = tempfile.mkdtemp()
-        maxes = []
-        for i, (top, low) in enumerate([("1800000", "400000"), ("1800000", "400000")]):
-            os.makedirs(os.path.join(d, f"cpu{i}"))
-            for name, v in (("scaling_max_freq", top), ("scaling_min_freq", low)):
-                with open(os.path.join(d, f"cpu{i}", name), "w") as fh:
-                    fh.write(v)
-            maxes.append(os.path.join(d, f"cpu{i}", "scaling_max_freq"))
+        d, pattern = self.cores(low="1500000")
         saved = {}
-        with mock.patch.object(pe.glob, "glob", return_value=maxes):
-            pe.pin_min_speed(saved)
-        for m in maxes:
-            with open(m.replace("max", "min")) as fh:
-                self.assertEqual(fh.read(), "1800000")
-        self.assertEqual(set(saved.values()), {"400000"})
+        real_write = pe.write
+
+        def write(path, value):                                     # the kernel refuses min > max and max < min
+            folder = os.path.dirname(path)
+            other = "scaling_max_freq" if path.endswith("scaling_min_freq") else "scaling_min_freq"
+            if os.path.exists(os.path.join(folder, other)):
+                with open(os.path.join(folder, other)) as fh:
+                    o = int(fh.read())
+                if (path.endswith("min_freq") and int(value) > o) or (path.endswith("max_freq") and int(value) < o):
+                    return False
+            return real_write(path, value)
+        with mock.patch.object(pe, "write", write):
+            pe.set_cpu_speed(1200, saved, pattern)                  # below the minimum: minimum first
+            self.assertEqual(self.limits(d), {("1200000", "1200000")})
+            failed = [(p, v) for p, v in saved.items() if not pe.write(p, v)]
+            failed = [(p, v) for p, v in failed if not pe.write(p, v)]   # the second pass of the restore
+        self.assertEqual(failed, [])
+        self.assertEqual(self.limits(d), {("1500000", "1800000")})
         shutil.rmtree(d)
+
+    def test_saves_the_limits_from_before_turbo_changed(self):
+        # As on 2026-10-07: turbo off made the kernel report the highest speed as 1800 MHz; saving that
+        # restored 1800 MHz as a permanent limit instead of the real 4900 MHz
+        import prepare_environment as pe
+        d, pattern = self.cores(top="1800000", hw="4900000")         # now: clamped by turbo off
+        before = {os.path.join(d, f"cpu{i}", "cpufreq", n): v for i in range(2)
+                  for n, v in (("scaling_max_freq", "4900000"), ("scaling_min_freq", "400000"))}
+        saved = {}
+        pe.set_cpu_speed(None, saved, pattern, before=before)
+        self.assertEqual(set(v for p, v in saved.items() if p.endswith("max_freq")), {"4900000"})
+        with open(os.path.join(ROOT, "tools", "prepare_environment.py")) as fh:
+            src = fh.read()
+        self.assertLess(src.index("limits_before = {path: read(path)"), src.index('if args.turbo == "unchanged":'))
+        shutil.rmtree(d)
+
+    def test_restore_has_two_passes(self):
+        with open(os.path.join(ROOT, "tools", "prepare_environment.py")) as fh:
+            self.assertIn("failed = [(path, prev) for path, prev in failed if not write(path, prev)]", fh.read())
+
+    def test_verify_and_config(self):
+        import bench_config
+        import prepare_environment as pe
+        from unittest import mock
+        check = bench_config.SCHEMA["ENV_CPU_SPEED"]["check"]
+        self.assertEqual([check("max"), check("unchanged"), check("1200")], ["max", "unchanged", "1200"])
+        for bad in ("fast", "50"):
+            with self.assertRaises(ValueError):
+                check(bad)
+        args = mock.Mock(governor="unchanged", turbo="unchanged", cpu_speed="1200", screen_brightness="unchanged",
+                         keyboard_light="unchanged", wifi="unchanged", bluetooth="unchanged", stop_containers=False)
+        import run_metadata
+        with mock.patch.object(run_metadata, "cpu_max_freq_mhz", return_value="1800"), \
+                self.assertRaises(SystemExit) as ended, mock.patch("builtins.print") as out:
+            pe.do_verify(args)
+        self.assertEqual(ended.exception.code, 1)
+        self.assertIn("CPU speed is 1800 MHz, expected 1200 MHz", str(out.call_args_list))
+
+    def test_yardstick_is_the_speed_we_set(self):
+        import run_metadata
+        from unittest import mock
+        with mock.patch.object(run_metadata, "rated_cpu_speed_mhz", return_value=1800), \
+                mock.patch.object(run_metadata, "turbo_state", return_value="off"):
+            self.assertEqual(run_metadata.expected_cpu_speed("1200"), (1200, "set"))
+            self.assertEqual(run_metadata.expected_cpu_speed("max"), (1800, "rated"))
+        with mock.patch.object(run_metadata, "rated_cpu_speed_mhz", return_value=None), \
+                mock.patch.object(run_metadata, "turbo_state", return_value="off"):
+            self.assertEqual(run_metadata.expected_cpu_speed("max"), (None, ""))       # unknown: ask, never guess
 
 
 class SafeInterrupts(unittest.TestCase):

@@ -42,7 +42,7 @@ ON_BATTERY=wait
 EOF
 
 state() {
-    srv/bin/python -c 'import sys; sys.path.insert(0, "tools"); import run_metadata as m; print(m.cpu_governor(), m.turbo_state(), "screen", m.screen_brightness_percent(), "kbd", m.keyboard_backlight_percent(), "bt", m.radios().get("bluetooth"))'
+    srv/bin/python -c 'import sys; sys.path.insert(0, "tools"); import run_metadata as m; import glob; lim = lambda n: "/".join(sorted({open(f).read().strip() for f in glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/" + n)})); print(m.cpu_governor(), m.turbo_state(), "cpu", lim("scaling_min_freq") + "-" + lim("scaling_max_freq"), "screen", m.screen_brightness_percent(), "kbd", m.keyboard_backlight_percent(), "bt", m.radios().get("bluetooth"))'
     docker ps --format '{{.Names}}' | sort | tr '\n' ' '
 }
 BEFORE=$(state)
@@ -105,7 +105,7 @@ checks = [
      and os.path.isfile(os.path.join(d, "static", "summary.csv"))),
     ("bench.config.resolved saved", os.path.isfile(os.path.join(d, "bench.config.resolved"))),
     ("schedule and config saved", os.path.isfile(os.path.join(d, "schedule.txt")) and os.path.isfile(os.path.join(d, "bench.config"))),
-    ("machine restored exactly (governor, turbo, containers, screen, keyboard light, Bluetooth)", before == after),
+    ("machine restored exactly (governor, turbo, CPU speed limits, containers, screen, keyboard light, Bluetooth)", before == after),
     ("screen at 20%, keyboard light and Bluetooth off while measuring",
      abs(int(s["screen_brightness_percent"] or -99) - 20) <= 2 and s["keyboard_backlight_percent"] in (0, "")
      and s["bluetooth"] in ("off", "")),

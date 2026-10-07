@@ -112,6 +112,18 @@ Turbo boost: the CPU briefly running above its base frequency when it is cool en
 | `on` | turbo allowed; faster, closer to everyday use, but more variation |
 | `unchanged` | leave the machine's current setting |
 
+### `ENV_CPU_SPEED`
+
+Default: `max`
+
+Fix every core at one speed for the whole measurement (lowest speed = highest speed), saved and restored afterwards. The readiness check then expects exactly this speed (READY_CPU_SPEED=auto).
+
+| Option | Meaning |
+|---|---|
+| `max` | the highest speed allowed (with turbo off: the CPU's base speed) (recommended) |
+| `<MHz>` | a lower fixed speed, e.g. 1200, to measure a slower machine or a rented share of one; the run refuses to start if the CPU does not accept it |
+| `unchanged` | leave the CPU's speed limits as they are (machines you do not control) |
+
 ### `ENV_STOP_CONTAINERS`
 
 Default: `1`
@@ -261,7 +273,7 @@ Not ready while the CPU is capped below its expected speed. The firmware can cap
 
 | Option | Meaning |
 |---|---|
-| `auto` | expect the CPU's rated base speed with turbo off (from its model name, e.g. @ 1.80GHz), the maximum with turbo on; fixed once at the start of a run (recommended) |
+| `auto` | expect the speed set by ENV_CPU_SPEED=<MHz>; else with turbo off the CPU's rated base speed (from its model name, e.g. @ 1.80GHz), with turbo on its maximum; fixed once at the start of a run; unknown (no rated speed): not checked, with a warning (recommended) |
 | `off` | do not check |
 | `<MHz>` | expect at least this speed |
 

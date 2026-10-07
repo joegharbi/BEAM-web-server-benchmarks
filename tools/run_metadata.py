@@ -185,20 +185,20 @@ def rated_cpu_speed_mhz(cpuinfo="/proc/cpuinfo"):
     return None
 
 
-def expected_cpu_speed():
-    """(MHz, source): the speed limit the CPU should have with the current turbo setting, or (None, "").
+def expected_cpu_speed(set_speed=None):
+    """(MHz, source): the speed limit the CPU should have, or (None, "") when unknown.
 
-    Turbo off: the rated base speed ("rated"); without one in the model name, the firmware's
-    base_frequency ("base_frequency"), which can move with a cap, so a fixed READY_CPU_SPEED is better
-    there. Turbo on: the hardware maximum ("maximum"). run_benchmarks.sh fixes it once per run.
+    The rule: expect the speed we set; if we set none, the rated speed; else ask (unknown). So:
+    a speed in MHz set by ENV_CPU_SPEED ("set"); with turbo off the rated base speed from the model
+    name ("rated"); with turbo on the hardware maximum ("maximum"). Values the firmware can change
+    together with a cap (base_frequency, the current limits) are never used. run_benchmarks.sh works
+    it out once per run.
     """
+    if set_speed and str(set_speed).isdigit():
+        return int(set_speed), "set"
     if turbo_state() == "off":
         rated = rated_cpu_speed_mhz()
-        if rated:
-            return rated, "rated"
-        base = _min_mhz("/sys/devices/system/cpu/cpu*/cpufreq/base_frequency")
-        if base:
-            return base, "base_frequency"
+        return (rated, "rated") if rated else (None, "")
     top = _min_mhz("/sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq")
     return (top, "maximum") if top else (None, "")
 
@@ -659,7 +659,7 @@ def main():
         print(cpu_package_temp_c())
         return
     if args.phase == "expected-cpu-speed":
-        mhz, source = expected_cpu_speed()
+        mhz, source = expected_cpu_speed(args.folder)          # optional: ENV_CPU_SPEED
         print(f"{mhz} {source}" if mhz else "")
         return
     if args.phase == "recipe-hash":

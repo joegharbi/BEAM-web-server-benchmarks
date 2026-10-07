@@ -155,6 +155,15 @@ def _names(v):
     return v
 
 
+def _env_cpu_speed(v):
+    if v in ("max", "unchanged"):
+        return v
+    try:
+        return _int(100)(v)
+    except ValueError:
+        raise ValueError("must be max, unchanged, or a speed in MHz (100 or more)")
+
+
 def _cpu_speed(v):
     if v in ("auto", "off"):
         return v
@@ -254,6 +263,13 @@ SCHEMA = {
                  "ondemand": "frequency jumps up under load (only with some CPU drivers)",
                  "conservative": "frequency rises slowly under load (only with some CPU drivers)",
                  "unchanged": "leave the machine's current setting"}),
+    "ENV_CPU_SPEED": dict(default="max", check=_env_cpu_speed, unit="max, unchanged, or MHz",
+        help="Fix every core at one speed for the whole measurement (lowest speed = highest speed), saved and\n"
+             "restored afterwards. The readiness check then expects exactly this speed (READY_CPU_SPEED=auto).",
+        options={"max": "the highest speed allowed (with turbo off: the CPU's base speed) (recommended)",
+                 "<MHz>": "a lower fixed speed, e.g. 1200, to measure a slower machine or a rented share of one;\n"
+                          "#            the run refuses to start if the CPU does not accept it",
+                 "unchanged": "leave the CPU's speed limits as they are (machines you do not control)"}),
     "ENV_TURBO": dict(default="off", check=_choice("off", "on", "unchanged"),
         help="Turbo boost: the CPU briefly running above its base frequency when it is cool enough.",
         options={"off": "no turbo; slower but much steadier results (recommended)",
@@ -323,8 +339,9 @@ SCHEMA = {
              "itself, e.g. when the charger is too weak for the laptop; software cannot lift that cap. The\n"
              "cap can come and go, so it is also watched during every load: a run that was capped at any\n"
              "moment is invalid and measured again (INVALID_RUN_RETRIES).",
-        options={"auto": "expect the CPU's rated base speed with turbo off (from its model name, e.g. @ 1.80GHz),\n"
-                         "#            the maximum with turbo on; fixed once at the start of a run (recommended)",
+        options={"auto": "expect the speed set by ENV_CPU_SPEED=<MHz>; else with turbo off the CPU's rated base\n"
+                         "#            speed (from its model name, e.g. @ 1.80GHz), with turbo on its maximum; fixed once at\n"
+                         "#            the start of a run; unknown (no rated speed): not checked, with a warning (recommended)",
                  "off": "do not check", "<MHz>": "expect at least this speed"}),
     "READY_CONSECUTIVE_CHECKS": dict(default="2", check=_int(1), unit="checks, 1 or more",
         help="All checks must pass this many times in a row, so a short dip does not count."),
@@ -521,6 +538,7 @@ SHORT = {
     "SHUFFLE_SEED": "number that decides the order; empty = random (saved, to rerun the same order)",
     "ENV_GOVERNOR": "CPU governor: performance | powersave | schedutil | ondemand | conservative | unchanged",
     "ENV_TURBO": "turbo boost: off | on | unchanged",
+    "ENV_CPU_SPEED": "fix every core at one speed: max | MHz | unchanged",
     "ENV_STOP_CONTAINERS": "1 = stop other Docker containers (restarted after), 0 = leave them",
     "ENV_KEEP_CONTAINERS": "containers to keep running anyway, comma-separated",
     "ENV_SCREEN_BRIGHTNESS": "screen brightness in % (1 = dimmest still on), or unchanged",
@@ -581,7 +599,7 @@ EXAMPLE_LAYOUT = [
 # docs/CONFIG.md: every setting, the machine ones grouped as in the profiles
 DOCS_LAYOUT = EXAMPLE_LAYOUT[:2] + [
     ("Machine settings (configs/machine/ profiles)",
-     ["ENV_GOVERNOR", "ENV_TURBO", "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "ENV_SCREEN_BRIGHTNESS",
+     ["ENV_GOVERNOR", "ENV_TURBO", "ENV_CPU_SPEED", "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "ENV_SCREEN_BRIGHTNESS",
       "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH", "ON_BATTERY", "SETTLE_SECONDS", "RESTING_MEASURE_SECONDS"]),
     ("Readiness check before every run, and the conditions during its load (configs/machine/ profiles)",
      ["READY_CHECK_EVERY_SECONDS", "READY_TEMP_REFERENCE_C", "READY_TEMP_MARGIN_C",

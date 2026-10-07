@@ -601,7 +601,7 @@ if [ -n "${CONFIG_FILE:-}" ]; then
     [ -n "$RESUME_DIR" ] && [ -n "$RESUME_SEED" ] && CFG_SHUFFLE_SEED="$RESUME_SEED"
 else
     CFG_REPEATS=1; CFG_SHUFFLE=0; CFG_SHUFFLE_SEED=""; CFG_SETTLE_SECONDS=0; CFG_FAILURES_STOP_AFTER=0
-    CFG_ENV_GOVERNOR=unchanged; CFG_ENV_TURBO=unchanged; CFG_ENV_STOP_CONTAINERS=0; CFG_ENV_KEEP_CONTAINERS=""
+    CFG_ENV_GOVERNOR=unchanged; CFG_ENV_TURBO=unchanged; CFG_ENV_CPU_SPEED=unchanged; CFG_ENV_STOP_CONTAINERS=0; CFG_ENV_KEEP_CONTAINERS=""
     CFG_ENV_SCREEN_BRIGHTNESS=unchanged; CFG_ENV_KEYBOARD_LIGHT=unchanged; CFG_ENV_WIFI=unchanged; CFG_ENV_BLUETOOTH=unchanged
     CFG_ON_BATTERY=ignore
     CFG_HTTP_CONNECTION=reuse
@@ -1449,12 +1449,14 @@ print("\n".join(items))' "$CFG_SHUFFLE_SEED" "$pass" "$@"
 
 bench_apply_environment() {
     if [ "$CFG_ENV_GOVERNOR" = "unchanged" ] && [ "$CFG_ENV_TURBO" = "unchanged" ] && [ "$CFG_ENV_STOP_CONTAINERS" = "0" ] \
+            && [ "${CFG_ENV_CPU_SPEED:-unchanged}" = "unchanged" ] \
             && [ "$CFG_ENV_SCREEN_BRIGHTNESS" = "unchanged" ] && [ "$CFG_ENV_KEYBOARD_LIGHT" = "unchanged" ] \
             && [ "$CFG_ENV_WIFI" = "unchanged" ] && [ "$CFG_ENV_BLUETOOTH" = "unchanged" ]; then
         print_status "INFO" "Machine settings: left unchanged"
         return 0
     fi
-    local env_args=(--governor "$CFG_ENV_GOVERNOR" --turbo "$CFG_ENV_TURBO" --keep "$CFG_ENV_KEEP_CONTAINERS"
+    local env_args=(--governor "$CFG_ENV_GOVERNOR" --turbo "$CFG_ENV_TURBO" --cpu-speed "${CFG_ENV_CPU_SPEED:-unchanged}"
+        --keep "$CFG_ENV_KEEP_CONTAINERS"
         --screen-brightness "$CFG_ENV_SCREEN_BRIGHTNESS" --keyboard-light "$CFG_ENV_KEYBOARD_LIGHT"
         --wifi "$CFG_ENV_WIFI" --bluetooth "$CFG_ENV_BLUETOOTH")
     [ "$CFG_ENV_STOP_CONTAINERS" = "0" ] && env_args+=(--no-stop-containers)
@@ -1464,7 +1466,7 @@ bench_apply_environment() {
         exit 1
     fi
     BENCH_ENV_STATE="$RESULTS_DIR/.environment_state.json"
-    print_status "INFO" "Machine settings: governor=$CFG_ENV_GOVERNOR turbo=$CFG_ENV_TURBO stop_containers=$CFG_ENV_STOP_CONTAINERS screen=$CFG_ENV_SCREEN_BRIGHTNESS keyboard_light=$CFG_ENV_KEYBOARD_LIGHT wifi=$CFG_ENV_WIFI bluetooth=$CFG_ENV_BLUETOOTH"
+    print_status "INFO" "Machine settings: governor=$CFG_ENV_GOVERNOR turbo=$CFG_ENV_TURBO cpu_speed=${CFG_ENV_CPU_SPEED:-unchanged} stop_containers=$CFG_ENV_STOP_CONTAINERS screen=$CFG_ENV_SCREEN_BRIGHTNESS keyboard_light=$CFG_ENV_KEYBOARD_LIGHT wifi=$CFG_ENV_WIFI bluetooth=$CFG_ENV_BLUETOOTH"
     sudo "$PYTHON_PATH" ./tools/prepare_environment.py apply "${env_args[@]}" --state "$BENCH_ENV_STATE"
     BENCH_ENV_APPLIED=1
     if ! "$PYTHON_PATH" ./tools/prepare_environment.py verify "${env_args[@]}"; then
@@ -1633,14 +1635,13 @@ main() {
         BENCH_CPU_SPEED="$CFG_READY_CPU_SPEED"
         if [ "$CFG_READY_CPU_SPEED" = "auto" ]; then
             local speed_mhz="" speed_source=""
-            read -r speed_mhz speed_source <<< "$("$PYTHON_PATH" ./tools/run_metadata.py expected-cpu-speed)"
+            read -r speed_mhz speed_source <<< "$("$PYTHON_PATH" ./tools/run_metadata.py expected-cpu-speed "${CFG_ENV_CPU_SPEED:-}")"
             if [ -n "$speed_mhz" ]; then
                 BENCH_CPU_SPEED="$speed_mhz"
                 print_status "INFO" "Expected CPU speed: $speed_mhz MHz ($speed_source); a run capped below it is not ready, or invalid during its load"
-                [ "$speed_source" = "base_frequency" ] && print_status "WARNING" "The CPU states no rated speed; base_frequency can move with a firmware cap. Better: READY_CPU_SPEED=<MHz> in the config"
             else
                 BENCH_CPU_SPEED=off
-                print_status "INFO" "Expected CPU speed unknown on this machine (CPU speed check off)"
+                print_status "WARNING" "Expected CPU speed unknown (the CPU states no rated speed): the CPU speed check is off. Set READY_CPU_SPEED=<MHz> or ENV_CPU_SPEED=<MHz> in the config to check it"
             fi
         fi
         export MEASURE_READY_CPU_SPEED="$BENCH_CPU_SPEED"
@@ -1673,7 +1674,7 @@ main() {
         --set resting_temp_c="$BENCH_RESTING_TEMP" --set ready_temp_reference_c="$BENCH_TEMP_REFERENCE" \
         --set ready_check_every_s="${CFG_READY_CHECK_EVERY_SECONDS:-}" --set ready_temp_margin_c="${CFG_READY_TEMP_MARGIN_C:-}" \
         --set resting_cpu_busy_percent="$BENCH_RESTING_CPU" --set ready_cpu_busy_reference_percent="$BENCH_CPU_REFERENCE" \
-        --set ready_cpu_busy_margin_percent="${CFG_READY_CPU_BUSY_MARGIN_PERCENT:-}" --set ready_no_throttling="${CFG_READY_NO_THROTTLING:-}" --set ready_cpu_speed="${CFG_READY_CPU_SPEED:-}" --set ready_cpu_speed_expected_mhz="${BENCH_CPU_SPEED:-}" \
+        --set ready_cpu_busy_margin_percent="${CFG_READY_CPU_BUSY_MARGIN_PERCENT:-}" --set ready_no_throttling="${CFG_READY_NO_THROTTLING:-}" --set ready_cpu_speed="${CFG_READY_CPU_SPEED:-}" --set env_cpu_speed="${CFG_ENV_CPU_SPEED:-}" --set ready_cpu_speed_expected_mhz="${BENCH_CPU_SPEED:-}" \
         --set ready_consecutive_checks="${CFG_READY_CONSECUTIVE_CHECKS:-}" --set ready_min_wait_s="${CFG_READY_MIN_WAIT_SECONDS:-}" \
         --set ready_max_wait_s="${CFG_READY_MAX_WAIT_SECONDS:-}" --set ready_on_timeout="${CFG_READY_ON_TIMEOUT:-}" \
         --set env_governor="$CFG_ENV_GOVERNOR" \

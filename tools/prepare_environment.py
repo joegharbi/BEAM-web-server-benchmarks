@@ -140,6 +140,11 @@ def remote_over_wifi(env=None):
 def do_apply(args):
     require_root()
     state = {"governors": {}, "turbo": None, "stopped_containers": [], "files": {}, "radios": {}}
+    # The CPU speed limits as they are now, read before turbo or the governor change: turning turbo
+    # off makes the kernel report the highest speed as the base speed, and saving that would restore
+    # it as a permanent limit (the laptop then stays at its base speed with turbo on)
+    limits_before = {path: read(path) for folder in glob.glob(CPUFREQ_GLOB)
+                     for path in (os.path.join(folder, "scaling_max_freq"), os.path.join(folder, "scaling_min_freq"))}
 
     gov_files = sorted(glob.glob(GOV_GLOB))
     if args.governor == "unchanged":
@@ -167,8 +172,9 @@ def do_apply(args):
     else:
         print("Turbo: not available, skipped")
 
-    if args.governor == "performance":
-        pin_min_speed(state["files"])
+    if args.cpu_speed != "unchanged":
+        set_cpu_speed(None if args.cpu_speed == "max" else int(args.cpu_speed), state["files"],
+                      before=limits_before)
 
     if args.screen_brightness != "unchanged":
         set_brightness(BACKLIGHT_GLOB, int(args.screen_brightness), "Screen brightness", state["files"])
@@ -196,21 +202,39 @@ def do_apply(args):
     print("Run 'restore' after your measurements to put everything back.")
 
 
-def pin_min_speed(saved):
-    """With the performance governor: lowest speed = highest speed, so every core runs at one fixed
-    speed (the base speed with turbo off). Saved like the other files and restored afterwards.
-    A core whose maximum is capped by the firmware keeps its minimum (the write is refused)."""
-    pinned = total = 0
-    for max_path in sorted(glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq")):
-        min_path = max_path.replace("scaling_max_freq", "scaling_min_freq")
+CPUFREQ_GLOB = "/sys/devices/system/cpu/cpu*/cpufreq"
+
+
+def set_cpu_speed(mhz, saved, glob_pattern=CPUFREQ_GLOB, before=None):
+    """Fix every core at one speed: lowest = highest = `mhz`, or the hardware maximum when None (with
+    turbo off the CPU allows only up to its base speed, so that is where it lands). Both limits are
+    saved like the other files and restored afterwards. Lowering below the current minimum writes the
+    minimum first, raising writes the maximum first, so each write stays valid. `before`: the limits
+    read before anything changed (saved for the restore instead of the current ones)."""
+    before = before or {}
+    fixed = total = 0
+    speeds = set()
+    for folder in sorted(glob.glob(glob_pattern)):
+        max_path, min_path = os.path.join(folder, "scaling_max_freq"), os.path.join(folder, "scaling_min_freq")
         top, low = read(max_path), read(min_path)
         if not top or low is None:
             continue
         total += 1
-        saved[min_path] = low
-        pinned += 1 if write(min_path, top) else 0
+        saved[max_path], saved[min_path] = before.get(max_path) or top, before.get(min_path) or low
+        target = str(mhz * 1000) if mhz else read(os.path.join(folder, "cpuinfo_max_freq")) or top
+        order = (min_path, max_path) if int(target) < int(low) else (max_path, min_path)
+        if all(write(path, target) for path in order):
+            fixed += 1
+        speeds.add(read(max_path))
     if total:
-        print(f"CPU minimum speed: pinned to the maximum on {pinned}/{total} cores")
+        now = "/".join(str(int(v) // 1000) for v in sorted(speeds - {None}, key=int))
+        print(f"CPU speed: fixed on {fixed}/{total} cores (lowest = highest = {now} MHz)")
+
+
+def cpu_speed_arg(v):
+    if v in ("max", "unchanged") or (v.isdigit() and int(v) >= 100):
+        return v
+    raise argparse.ArgumentTypeError("max, unchanged, or a speed in MHz (100 or more)")
 
 
 def do_restore(args):
@@ -241,9 +265,12 @@ def _restore(args):
         print("Turbo: restored")
 
     files = state.get("files") or {}
-    restored = sum(1 for path, prev in files.items() if prev is not None and write(path, prev))
+    # Two passes: a CPU speed limit can only be restored once its partner (lowest/highest) allows it
+    failed = [(path, prev) for path, prev in files.items() if prev is not None and not write(path, prev)]
+    failed = [(path, prev) for path, prev in failed if not write(path, prev)]
+    restored = sum(1 for prev in files.values() if prev is not None) - len(failed)
     if files:
-        print(f"Screen, keyboard light, CPU minimum speed: restored {restored} setting(s)")
+        print(f"Screen, keyboard light, CPU speed: restored {restored} setting(s)")
     radios = state.get("radios") or {}
     if radios:
         radios_restore(radios)
@@ -285,6 +312,10 @@ def do_verify(args):
     turbo = run_metadata.turbo_state()
     if args.turbo != "unchanged" and turbo and turbo != args.turbo:
         problems.append(f"turbo is '{turbo}', expected '{args.turbo}'")
+    if args.cpu_speed not in ("unchanged", "max"):
+        now = run_metadata.cpu_max_freq_mhz()
+        if now and now != args.cpu_speed:
+            problems.append(f"CPU speed is {now} MHz, expected {args.cpu_speed} MHz (outside what this CPU allows now?)")
     if args.screen_brightness != "unchanged":
         now = brightness_percent(BACKLIGHT_GLOB)
         # The steps of a backlight are coarse, so a difference of 2% is still the requested level
@@ -314,6 +345,8 @@ def main():
                     help="CPU governor to set on apply, or 'unchanged' (default: performance)")
     ap.add_argument("--turbo", choices=["off", "on", "unchanged"], default="off",
                     help="Turbo/boost on apply (default: off)")
+    ap.add_argument("--cpu-speed", type=cpu_speed_arg, default="max",
+                    help="fix every core at this speed: max (the highest allowed), a speed in MHz, or unchanged")
     ap.add_argument("--no-stop-containers", dest="stop_containers", action="store_false",
                     help="Leave other running containers alone on apply")
     ap.add_argument("--keep", default="",
