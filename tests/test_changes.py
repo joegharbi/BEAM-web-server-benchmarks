@@ -1930,6 +1930,25 @@ class ServerLabels(unittest.TestCase):
                 self.assertIn("COPY rebar.config rebar.lock ./", text, f"{name}: the lock is not used by the build")
 
 
+class CpuCapAdvice(unittest.TestCase):
+    """A capped CPU's waiting message says what a person can do about it."""
+
+    def advice(self, files, degraded=""):
+        import run_metadata as m
+        from unittest import mock
+        with mock.patch.object(m, "_read", files.get), mock.patch.object(m, "performance_degraded", lambda: degraded), \
+                mock.patch.object(m.glob, "glob", lambda g: ["/p/BAT0"] if g.endswith("BAT*") else []):
+            return m.cpu_cap_advice()
+
+    def test_lap_heat_and_weak_charger(self):
+        self.assertIn("lap sensor is on", self.advice({"/sys/devices/platform/thinkpad_acpi/dytc_lapmode": "1"}))
+        self.assertIn("lap sensor is on", self.advice({}, degraded="lap-detected"))          # any brand, via the daemon
+        self.assertIn("ENV_CPU_SPEED=800", self.advice({}, degraded="lap-detected"))
+        self.assertIn("too hot", self.advice({}, degraded="high-operating-temperature"))
+        self.assertIn("battery drains", self.advice({"/p/BAT0/status": "Discharging"}))
+        self.assertEqual(self.advice({"/p/BAT0/status": "Full"}), "")                      # nothing known: no advice
+
+
 class UnfinishedMeasurement(unittest.TestCase):
     """A fresh run of a config with an unfinished measurement asks: continue (default), from zero, stop."""
     CONFIG = "MEASURE=static\nSERVERS=st-a\nHTTP_REQUESTS=1000\n# unfinished-test\n"

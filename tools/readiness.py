@@ -95,7 +95,9 @@ def cpu_speed_problem(setting):
     limit = run_metadata.cpu_speed_limit_mhz()
     if expected and limit and limit < expected:
         clues = run_metadata.cpu_cap_clues()
-        return f"CPU speed capped at {limit} MHz < {expected} MHz (charger or firmware" + (f"; {clues})" if clues else ")")
+        advice = run_metadata.cpu_cap_advice()
+        return (f"CPU speed capped at {limit} MHz < {expected} MHz (charger or firmware" + (f"; {clues})" if clues else ")")
+                + (f". What to do: {advice}" if advice else ""))
     return ""
 
 

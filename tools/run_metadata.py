@@ -267,6 +267,22 @@ def cpu_cap_clues():
     return ", ".join(clues)
 
 
+def cpu_cap_advice():
+    """What a person can do about a firmware CPU cap, from what the machine reports ("" when unclear)."""
+    degraded = performance_degraded()
+    advice = []
+    if _read("/sys/devices/platform/thinkpad_acpi/dytc_lapmode") == "1" or "lap" in degraded:
+        advice.append("the laptop's lap sensor is on: put it on a hard, flat desk and leave it alone "
+                      "(if it keeps coming back: measure at a fixed lower speed, ENV_CPU_SPEED=800)")
+    if "temperature" in degraded:
+        advice.append("the machine is too hot: let it cool down, free its vents")
+    for bat in sorted(glob.glob("/sys/class/power_supply/BAT*")):
+        if _read(os.path.join(bat, "status")) == "Discharging":
+            advice.append("the battery drains: plug in the original charger, straight into the laptop")
+            break
+    return "; ".join(advice)
+
+
 def expected_cpu_speed(set_speed=None):
     """(MHz, source): the speed limit the CPU should have, or (None, "") when unknown.
 
