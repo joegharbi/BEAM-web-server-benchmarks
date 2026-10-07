@@ -1462,6 +1462,8 @@ class WhatToMeasure(unittest.TestCase):
             fh.write('#!/bin/sh\nif [ "$1" = "build" ]; then cat > "$FAKE_BUILDS.$$"; [ -z "$FAKE_BUILD_FAIL" ]; exit $?; fi\n'
                      'if [ "$1 $2" = "image inspect" ]; then\n'
                      '  case "$*" in *ExposedPorts*) echo "8080/tcp "; exit 0 ;; esac\n'
+                     '  case "$*" in *wseb.options*) [ "$5" = "$FAKE_OPTIONS_IMAGE" ] && echo "$FAKE_OPTIONS" '
+                     '|| echo "<no value>"; exit 0 ;; esac\n'
                      '  for i in $FAKE_IMAGES; do [ "$i" = "$3" ] && exit 0; done; exit 1\nfi\nexit 0\n')
         for f in ("sudo", "docker"):
             os.chmod(os.path.join(self.bin, f), 0o755)
@@ -1627,6 +1629,17 @@ class Variants(WhatToMeasure):
         builds = [open(os.path.join(self.d, f)).read() for f in os.listdir(self.d) if f.startswith("build.")]
         self.assertEqual(sorted(b.splitlines()[0] for b in builds), ["FROM st-a", "FROM st-b"])
         self.assertTrue(all('ENV ERL_FLAGS="+sbwt none +sbwtdcpu none +sbwtdio none"' in b for b in builds))
+
+    def test_variant_skipped_for_a_server_that_does_not_read_its_variable(self):
+        # st-b stands for a Java server: it reads JAVA_TOOL_OPTIONS, so an ERL_FLAGS variant would only
+        # measure the same server again under another name
+        rc, out = self.run_until_plan("MEASURE=static\nSERVERS=st-a st-b\nHTTP_REQUESTS=1000\n"
+                                      "VARIANTS=nobw:ERL_FLAGS=+sbwt none\n",
+                                      extra_env={"FAKE_OPTIONS_IMAGE": "st-b", "FAKE_OPTIONS": "JAVA_TOOL_OPTIONS"})
+        self.assertIn("VARIANTS: nobw does not apply to st-b (it reads JAVA_TOOL_OPTIONS); skipped", out)
+        self.assertIn("Static HTTP:     3 containers × 1 levels = 3", out)        # st-a, st-a-nobw, st-b
+        builds = [open(os.path.join(self.d, f)).read() for f in os.listdir(self.d) if f.startswith("build.")]
+        self.assertEqual([b.splitlines()[0] for b in builds], ["FROM st-a"])
 
     def test_failed_build_stops_before_anything(self):
         self.build_fail = "1"

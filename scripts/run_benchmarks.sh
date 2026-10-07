@@ -761,6 +761,17 @@ bench_stop_early() {
 # VARIANTS: for every server in the named list, also an image <server>-<name> = the server's image plus
 # environment variables, built here (Docker reuses it when nothing changed) and measured like any other
 # server, in the same shuffled order. Stops before anything starts if a build fails.
+# A variant applies when every variable it sets is one the image reads (its wseb.options label)
+bench_variant_applies() {
+    local envs=$1 reads=" $2 " e
+    local -a _vars
+    IFS='|' read -r -a _vars <<< "$envs"
+    for e in "${_vars[@]}"; do
+        [[ "$reads" == *" ${e%%=*} "* ]] || return 1
+    done
+    return 0
+}
+
 bench_add_variants() {
     local -n _list=$1
     local img v name envs e dockerfile out=()
@@ -768,8 +779,17 @@ bench_add_variants() {
     IFS=';' read -r -a _variants <<< "$CFG_VARIANTS"
     for img in "${_list[@]}"; do
         out+=("$img")
+        # An image may name the option variables its runtime reads (LABEL wseb.options, e.g. the JVM:
+        # JAVA_TOOL_OPTIONS); a variant setting another variable would measure the same server again
+        local reads
+        reads=$(docker image inspect --format '{{index .Config.Labels "wseb.options"}}' "$img" 2>/dev/null || true)
+        [ "$reads" = "<no value>" ] && reads=""
         for v in "${_variants[@]}"; do
             name="${v%%:*}"; envs="${v#*:}"
+            if [ -n "$reads" ] && ! bench_variant_applies "$envs" "$reads"; then
+                echo -e "${BLUE}[INFO]${NC} VARIANTS: $name does not apply to $img (it reads ${reads// /, }); skipped"
+                continue
+            fi
             dockerfile="FROM $img"
             IFS='|' read -r -a _envs <<< "$envs"
             for e in "${_envs[@]}"; do

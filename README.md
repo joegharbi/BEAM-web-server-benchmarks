@@ -325,7 +325,8 @@ an image is a **self-contained bundle** that runs **only the server**.
   port and maps host port 8001 to it.
 - **Runtime options from the environment:** the runtime's own variable (`ERL_FLAGS` for the BEAM,
   `JAVA_TOOL_OPTIONS` for the JVM) must reach it, so `VARIANTS` can change settings without
-  touching the server.
+  touching the server. An image can name the variables it reads (`LABEL wseb.options="JAVA_TOOL_OPTIONS"`);
+  a variant that sets another variable is then skipped for it (e.g. no busy-waiting variant for Java).
 - **Only the server runs:** start it the way it is deployed (a release or `java -jar`, not a build
   tool such as `mix`, `gleam`, `rebar3`, Maven or Gradle), with no helper services and no
   keep-alive loops. BEAM servers run without a node name, so no `epmd` starts. A system that
