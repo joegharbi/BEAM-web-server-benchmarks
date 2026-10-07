@@ -13,8 +13,8 @@ WebSocket: burst and stream with 100 clients, 8 KB and 1 MB messages.
 
 | Part | Command | Measurements | Time (estimate) | Disk (estimate) |
 |---|---|---|---|---|
-| Static HTTP | `make run CONFIG=campaigns/paper/static.config` | 920 | ~21 h | ~2.2 GB + ~1.1 GB native copies |
-| Dynamic HTTP | `make run CONFIG=campaigns/paper/dynamic.config` | 920 | ~21 h | ~2.2 GB + ~1.1 GB native copies |
+| Static HTTP | `make run CONFIG=campaigns/paper/static.config` | 1,000 | ~23 h | ~2.4 GB + ~1.2 GB native copies |
+| Dynamic HTTP | `make run CONFIG=campaigns/paper/dynamic.config` | 1,000 | ~23 h | ~2.4 GB + ~1.2 GB native copies |
 | WebSocket | `make run CONFIG=campaigns/paper/websocket.config` | 440 | ~10 h | ~0.5 GB + ~0.5 GB native copies |
 
 Time: about 1.4 min per measurement (check runs of October 2026). Native copies (each image's /app,
