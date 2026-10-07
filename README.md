@@ -170,7 +170,7 @@ Before every measurement the run prints a short panel:
  static · repeat 2 of 5 · measurement 248 of 1210 (20% done)  ██████░░░░░░░░░░░░░░░░░░░░░░
  Time    spent 9h41m · left ~28h10m · done around Sat 04 Oct 14:20
  Now     st-elixir-cowboy-1-20-4-nobw · level 5/11 · 20000 requests · server 3 of 22 in this repeat
- Last    st-gleam-mist-1-15-2 · 80,000 requests · load 98.1 s · 816 req/s · container 211.4 J · machine 977 J · ok
+ Last    st-gleam-mist-1-19-0 · 80,000 requests · load 98.1 s · 816 req/s · container 211.4 J · machine 977 J · ok
  Health  no failures · CPU 41 °C · disk 4.9 GB free
 ──────────────────────────────────────────────────────────────────────────
 ```

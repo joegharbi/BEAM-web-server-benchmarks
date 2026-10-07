@@ -26,9 +26,9 @@ See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for bas
 | Elixir  | index   | `st-elixir-index-1-16`, `st-elixir-index-1-20-4` | Serves index HTML file |
 | Elixir  | phoenix | `st-elixir-phoenix-1-8`, `st-elixir-phoenix-1-8-15` | Includes latest Phoenix lane |
 | Elixir  | pure    | `st-elixir-pure-1-16`, `st-elixir-pure-1-20-4` | Includes latest Elixir lane |
-| Gleam   | index   | `st-gleam-index-1-0`, `st-gleam-index-1-15-2` | Serves index HTML file |
-| Gleam   | pure    | `st-gleam-pure-1-15-2` | HTML in code |
-| Gleam   | mist    | `st-gleam-mist-1-0`, `st-gleam-mist-1-15-2` | Includes latest Gleam/Mist lane |
+| Gleam   | index   | `st-gleam-index-1-0`, `st-gleam-index-1-19-0` | Serves index HTML file |
+| Gleam   | pure    | `st-gleam-pure-1-19-0` | Raw sockets (gen_tcp via a small Erlang helper), no framework; same logic as the Erlang and Elixir pure servers |
+| Gleam   | mist    | `st-gleam-mist-1-0`, `st-gleam-mist-1-19-0` | Includes latest Gleam/Mist lane |
 
 ### Dynamic (26)
 
@@ -42,9 +42,9 @@ See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for bas
 | Elixir  | index   | `dy-elixir-index-1-16`, `dy-elixir-index-1-20-4` | ✓ |
 | Elixir  | phoenix | `dy-elixir-phoenix-1-8`, `dy-elixir-phoenix-1-8-15` | Includes latest Phoenix lane |
 | Elixir  | pure    | `dy-elixir-pure-1-16`, `dy-elixir-pure-1-20-4` | Includes latest Elixir lane |
-| Gleam   | index   | `dy-gleam-index-1-0`, `dy-gleam-index-1-15-2` | ✓ |
-| Gleam   | pure    | `dy-gleam-pure-1-15-2` | HTML in code |
-| Gleam   | mist    | `dy-gleam-mist-1-0`, `dy-gleam-mist-1-15-2` | Includes latest Gleam/Mist lane |
+| Gleam   | index   | `dy-gleam-index-1-0`, `dy-gleam-index-1-19-0` | ✓ |
+| Gleam   | pure    | `dy-gleam-pure-1-19-0` | Raw sockets (gen_tcp via a small Erlang helper), no framework; same logic as the Erlang and Elixir pure servers |
+| Gleam   | mist    | `dy-gleam-mist-1-0`, `dy-gleam-mist-1-19-0` | Includes latest Gleam/Mist lane |
 
 ### WebSocket (10)
 
@@ -54,7 +54,7 @@ See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for bas
 | Erlang  | yaws   | `ws-erlang-yaws-27`, `ws-erlang-yaws-29-1-1` | Includes latest OTP lane |
 | Elixir  | cowboy | `ws-elixir-cowboy-1-16`, `ws-elixir-cowboy-1-20-4` | Includes latest Elixir lane |
 | Elixir  | bandit | `ws-elixir-bandit-1-12-5` | Bandit + WebSockAdapter echo on `/ws` |
-| Gleam   | mist | `ws-gleam-mist-1-0`, `ws-gleam-mist-1-15-2` | WebSocket echo on `/ws` |
+| Gleam   | mist | `ws-gleam-mist-1-0`, `ws-gleam-mist-1-19-0` | WebSocket echo on `/ws` |
 
 ## Consistency check
 
