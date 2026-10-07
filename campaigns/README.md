@@ -6,6 +6,20 @@ servers as built, then all `-nobw`, shuffled within each group; which group goes
 Why both: experiments/busy-wait/.
 Each part is its own results folder: it can be resumed (`make resume`), checked and backed up on its own.
 
+## Paper (MIPRO busy-wait paper: 4 HTTP load levels, Docker and native, CPU at 1800 MHz)
+
+Every server as built and `-nobw` (not Java), each in Docker and natively (DEPLOY=container native).
+WebSocket: burst and stream with 100 clients, 8 KB and 1 MB messages.
+
+| Part | Command | Measurements | Time (estimate) | Disk (estimate) |
+|---|---|---|---|---|
+| Static HTTP | `make run CONFIG=campaigns/paper/static.config` | 920 | ~21 h | ~2.2 GB + ~2 GB native copies |
+| Dynamic HTTP | `make run CONFIG=campaigns/paper/dynamic.config` | 880 | ~21 h | ~2.1 GB + ~2 GB native copies |
+| WebSocket | `make run CONFIG=campaigns/paper/websocket.config` | 440 | ~10 h | ~0.5 GB + ~1 GB native copies |
+
+Time: about 1.4 min per measurement (check runs of October 2026). Native copies (each image's /app,
+50-180 MB) exist only during a part; NATIVE_COPIES=prune removes them afterwards.
+
 ## Short (5 HTTP load levels: 5k, 10k, 20k, 40k, 80k)
 
 | Part | Command | Measurements | Time (estimate) | Raw data (estimate) |
