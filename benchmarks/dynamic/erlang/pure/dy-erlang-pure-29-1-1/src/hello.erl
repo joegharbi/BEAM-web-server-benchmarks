@@ -1,4 +1,5 @@
-%% Plain Erlang HTTP server (page with the current time): one accept loop, a process per connection.
+%% Plain Erlang HTTP server: GET returns a page with the current time, POST returns 204.
+%% One accept loop, a process per connection.
 -module(hello).
 -export([main/1]).
 main(_Args) ->
@@ -28,7 +29,7 @@ serve(Conn, Buf) ->
     case read_request(Conn, Buf) of
         {ok, Head, Rest} ->
             Keep = keep_alive(Head),
-            respond(Conn, Keep),
+            respond(Conn, method(Head), Keep),
             case Keep of
                 true -> serve(Conn, Rest);
                 false -> gen_tcp:close(Conn)
@@ -50,7 +51,12 @@ keep_alive(Head) ->
         binary:match(string:lowercase(Head), [<<"connection: close">>, <<"content-length:">>, <<"transfer-encoding:">>]) =:= nomatch.
 connection(true) -> <<"keep-alive">>;
 connection(false) -> <<"close">>.
-respond(Conn, Keep) ->
+method(Head) ->
+    [Method | _] = binary:split(Head, <<" ">>),
+    Method.
+respond(Conn, <<"POST">>, Keep) ->
+    gen_tcp:send(Conn, [<<"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: ">>, connection(Keep), <<"\r\n\r\n">>]);
+respond(Conn, _Method, Keep) ->
     {{Y,Mo,D},{H,Mi,S}} = calendar:local_time(),
     TimeBin = iolist_to_binary(io_lib:format("~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B", [Y,Mo,D,H,Mi,S])),
     Html = <<"<!DOCTYPE html><html><head><title>Energy Test</title></head><body><h1>Hello, Energy Test!</h1><p>Current time: ", TimeBin/binary, "</p></body></html>">>,

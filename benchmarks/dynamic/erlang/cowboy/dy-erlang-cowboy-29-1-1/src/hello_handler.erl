@@ -3,10 +3,13 @@
 
 -export([init/2]).
 
+%% GET / returns a page with the current time, POST / returns 204 (like the other dynamic servers).
 init(Req0, State) ->
-    Path = cowboy_req:path(Req0),
-    case Path of
-        <<"/">> ->
+    case {cowboy_req:method(Req0), cowboy_req:path(Req0)} of
+        {<<"POST">>, <<"/">>} ->
+            Req = cowboy_req:reply(204, Req0),
+            {ok, Req, State};
+        {_, <<"/">>} ->
             % Get current time for dynamic content
             Now = erlang:localtime(),
             {{Year,Month,Day},{Hour,Min,Sec}} = Now,
