@@ -183,6 +183,8 @@ What only you can do, before a long measurement:
 | `bench.config`, `bench.config.resolved` | The config used, and every setting with the value actually used (defaults included) |
 | `schedule.txt` | Shuffle seed and the order of the servers in every pass |
 | `progress.txt` | Finished measurements, used to resume |
+| `manifest.jsonl` | The index of this folder: one line per measurement, written when it is done (valid, or invalid and measured again): server and what it is (its labels), variant, deploy, workload and its parameters, repeat, time, and where its CSV row and raw log are. Only an index: the numbers stay in the CSVs (docs/RESULTS.md) |
+| `invalid_runs.csv` | Runs whose conditions broke a rule during the load (e.g. the CPU slowed down), with the reason; each was measured again |
 | `failures.csv` | Failed measurements and why (only if any failed) |
 | `raw/` | Scaphandre's raw power logs (plain JSON) with the load and idle windows of each run (`RAW_DATA=keep`) |
 
@@ -352,6 +354,13 @@ an image is a **self-contained bundle** that runs **only the server**.
   `JAVA_TOOL_OPTIONS` for the JVM) must reach it, so `VARIANTS` can change settings without
   touching the server. An image can name the variables it reads (`LABEL wseb.options="JAVA_TOOL_OPTIONS"`);
   a variant that sets another variable is then skipped for it (e.g. no busy-waiting variant for Java).
+- **Says what it is:** labels in the Dockerfile, read by the results index and the graphs instead
+  of guessing from the name: `wseb.language`, `wseb.language_version`, `wseb.runtime` (`beam`,
+  `jvm`, ...), `wseb.runtime_version`, `wseb.kind` (`pure`, `index` or `framework`),
+  `wseb.framework` (`none` for pure and index) and `wseb.framework_version`.
+- **Pinned dependencies:** a lock file next to the code (`rebar.lock`, `mix.lock`, `manifest.toml`,
+  exact versions in `pom.xml`), used by the build, so a rebuild next year gets the same libraries.
+  The tests check both rules for every server.
 - **Only the server runs:** start it the way it is deployed (a release or `java -jar`, not a build
   tool such as `mix`, `gleam`, `rebar3`, Maven or Gradle), with no helper services and no
   keep-alive loops. BEAM servers run without a node name, so no `epmd` starts. A system that
@@ -388,6 +397,7 @@ Steps:
 | Benchmarks     | `make run-quick`, `make run-all`|
 | Graphs         | `make graph`                    |
 | Clean results  | `make clean-results`            |
+| List every measurement | `make index`: rebuilds `results/index.json` (every folder: config, status running / finished / unfinished / abandoned, dates, machine, counts) and lists them; runs keep it up to date themselves |
 | Free disk space | `make tidy`: lists old server images, Docker build cache, stale native copies, empty or abandoned result folders, and deletes each group only after a yes (never results; `TIDY_ARGS=--dry-run` only lists). Runs delete their stale native copies themselves (`NATIVE_COPIES=prune`) |
 | Clean env      | `make clean-env` (venv + __pycache__) |
 | Clean Docker   | `make clean-build`              |

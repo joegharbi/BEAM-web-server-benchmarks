@@ -98,6 +98,10 @@ for gz in raw:
     same.append(any(abs(e - re_e) < 1e-9 for e in csv_e))
     print(f"  raw {os.path.basename(gz)}: recalculated {re_e:.6f} J, in CSV: {'yes' if same[-1] else 'NO'}")
 progress = open(os.path.join(d, "progress.txt")).read().splitlines() if os.path.exists(os.path.join(d, "progress.txt")) else []
+import results_index as ri
+manifest = ri.measurements(d) if os.path.exists(os.path.join(d, ri.MANIFEST)) else []
+catalog = {r["folder"]: r for r in ri.runs("results")}
+here = catalog.get(os.path.basename(d.rstrip("/")), {})
 checks = [
     ("run finished without error", rc == 0),
     ("measured under governor=performance", s["cpu_governor"] == "performance"),
@@ -136,6 +140,10 @@ checks = [
     ("Container CPU Limit and Host CPUs recorded", all(r["Container CPU Limit"] == "none" and int(r["Host CPUs"]) > 0
                                                         for r in runs)),
     ("Scaphandre package version recorded", bool(m.get("software_and_machine", m).get("scaphandre_package_version", ""))),
+    ("manifest.jsonl: 4 valid lines, each pointing to its CSV row, with the server's labels",
+     len(manifest) == 4 and all(x["valid"] and ri.row(d, x).get("Container Name") == x["name"] and x["facts"].get("kind")
+                                for x in manifest)),
+    ("results/index.json lists this run as finished, 4 measured", here.get("status") == "finished" and here.get("measured") == 4),
 ]
 for name, ok in checks:
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}")

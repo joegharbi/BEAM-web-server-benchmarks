@@ -12,9 +12,42 @@ results/
     └── websocket/
 ```
 
-**File names:** One CSV per container: `static/st-erlang-cowboy-27.csv`, `dynamic/dy-elixir-phoenix-1-8.csv`, `websocket/ws-erlang-cowboy-27.csv`, etc.
+**File names:** One CSV per server as measured: `static/st-erlang-cowboy-29-1-1.csv`, its variant `static/st-erlang-cowboy-29-1-1-nobw.csv`, natively `static/st-erlang-cowboy-29-1-1-native.csv`, `websocket/ws-erlang-cowboy-29-1-1_burst.csv`, etc.
 
 **CSV contents:** one row per run (server, load level, repeat); the columns are described below.
+
+### The index: `manifest.jsonl` and `results/index.json`
+
+Scripts, the GUI and reports find measurements through the index instead of file names and dates
+(`tools/results_index.py`: `runs()`, `measurements(folder)`, `row(folder, line)`).
+
+`results/<run>/manifest.jsonl`: one JSON object per line, one line per measurement, appended and
+flushed the moment it is done (a crash never breaks earlier lines; a cut last line is skipped):
+
+```json
+{"schema": 1, "measured_at_utc": "2026-10-07T20:16:39Z", "server": "dy-java-netty-4-2-19",
+ "image": "dy-java-netty-4-2-19", "name": "dy-java-netty-4-2-19", "variant": "", "deploy": "container",
+ "repeat": 1, "session": 1,
+ "facts": {"language": "java", "language_version": "27", "runtime": "jvm", "runtime_version": "Temurin 27+35",
+           "kind": "framework", "framework": "netty", "framework_version": "4.2.19.Final"},
+ "workload": {"kind": "http", "family": "dynamic", "requests": 20000, "workers": "100", "connection": "reuse"},
+ "valid": true, "reason": "", "csv": "dynamic/dy-java-netty-4-2-19.csv", "csv_row": 1,
+ "raw_log": "raw/dy-java-netty-4-2-19_dynamic_20261007T201443Z.json"}
+```
+
+- `server` is the folder in `benchmarks/`; `image` is what ran (a variant: `<server>-<variant>`);
+  `name` is the CSV's Container Name (natively with `-native`).
+- `facts` are the image's `wseb.*` labels (README: server contract).
+- WebSocket workloads: `{"kind": "websocket", "test", "pattern", "clients", "size_kb", ...}` with the
+  pattern's own parameters (`rate_per_s`, `duration_s` or `bursts`, `interval_s`).
+- An invalid run has `"valid": false`, the `reason`, and points to its row in `invalid_runs.csv`.
+- Only an index: no measured values, so it can never disagree with the CSVs.
+
+`results/index.json`: every measurement folder with its config name, status (`running`, `finished`,
+`unfinished`, `abandoned`), start and end, planned / measured / invalid counts, servers, deploys,
+variants, machine and framework version. Rebuilt from the folders at the start and end of every run
+and by `make index`. Folders measured before manifests existed are read from their CSVs;
+`python3 tools/results_index.py backfill results/<run>` writes their manifest once.
 
 ---
 

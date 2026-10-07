@@ -20,6 +20,7 @@ import os
 import sys
 import threading
 
+import results_index
 import run_metadata
 
 logger = logging.getLogger()
@@ -124,12 +125,15 @@ def record_invalid(output_csv, values, reasons, measurement):
     return path
 
 
-def judge(watch, values, output_csv, measurement):
-    """End the tool with EXIT_INVALID when the run broke a rule (after keeping it); else return."""
+def judge(watch, values, output_csv, measurement, image=None, workload=None):
+    """End the tool with EXIT_INVALID when the run broke a rule (after keeping it, and listing it in
+    the results index with image and workload); else return."""
     reasons = problems(watch, values.get("Host Throttled (ms)"), rules())
     if not reasons:
         return
     path = record_invalid(output_csv, values, reasons, measurement)
+    if image:
+        results_index.record(output_csv, values, image, workload or {}, valid=False, reason="; ".join(reasons), csv_path=path)
     logger.warning("%s | invalid run, not added to the results: %s (kept in %s; it is measured again)",
                    values.get("Container Name", ""), "; ".join(reasons), path)
     sys.exit(EXIT_INVALID)

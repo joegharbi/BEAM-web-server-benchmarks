@@ -1794,6 +1794,142 @@ class PowerProfile(unittest.TestCase):
         self.assertIn("power_profile", run_metadata.STABLE_KEYS)                  # a change mid-run is recorded
 
 
+class ResultsIndex(unittest.TestCase):
+    """manifest.jsonl (one line per measurement) and results/index.json (every folder): an index only."""
+
+    FACTS = {"language": "erlang", "kind": "pure", "framework": "none"}
+
+    def run_dir(self, root, name, meta=None, plan=None):
+        d = os.path.join(root, name)
+        os.makedirs(os.path.join(d, "static"))
+        with open(os.path.join(d, "metadata.json"), "w") as fh:
+            json.dump(meta if meta is not None else {"started_at_utc": "2026-10-07T10:00:00Z"}, fh)
+        if plan:
+            with open(os.path.join(d, "plan.json"), "w") as fh:
+                json.dump(plan, fh)
+        return d
+
+    def csv_row(self, path, values):
+        new = not os.path.exists(path)
+        with open(path, "a", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(values))
+            if new:
+                w.writeheader()
+            w.writerow(values)
+
+    VALUES = {"Container Name": "st-x-nobw-native", "Variant": "nobw", "Deploy": "native", "Repeat": 2, "Session": 1,
+              "Measured At (UTC)": "2026-10-07T10:05:00Z", "Raw Log": "raw/a.json", "Total Requests": 1000,
+              "Type": "static", "HTTP Max Workers": "100", "HTTP Connection Mode": "reuse"}
+
+    def test_record_valid_and_invalid(self):
+        import results_index as ri
+        import load_conditions as lc
+        from unittest import mock
+        root = tempfile.mkdtemp()
+        d = self.run_dir(root, "2026-10-07_100000")
+        out = os.path.join(d, "static", "st-x-nobw-native.csv")
+        self.csv_row(out, self.VALUES)
+        w = ri.http_workload("static", 1000, "100", "reuse")
+        with mock.patch.object(ri, "server_facts", lambda image: self.FACTS):
+            ri.record(out, self.VALUES, "st-x-nobw", w)
+            # an invalid run: kept in invalid_runs.csv and listed too, through the real judge
+            with mock.patch.object(lc, "problems", lambda *a: ["CPU speed capped at 800 MHz"]), \
+                    mock.patch.object(lc, "rules", lambda: {}), self.assertRaises(SystemExit):
+                lc.judge(None, self.VALUES, out, "static 1000 requests", "st-x-nobw", w)
+        lines = ri.measurements(d)
+        self.assertEqual(len(lines), 2)
+        good, bad = lines
+        self.assertEqual((good["server"], good["image"], good["variant"], good["deploy"]), ("st-x", "st-x-nobw", "nobw", "native"))
+        self.assertEqual((good["csv"], good["csv_row"], good["valid"], good["facts"]), ("static/st-x-nobw-native.csv", 1, True, self.FACTS))
+        self.assertEqual(ri.row(d, good)["Container Name"], "st-x-nobw-native")
+        self.assertEqual((bad["valid"], bad["csv"], bad["reason"]), (False, "invalid_runs.csv", "CPU speed capped at 800 MHz"))
+        self.assertEqual(ri.row(d, bad)["Reason"], "CPU speed capped at 800 MHz")
+        shutil.rmtree(root)
+
+    def test_nothing_outside_a_measurement_folder_and_cut_lines(self):
+        import results_index as ri
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "loose", "static"))
+        ri.record(os.path.join(root, "loose", "static", "a.csv"), self.VALUES, "st-x", {})   # a manual run
+        self.assertFalse(os.path.exists(os.path.join(root, "loose", ri.MANIFEST)))
+        d = self.run_dir(root, "r")
+        with open(os.path.join(d, ri.MANIFEST), "w") as fh:
+            fh.write('{"server": "st-a", "valid": true}\n{"server": "st-b", "va')      # a crash cut the last line
+        self.assertEqual([m["server"] for m in ri.measurements(d)], ["st-a"])
+        shutil.rmtree(root)
+
+    def test_catalog_statuses(self):
+        import results_index as ri
+        root = tempfile.mkdtemp()
+        self.run_dir(root, "a-finished", {"started_at_utc": "1", "finished_at_utc": "2"}, {"name": "paper", "total": 4})
+        open(os.path.join(self.run_dir(root, "b-running"), ".running"), "w").close()
+        self.run_dir(root, "c-unfinished")
+        self.run_dir(root, "d-abandoned", {"started_at_utc": "1", "abandoned_at_utc": "2"})
+        os.makedirs(os.path.join(root, "not-a-run"))
+        path, data = ri.write_catalog(root)
+        self.assertEqual([(r["folder"], r["status"]) for r in data["runs"]],
+                         [("a-finished", "finished"), ("b-running", "running"), ("c-unfinished", "unfinished"),
+                          ("d-abandoned", "abandoned")])
+        self.assertEqual((data["runs"][0]["config"], data["runs"][0]["planned"]), ("paper", 4))
+        self.assertEqual([r["folder"] for r in ri.runs(root)], [r["folder"] for r in data["runs"]])
+        self.assertFalse(os.path.exists(path + ".tmp"))                       # written whole, then renamed
+        shutil.rmtree(root)
+
+    def test_backfill_an_older_folder(self):
+        import results_index as ri
+        from unittest import mock
+        root = tempfile.mkdtemp()
+        d = self.run_dir(root, "old")
+        self.csv_row(os.path.join(d, "static", "st-x-nobw-native.csv"), self.VALUES)
+        self.csv_row(os.path.join(d, "static", "st-x_summary.csv"), {"a": 1})               # statistics: not runs
+        self.csv_row(os.path.join(d, "invalid_runs.csv"), {**self.VALUES, "Measurement": "static 1000 requests",
+                                                           "Reason": "too hot"})
+        with mock.patch.object(ri, "server_facts", lambda image: self.FACTS):
+            path, n = ri.backfill(d)
+            self.assertEqual(n, 2)
+            self.assertEqual(ri.backfill(d), (path, 0))                       # never overwrites
+        lines = ri.measurements(d)
+        self.assertEqual([(m["server"], m["valid"], m["workload"].get("requests")) for m in lines],
+                         [("st-x", True, "1000"), ("st-x", False, None)])
+        self.assertTrue(all(m["backfilled"] for m in lines))
+        shutil.rmtree(root)
+
+    def test_measuring_scripts_record_every_measurement(self):
+        for name in ("measure_docker.py", "measure_websocket.py"):
+            with open(os.path.join(ROOT, "tools", name)) as fh:
+                src = fh.read()
+            self.assertIn("results_index.record(", src)
+            self.assertIn("args.server_image, workload)", src)                 # invalid runs too, via judge
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            self.assertEqual(fh.read().count("./tools/results_index.py index"), 2)  # at the start and the end
+
+
+class ServerLabels(unittest.TestCase):
+    """Every server says what it is (wseb.* labels) and pins its dependencies (a lock file)."""
+
+    def test_every_server_is_labelled_and_locked(self):
+        import re
+        folders = [r for r, _, f in os.walk(os.path.join(ROOT, "benchmarks")) if "Dockerfile" in f]
+        self.assertGreaterEqual(len(folders), 34)
+        for folder in folders:
+            with open(os.path.join(folder, "Dockerfile")) as fh:
+                text = fh.read().replace("\\\n", " ")
+            labels = dict(re.findall(r'wseb\.([a-z_]+)="([^"]*)"', text))
+            name = os.path.basename(folder)
+            for key in ("language", "language_version", "runtime", "runtime_version", "kind", "framework", "framework_version"):
+                self.assertIn(key, labels, f"{name}: LABEL wseb.{key} missing")
+            self.assertIn(labels["kind"], ("pure", "index", "framework"), name)
+            self.assertIn(labels["runtime"], ("beam", "jvm"), name)
+            self.assertEqual(labels["framework"] == "none", labels["kind"] != "framework", name)
+            self.assertIn(f"-{labels['language']}-", name)
+            locks = [f for f in ("rebar.lock", "mix.lock", "manifest.toml", "pom.xml") if os.path.exists(os.path.join(folder, f))]
+            mix = os.path.join(folder, "mix.exs")
+            no_deps = os.path.exists(mix) and re.search(r"deps(: |, do: )\[\]", open(mix).read())
+            self.assertTrue(locks or no_deps, f"{name}: no lock file (and it has dependencies)")
+            if "rebar.lock" in locks:
+                self.assertIn("COPY rebar.config rebar.lock ./", text, f"{name}: the lock is not used by the build")
+
+
 class UnfinishedMeasurement(unittest.TestCase):
     """A fresh run of a config with an unfinished measurement asks: continue (default), from zero, stop."""
     CONFIG = "MEASURE=static\nSERVERS=st-a\nHTTP_REQUESTS=1000\n# unfinished-test\n"

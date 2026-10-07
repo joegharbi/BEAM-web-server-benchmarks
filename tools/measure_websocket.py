@@ -21,6 +21,7 @@ from scaphandre_energy import compute_window_energy, finish_raw, raw_json_path, 
 import load_phases
 import load_conditions
 import csv_columns
+import results_index
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger()
@@ -665,9 +666,13 @@ def main():
         "Raw Log": csv_columns.raw_log_field(output_json),
         "Server Processes": server_box.describe(box_processes),
     }
+    workload = results_index.websocket_workload(args.measurement_type, args.pattern, args.clients, args.size_kb,
+                                                args.rate, args.bursts, args.interval, args.duration)
     load_conditions.judge(watch, values, output_csv,
-                          f"{args.measurement_type} {args.pattern} clients={args.clients} size_kb={args.size_kb}")
+                          f"{args.measurement_type} {args.pattern} clients={args.clients} size_kb={args.size_kb}",
+                          args.server_image, workload)
     csv_columns.append(output_csv, csv_columns.WS_COLUMNS, values)
+    results_index.record(output_csv, values, args.server_image, workload)
 
     if is_measure_quiet() and not args.verbose:
         ok = total_success == total_msgs

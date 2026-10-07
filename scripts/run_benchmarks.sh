@@ -1693,6 +1693,7 @@ bench_on_exit() {
     rm -f "$RESULTS_DIR/.running"
     bench_restore_environment
     bench_unblock_sleep
+    "$PYTHON_PATH" ./tools/results_index.py index "$RESULTS_PARENT_DIR" --quiet 2>/dev/null || true
     # Native copies (NATIVE_COPIES): by default the ones that can never be used again are deleted
     if [ -d "${MEASURE_NATIVE_DIR:-native}" ]; then
         "$PYTHON_PATH" ./tools/native_server.py tidy "${CFG_NATIVE_COPIES:-prune}" || true
@@ -1880,6 +1881,8 @@ except (OSError, ValueError):
     fi
     BENCH_TOTAL_STEPS=$(( BENCH_TOTAL_STEPS * CFG_REPEATS ))
     [ -n "${CONFIG_FILE:-}" ] && bench_write_plan
+    # The results index lists this measurement as running (rebuilt again at the end)
+    "$PYTHON_PATH" ./tools/results_index.py index "$RESULTS_PARENT_DIR" --quiet || true
     if [ "$CFG_REPEATS" -gt 1 ]; then
         print_status "INFO" "Repeats: $CFG_REPEATS passes (shuffle=$CFG_SHUFFLE seed=$CFG_SHUFFLE_SEED), $BENCH_TOTAL_STEPS measurements in total"
     fi

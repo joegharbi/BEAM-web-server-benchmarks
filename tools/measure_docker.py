@@ -22,6 +22,7 @@ from scaphandre_energy import compute_window_energy, finish_raw, raw_json_path, 
 import load_phases
 import load_conditions
 import csv_columns
+import results_index
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger()
@@ -613,9 +614,12 @@ def main():
         "Raw Log": csv_columns.raw_log_field(output_json),
         "Server Processes": server_box.describe(box_processes),
     }
+    workload = results_index.http_workload(measurement_type, int(args.num_requests), http_workers_label, args.connection)
     load_conditions.judge(watch, values, args.output_csv or os.path.join("results_docker", f"{container_name}.csv"),
-                          f"{measurement_type} {args.num_requests} requests")
+                          f"{measurement_type} {args.num_requests} requests", args.server_image, workload)
     save_results_to_csv(args.output_csv, values)
+    if args.output_csv:
+        results_index.record(args.output_csv, values, args.server_image, workload)
     csv_disp = args.output_csv or os.path.join("results_docker", f"{container_name}.csv")
     if is_measure_quiet() and not args.verbose:
         ok = results_counter["success"] == results_counter["total"]
