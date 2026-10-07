@@ -2179,6 +2179,35 @@ class ConfirmStop(unittest.TestCase):
         self.assertNotIn("not reached", out)
         self.assertLess(time.monotonic() - t0, 8)                  # stopped by the second Ctrl-C, not the timeout
 
+    def stop_in(self, files):
+        d = tempfile.mkdtemp()
+        res = os.path.join(d, "run")
+        for sub in ("static", "dynamic", "websocket"):
+            os.makedirs(os.path.join(res, sub))
+        for f in files:
+            open(os.path.join(res, f), "w").close()
+        script = f"""
+            print_status() {{ echo "[$1] $2"; }}
+            eval "$(sed -n '/^bench_on_exit() {{/,/^}}/p;/^bench_unblock_sleep() {{/,/^}}/p' "{ROOT}/scripts/run_benchmarks.sh")"
+            bench_restore_environment() {{ :; }}; cleanup_sudo_keepalive() {{ :; }}
+            RESULTS_DIR="{res}"; RESUME_DIR=""; CONFIG_FILE=x; BENCH_INTERRUPTED=1
+            bench_on_exit
+        """
+        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30).stdout
+        exists = os.path.isdir(res)
+        shutil.rmtree(d)
+        return exists, out
+
+    def test_stopped_before_anything_was_written_leaves_no_folder(self):
+        exists, out = self.stop_in([".running"])
+        self.assertFalse(exists)
+        self.assertIn("Nothing was measured yet; removed the empty", out)
+
+    def test_stopped_later_keeps_its_folder(self):
+        exists, out = self.stop_in(["metadata.json", "bench.config"])
+        self.assertTrue(exists)
+        self.assertIn("Finished measurements are kept", out)
+
     def test_restore_cannot_be_reached_by_ctrl_c(self):
         with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
             src = fh.read()

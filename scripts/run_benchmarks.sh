@@ -1582,7 +1582,8 @@ bench_ask_stop() {
         bench_stop
     fi
     BENCH_ASKING=1
-    printf '\n[QUESTION] Stop the measurement? y = stop (settings restored; continue later with make resume),\n           anything else or no answer within %ss = continue: ' "$seconds" >&2
+    # Whole lines only: the running step goes on printing while this waits for the answer
+    printf '\n[QUESTION] Stop the measurement? Type y and Enter to stop (settings restored; continue later\n           with make resume). Enter, anything else, or no answer within %ss: continue.\n' "$seconds" >&2
     rc=0
     read -r -t "$seconds" answer < "$tty" || rc=$?
     BENCH_ASKING=""
@@ -1591,7 +1592,6 @@ bench_ask_stop() {
         print_status "WARNING" "Stopping (Ctrl-C confirmed)"
         bench_stop
     fi
-    printf '\n' >&2
     print_status "INFO" "Ctrl-C: continuing (nothing was interrupted)"
 }
 
@@ -1659,7 +1659,12 @@ bench_on_exit() {
     rm -f "$RESULTS_DIR/.running"
     bench_restore_environment
     bench_unblock_sleep
-    if [ "${BENCH_INTERRUPTED:-0}" = "1" ]; then
+    # Stopped before the measurement wrote anything (e.g. during the settle wait): nothing to keep or to
+    # continue, so remove its empty folder (empty folders only; a file is never removed here)
+    if [ -z "$RESUME_DIR" ] && [ ! -f "$RESULTS_DIR/metadata.json" ] && [ -z "$(find "$RESULTS_DIR" -type f 2>/dev/null | head -1)" ]; then
+        find "$RESULTS_DIR" -depth -type d -empty -delete 2>/dev/null || true
+        [ -d "$RESULTS_DIR" ] || print_status "INFO" "Nothing was measured yet; removed the empty $RESULTS_DIR"
+    elif [ "${BENCH_INTERRUPTED:-0}" = "1" ]; then
         print_status "WARNING" "Stopped (Ctrl-C). Finished measurements are kept in $RESULTS_DIR"
         if [ -n "${CONFIG_FILE:-}" ]; then
             print_status "INFO" "To continue where it stopped: make resume RESUME=$RESULTS_DIR"
