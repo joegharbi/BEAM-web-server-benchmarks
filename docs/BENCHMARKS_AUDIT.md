@@ -22,10 +22,10 @@ See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for bas
 | Erlang  | index   | `st-erlang-index-23`, `st-erlang-index-26`, `st-erlang-index-27`, `st-erlang-index-29-1-1` | Serves index HTML file |
 | Erlang  | pure    | `st-erlang-pure-23`, `st-erlang-pure-26`, `st-erlang-pure-27`, `st-erlang-pure-29-1-1` | HTML in code |
 | Erlang  | yaws    | `st-erlang-yaws-26`, `st-erlang-yaws-27`, `st-erlang-yaws-29-1-1` | Includes latest OTP lane |
-| Elixir  | cowboy  | `st-elixir-cowboy-1-16`, `st-elixir-cowboy-1-19-5` | Includes latest Elixir lane |
-| Elixir  | index   | `st-elixir-index-1-16`, `st-elixir-index-1-19-5` | Serves index HTML file |
-| Elixir  | phoenix | `st-elixir-phoenix-1-8`, `st-elixir-phoenix-1-8-5` | Includes latest Phoenix lane |
-| Elixir  | pure    | `st-elixir-pure-1-16`, `st-elixir-pure-1-19-5` | Includes latest Elixir lane |
+| Elixir  | cowboy  | `st-elixir-cowboy-1-16`, `st-elixir-cowboy-1-20-4` | Includes latest Elixir lane |
+| Elixir  | index   | `st-elixir-index-1-16`, `st-elixir-index-1-20-4` | Serves index HTML file |
+| Elixir  | phoenix | `st-elixir-phoenix-1-8`, `st-elixir-phoenix-1-8-15` | Includes latest Phoenix lane |
+| Elixir  | pure    | `st-elixir-pure-1-16`, `st-elixir-pure-1-20-4` | Includes latest Elixir lane |
 | Gleam   | index   | `st-gleam-index-1-0`, `st-gleam-index-1-15-2` | Serves index HTML file |
 | Gleam   | pure    | `st-gleam-pure-1-15-2` | HTML in code |
 | Gleam   | mist    | `st-gleam-mist-1-0`, `st-gleam-mist-1-15-2` | Includes latest Gleam/Mist lane |
@@ -38,10 +38,10 @@ See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for bas
 | Erlang  | index   | `dy-erlang-index-23`, `dy-erlang-index-26`, `dy-erlang-index-27`, `dy-erlang-index-29-1-1` | ✓ |
 | Erlang  | pure    | `dy-erlang-pure-23`, `dy-erlang-pure-26`, `dy-erlang-pure-27`, `dy-erlang-pure-29-1-1` | ✓ |
 | Erlang  | yaws    | `dy-erlang-yaws-26`, `dy-erlang-yaws-27`, `dy-erlang-yaws-29-1-1` | Includes latest OTP lane |
-| Elixir  | cowboy  | `dy-elixir-cowboy-1-16`, `dy-elixir-cowboy-1-19-5` | Includes latest Elixir lane |
-| Elixir  | index   | `dy-elixir-index-1-16`, `dy-elixir-index-1-19-5` | ✓ |
-| Elixir  | phoenix | `dy-elixir-phoenix-1-8`, `dy-elixir-phoenix-1-8-5` | Includes latest Phoenix lane |
-| Elixir  | pure    | `dy-elixir-pure-1-16`, `dy-elixir-pure-1-19-5` | Includes latest Elixir lane |
+| Elixir  | cowboy  | `dy-elixir-cowboy-1-16`, `dy-elixir-cowboy-1-20-4` | Includes latest Elixir lane |
+| Elixir  | index   | `dy-elixir-index-1-16`, `dy-elixir-index-1-20-4` | ✓ |
+| Elixir  | phoenix | `dy-elixir-phoenix-1-8`, `dy-elixir-phoenix-1-8-15` | Includes latest Phoenix lane |
+| Elixir  | pure    | `dy-elixir-pure-1-16`, `dy-elixir-pure-1-20-4` | Includes latest Elixir lane |
 | Gleam   | index   | `dy-gleam-index-1-0`, `dy-gleam-index-1-15-2` | ✓ |
 | Gleam   | pure    | `dy-gleam-pure-1-15-2` | HTML in code |
 | Gleam   | mist    | `dy-gleam-mist-1-0`, `dy-gleam-mist-1-15-2` | Includes latest Gleam/Mist lane |
@@ -52,8 +52,8 @@ See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for bas
 |----------|-------------------|--------------|--------|
 | Erlang  | cowboy | `ws-erlang-cowboy-27`, `ws-erlang-cowboy-29-1-1` | Includes latest OTP lane |
 | Erlang  | yaws   | `ws-erlang-yaws-27`, `ws-erlang-yaws-29-1-1` | Includes latest OTP lane |
-| Elixir  | cowboy | `ws-elixir-cowboy-1-16`, `ws-elixir-cowboy-1-19-5` | Includes latest Elixir lane |
-| Elixir  | bandit | `ws-elixir-bandit-1-8-5` | Bandit + WebSockAdapter echo on `/ws` |
+| Elixir  | cowboy | `ws-elixir-cowboy-1-16`, `ws-elixir-cowboy-1-20-4` | Includes latest Elixir lane |
+| Elixir  | bandit | `ws-elixir-bandit-1-12-5` | Bandit + WebSockAdapter echo on `/ws` |
 | Gleam   | mist | `ws-gleam-mist-1-0`, `ws-gleam-mist-1-15-2` | WebSocket echo on `/ws` |
 
 ## Consistency check
@@ -68,7 +68,7 @@ See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for bas
 Results use **container names only** (no benchmark paths in filenames or graphs).
 
 - **Folder**: `results/<timestamp>/` with subdirs `static/`, `dynamic/`, `websocket/`.
-- **File names**: One CSV per container, named by **image name** (e.g. `st-erlang-cowboy-27.csv`, `dy-elixir-pure-1-16.csv`, `ws-elixir-bandit-1-8-5.csv`).
+- **File names**: One CSV per container, named by **image name** (e.g. `st-erlang-cowboy-27.csv`, `dy-elixir-pure-1-16.csv`, `ws-elixir-bandit-1-12-5.csv`).
 - **CSV column**: First column is **"Container Name"** with that same value.
 - **Graphs**: The GUI graph generator uses **"Container Name"** from the CSV (or the filename without `.csv`) as the series label in the legend.
 
