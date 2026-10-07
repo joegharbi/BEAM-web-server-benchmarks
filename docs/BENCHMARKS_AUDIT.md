@@ -15,7 +15,7 @@ and the server contract in the [README](../README.md#adding-a-server) for adding
 
 See [MINIMAL_BASES_AND_UNIFICATION.md](MINIMAL_BASES_AND_UNIFICATION.md) for how the images are built.
 
-## Current layout (29 servers)
+## Current layout (30 servers)
 
 Versions: Erlang/OTP 29.1.1 (Cowboy 2.19.0, Yaws 2.3.1); Elixir 1.20.4 on OTP 29.1.1 (Phoenix 1.8.15,
 Bandit 1.12.5, Plug.Cowboy 2.9.0); Gleam 1.19.0 on OTP 29.1.1 (mist 6.0.3); Java: Netty 4.2.19.Final on JDK 27.
@@ -37,9 +37,9 @@ Bandit 1.12.5, Plug.Cowboy 2.9.0); Gleam 1.19.0 on OTP 29.1.1 (mist 6.0.3); Java
 | Gleam  | pure    | `st-gleam-pure-1-19-0` | Raw sockets (gen_tcp via a small Erlang helper); HTML in code |
 | Java   | netty   | `st-java-netty-4-2-19` | Reference; no busy-waiting variant (does not read `ERL_FLAGS`) |
 
-### Dynamic (11)
+### Dynamic (12)
 
-The same servers without Java. `GET /` returns a page with the current time (index servers: the index
+The same servers as static. `GET /` returns a page with the current time (index servers: the index
 template with the time filled in), so every answer is built anew.
 
 | Language | Containers |
@@ -47,6 +47,7 @@ template with the time filled in), so every answer is built anew.
 | Erlang | `dy-erlang-cowboy-29-1-1`, `dy-erlang-index-29-1-1`, `dy-erlang-pure-29-1-1`, `dy-erlang-yaws-29-1-1` |
 | Elixir | `dy-elixir-cowboy-1-20-4`, `dy-elixir-index-1-20-4`, `dy-elixir-phoenix-1-8-15`, `dy-elixir-pure-1-20-4` |
 | Gleam  | `dy-gleam-index-1-19-0`, `dy-gleam-mist-1-19-0`, `dy-gleam-pure-1-19-0` |
+| Java   | `dy-java-netty-4-2-19` (reference) |
 
 ### WebSocket (6)
 
@@ -69,7 +70,7 @@ discovered by `make build` or `make run`.
 
 ## Consistency check (2026-10-07)
 
-Every one of the 29 servers, in Docker and natively (`DEPLOY=native`):
+Every one of the 30 servers, in Docker and natively (`DEPLOY=native`):
 - answers `GET /` with 200 (WebSocket: the upgrade on `/ws` with 101);
 - dynamic servers return a different page one second later, and answer `POST /` with 204;
 - runs only the server (`beam.smp` and `erl_child_setup`, or `java`): no `epmd`, no build tool;
