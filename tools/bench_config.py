@@ -275,6 +275,16 @@ SCHEMA = {
         options={"off": "no turbo; slower but much steadier results (recommended)",
                  "on": "turbo allowed; faster, closer to everyday use, but more variation",
                  "unchanged": "leave the machine's current setting"}),
+    "ENV_POWER_PROFILE": dict(default="performance", check=_choice("performance", "balanced", "low-power", "unchanged"),
+        help="Power profile: how much power and heat the machine's firmware allows. The firmware can slow the\n"
+             "CPU on its own (heat, a laptop's lap sensor); with more headroom that is less likely. Set through\n"
+             "power-profiles-daemon where it runs, else the kernel's platform profile; skipped on machines without\n"
+             "one (most desktops, servers, VMs). Any slowdown that still happens is caught: a run during which the\n"
+             "CPU was slower than expected is invalid and measured again (READY_CPU_SPEED, INVALID_RUN_RETRIES).",
+        options={"performance": "the most headroom; the CPU speed itself stays as ENV_CPU_SPEED sets it (recommended)",
+                 "balanced": "the usual laptop setting",
+                 "low-power": "the least power and heat",
+                 "unchanged": "leave the machine's current setting"}),
     "ENV_STOP_CONTAINERS": dict(default="1", check=_choice("0", "1"),
         help="Other Docker containers running during the measurement.",
         options={"1": "stop them before, restart them after (recommended)", "0": "leave them running"}),
@@ -545,6 +555,7 @@ SHORT = {
     "SHUFFLE_SEED": "number that decides the order; empty = random (saved, to rerun the same order)",
     "ENV_GOVERNOR": "CPU governor: performance | powersave | schedutil | ondemand | conservative | unchanged",
     "ENV_TURBO": "turbo boost: off | on | unchanged",
+    "ENV_POWER_PROFILE": "firmware power profile: performance | balanced | low-power | unchanged",
     "ENV_CPU_SPEED": "fix every core at one speed: max | MHz | unchanged",
     "ENV_STOP_CONTAINERS": "1 = stop other Docker containers (restarted after), 0 = leave them",
     "ENV_KEEP_CONTAINERS": "containers to keep running anyway, comma-separated",
@@ -607,7 +618,7 @@ EXAMPLE_LAYOUT = [
 # docs/CONFIG.md: every setting, the machine ones grouped as in the profiles
 DOCS_LAYOUT = EXAMPLE_LAYOUT[:2] + [
     ("Machine settings (configs/machine/ profiles)",
-     ["ENV_GOVERNOR", "ENV_TURBO", "ENV_CPU_SPEED", "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "ENV_SCREEN_BRIGHTNESS",
+     ["ENV_GOVERNOR", "ENV_TURBO", "ENV_CPU_SPEED", "ENV_POWER_PROFILE", "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "ENV_SCREEN_BRIGHTNESS",
       "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH", "ON_BATTERY", "SETTLE_SECONDS", "RESTING_MEASURE_SECONDS"]),
     ("Readiness check before every run, and the conditions during its load (configs/machine/ profiles)",
      ["READY_CHECK_EVERY_SECONDS", "READY_TEMP_REFERENCE_C", "READY_TEMP_MARGIN_C",

@@ -153,6 +153,53 @@ def turbo_state():
     return ""
 
 
+# The power profile (low-power / balanced / performance): how much power and heat the firmware allows.
+# Standard on Linux: the kernel's ACPI platform profile, managed by power-profiles-daemon where it runs
+# (then it is only changed through the daemon, never behind its back). Lenovo, Dell, HP, ASUS and AMD
+# laptops have it; desktops, servers and VMs usually not.
+PLATFORM_PROFILE = "/sys/firmware/acpi/platform_profile"
+_FROM_DAEMON = {"power-saver": "low-power"}               # the daemon's names -> the kernel's names
+
+
+def _power_profiles_daemon(*args):
+    """powerprofilesctl's output, or None when power-profiles-daemon does not run here."""
+    if not shutil.which("powerprofilesctl"):
+        return None
+    try:
+        r = subprocess.run(["powerprofilesctl", *args], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def power_profile():
+    """(profile, manager): the power profile in the kernel's names, and who manages it: "daemon"
+    (power-profiles-daemon) or "firmware" (the kernel file only); ("", "") without power profiles."""
+    out = _power_profiles_daemon("get")
+    if out and out.strip():
+        return _FROM_DAEMON.get(out.strip(), out.strip()), "daemon"
+    profile = _read(PLATFORM_PROFILE)
+    return (profile, "firmware") if profile else ("", "")
+
+
+def power_profile_choices():
+    """The profiles this machine offers (kernel names); [] without power profiles."""
+    _, manager = power_profile()
+    if manager == "daemon":
+        names = re.findall(r"^[* ]\s*([a-z-]+):\s*$", _power_profiles_daemon("list") or "", re.M)
+        return [_FROM_DAEMON.get(n, n) for n in names]
+    if manager == "firmware":
+        return (_read(PLATFORM_PROFILE + "_choices") or "").split()
+    return []
+
+
+def performance_degraded():
+    """Why power-profiles-daemon holds the performance profile back (e.g. "lap-detected",
+    "high-operating-temperature"); "" when it does not, or cannot tell."""
+    m = re.search(r"Degraded:\s*yes\s*\(([^)]*)\)", _power_profiles_daemon("list") or "")
+    return m.group(1).strip() if m else ""
+
+
 def cpu_max_freq_mhz():
     vals = {_read(p) for p in glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq")} - {None}
     return "/".join(str(int(v) // 1000) for v in sorted(vals, key=int))
@@ -201,9 +248,12 @@ def cpu_cap_clues():
             if volts and amps and volts.isdigit() and amps.isdigit():
                 v, a = int(volts) / 1e6, int(amps) / 1e6
                 clues.append(f"USB-C charger up to {v:g} V {a:g} A ({v * a:.0f} W)")
-    profile = _read("/sys/firmware/acpi/platform_profile")
+    profile, _ = power_profile()
     if profile:
         clues.append(f"power profile {profile}")
+    degraded = performance_degraded()
+    if degraded:
+        clues.append(f"performance held back ({degraded})")
     for bat in sorted(glob.glob("/sys/class/power_supply/BAT*")):
         status = _read(os.path.join(bat, "status"))
         if status:
@@ -352,6 +402,7 @@ def machine_state():
         "cpu_governor": cpu_governor(),
         "turbo": turbo_state(),
         "cpu_max_freq_mhz": cpu_max_freq_mhz(),
+        "power_profile": power_profile()[0],
         "ac_power": ac_power(),
         "battery": battery(),
         "screen_brightness_percent": screen_brightness_percent(),
@@ -365,7 +416,7 @@ def machine_state():
 
 # Settings that change the measurement itself; a difference between start and end
 # means the measurement did not run under one set of conditions.
-STABLE_KEYS = ("cpu_governor", "turbo", "cpu_max_freq_mhz", "ac_power")
+STABLE_KEYS = ("cpu_governor", "turbo", "cpu_max_freq_mhz", "power_profile", "ac_power")
 
 
 def tool_settings():

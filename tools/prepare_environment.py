@@ -4,11 +4,12 @@
 Two actions:
   apply    - save the current state, then set the CPU governor to performance,
              turn turbo off, and stop other running Docker containers. Optionally
-             also set the screen brightness, turn the keyboard light off, and turn
-             Wi-Fi and Bluetooth off (each 'unchanged' by default).
+             also fix the CPU speed, set the power profile, set the screen
+             brightness, turn the keyboard light off, and turn Wi-Fi and Bluetooth
+             off (each 'unchanged' by default).
   restore  - read the saved state and put everything back: the governor, turbo,
-             the containers that were stopped, the screen and keyboard light, and
-             the Wi-Fi and Bluetooth radios.
+             the CPU speed limits, the power profile, the containers that were
+             stopped, the screen and keyboard light, and the Wi-Fi and Bluetooth radios.
 
 It records what it changed in a small state file, so restore undoes exactly what
 apply did and nothing more. Read-only checking is in tools/check_environment.py;
@@ -193,6 +194,9 @@ def do_apply(args):
         set_cpu_speed(None if args.cpu_speed == "max" else int(args.cpu_speed), state["files"],
                       before=limits_before)
 
+    if args.power_profile != "unchanged":
+        set_power_profile(args.power_profile, state)
+
     if args.screen_brightness != "unchanged":
         set_brightness(BACKLIGHT_GLOB, int(args.screen_brightness), "Screen brightness", state["files"])
     if args.keyboard_light == "off":
@@ -248,6 +252,39 @@ def set_cpu_speed(mhz, saved, glob_pattern=CPUFREQ_GLOB, before=None):
         print(f"CPU speed: fixed on {fixed}/{total} cores (lowest = highest = {now} MHz)")
 
 
+def _profiles():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import run_metadata
+    return run_metadata
+
+
+def write_power_profile(profile, manager):
+    """Set the power profile the way the machine manages it; True when it worked."""
+    if manager == "daemon":
+        name = {"low-power": "power-saver"}.get(profile, profile)
+        return subprocess.run(["powerprofilesctl", "set", name], capture_output=True, text=True).returncode == 0
+    return write(_profiles().PLATFORM_PROFILE, profile)
+
+
+def set_power_profile(wanted, state):
+    """ENV_POWER_PROFILE: the standard power profile (low-power / balanced / performance), through
+    power-profiles-daemon where it runs, else the kernel's platform profile; skipped on a machine
+    without power profiles. The previous profile is saved for the restore."""
+    m = _profiles()
+    now, manager = m.power_profile()
+    if not manager:
+        print("Power profile: not available on this machine, skipped")
+        return
+    choices = m.power_profile_choices()
+    if choices and wanted not in choices:
+        print(f"Power profile: '{wanted}' is not offered here ({', '.join(choices)}); left at '{now}'")
+        return
+    state["power_profile"] = {"prev": now, "manager": manager}
+    ok = write_power_profile(wanted, manager)
+    how = "power-profiles-daemon" if manager == "daemon" else "platform profile"
+    print(f"Power profile: {wanted} (through {how})" if ok else f"Power profile: could not set '{wanted}'")
+
+
 def cpu_speed_arg(v):
     if v in ("max", "unchanged") or (v.isdigit() and int(v) >= 100):
         return v
@@ -281,6 +318,11 @@ def _restore(args):
         write(t["path"], t["prev"])
         print("Turbo: restored")
 
+    pp = state.get("power_profile")
+    pp_failed = bool(pp and pp.get("prev") and not write_power_profile(pp["prev"], pp["manager"]))
+    if pp and pp.get("prev"):
+        print(f"Power profile: {'NOT ' if pp_failed else ''}restored ({pp['prev']})")
+
     files = state.get("files") or {}
     # Two passes: a CPU speed limit can only be restored once its partner (lowest/highest) allows it
     failed = [(path, prev) for path, prev in files.items() if prev is not None and not write(path, prev)]
@@ -297,6 +339,8 @@ def _restore(args):
     # A setting whose file is gone (the device disappeared) cannot be restored and must not block runs
     not_restored = [f"{os.path.basename(os.path.dirname(p))}/{os.path.basename(p)}" for p, _ in failed
                     if os.path.exists(p)]
+    if pp_failed:
+        not_restored.append(f"power profile {pp['prev']}")
     if stopped:
         up, down, error = restart_containers(stopped)
         if up:
@@ -346,6 +390,11 @@ def do_verify(args):
         now = run_metadata.cpu_max_freq_mhz()
         if now and now != args.cpu_speed:
             problems.append(f"CPU speed is {now} MHz, expected {args.cpu_speed} MHz (outside what this CPU allows now?)")
+    if args.power_profile != "unchanged":
+        now, manager = run_metadata.power_profile()
+        # Only where the machine offers it (else apply said so and left it)
+        if manager and args.power_profile in run_metadata.power_profile_choices() and now != args.power_profile:
+            problems.append(f"power profile is '{now}', expected '{args.power_profile}'")
     if args.screen_brightness != "unchanged":
         now = brightness_percent(BACKLIGHT_GLOB)
         # The steps of a backlight are coarse, so a difference of 2% is still the requested level
@@ -377,6 +426,8 @@ def main():
                     help="Turbo/boost on apply (default: off)")
     ap.add_argument("--cpu-speed", type=cpu_speed_arg, default="max",
                     help="fix every core at this speed: max (the highest allowed), a speed in MHz, or unchanged")
+    ap.add_argument("--power-profile", choices=["performance", "balanced", "low-power", "unchanged"],
+                    default="unchanged", help="Power profile on apply (default: unchanged)")
     ap.add_argument("--no-stop-containers", dest="stop_containers", action="store_false",
                     help="Leave other running containers alone on apply")
     ap.add_argument("--keep", default="",

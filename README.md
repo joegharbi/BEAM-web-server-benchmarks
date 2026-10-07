@@ -148,6 +148,31 @@ keyboard light, Wi-Fi and Bluetooth off (`ENV_SCREEN_BRIGHTNESS`, `ENV_KEYBOARD_
 affect the container's energy, which is its share of the CPU's power, but they do affect the whole
 machine's energy (`Host Energy (J)`). The desktop may still dim or switch off the screen by itself.
 
+### Machine checklist (laptops especially)
+
+A laptop's firmware can slow the CPU on its own, whatever Linux is told: when it gets hot, when its
+charger is too weak, or when a sensor thinks it lies on someone's lap (ThinkPad "lap mode", and
+similar on other brands). No program can switch these protections off, and none should. The framework
+makes them less likely and catches them when they happen anyway:
+
+| Layer | What the framework does |
+|---|---|
+| Set what is standard | `ENV_POWER_PROFILE=performance` (power-profiles-daemon or the kernel's platform profile; skipped where there is none) gives the firmware the most headroom, next to the fixed CPU speed (`ENV_CPU_SPEED`) and turbo off |
+| Catch | the CPU speed is watched during every load; a run during which it was lower than expected is invalid, kept in `invalid_runs.csv` and measured again (`INVALID_RUN_RETRIES`) |
+| Wait | a capped CPU is not ready: the next run waits until the cap is gone |
+| Explain | the waiting message names the clues the machine reports: lap mode, what the charger offers, the power profile and why performance is held back (e.g. `lap-detected`), the battery (draining while plugged in = charger too weak), the temperature |
+
+What only you can do, before a long measurement:
+
+1. **A hard, flat desk** – not a lap, bed or cushion (blocked vents, and the lap sensor).
+2. **The original charger, plugged straight into the laptop** (no hub or dock), strong enough for
+   the laptop under full load (check: the battery must not drain while measuring).
+3. **Do not touch or move the laptop** while it measures; leave the lid open.
+4. **Room temperature steady**, the fan not blocked, no direct sun.
+5. **Run `bash tests/config_check.sh` once** on a new machine, after an update, or after changing the
+   setup: it measures briefly and checks that every setting is applied and restored.
+6. **After a run, look at `invalid_runs.csv`**: a few redone runs are fine; many point to the setup.
+
 ### What a results folder contains
 
 | File | Content |

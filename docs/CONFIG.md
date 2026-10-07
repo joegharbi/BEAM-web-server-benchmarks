@@ -124,6 +124,19 @@ Fix every core at one speed for the whole measurement (lowest speed = highest sp
 | `<MHz>` | a lower fixed speed, e.g. 1200, to measure a slower machine or a rented share of one; the run refuses to start if the CPU does not accept it |
 | `unchanged` | leave the CPU's speed limits as they are (machines you do not control) |
 
+### `ENV_POWER_PROFILE`
+
+Default: `performance`
+
+Power profile: how much power and heat the machine's firmware allows. The firmware can slow the CPU on its own (heat, a laptop's lap sensor); with more headroom that is less likely. Set through power-profiles-daemon where it runs, else the kernel's platform profile; skipped on machines without one (most desktops, servers, VMs). Any slowdown that still happens is caught: a run during which the CPU was slower than expected is invalid and measured again (READY_CPU_SPEED, INVALID_RUN_RETRIES).
+
+| Option | Meaning |
+|---|---|
+| `performance` | the most headroom; the CPU speed itself stays as ENV_CPU_SPEED sets it (recommended) |
+| `balanced` | the usual laptop setting |
+| `low-power` | the least power and heat |
+| `unchanged` | leave the machine's current setting |
+
 ### `ENV_STOP_CONTAINERS`
 
 Default: `1`

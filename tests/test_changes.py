@@ -981,7 +981,7 @@ exec "$@"
             os.makedirs(os.path.join(bench, fam))
         cfg = os.path.join(d, "c.config")
         with open(cfg, "w") as fh:
-            fh.write("SETTLE_SECONDS=60\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_STOP_CONTAINERS=1\n"
+            fh.write("SETTLE_SECONDS=60\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_STOP_CONTAINERS=1\n"
                      "ENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\nENV_WIFI=unchanged\n"
                      "ENV_BLUETOOTH=unchanged\n")
         before = set(os.listdir(os.path.join(ROOT, "results"))) if os.path.isdir(os.path.join(ROOT, "results")) else set()
@@ -1156,8 +1156,8 @@ class LaptopSettings(unittest.TestCase):
 
     def args(self, **kw):
         import argparse
-        d = dict(governor="unchanged", turbo="unchanged", cpu_speed="unchanged", stop_containers=False, keep="",
-                 screen_brightness="20", keyboard_light="off", wifi="off", bluetooth="off",
+        d = dict(governor="unchanged", turbo="unchanged", cpu_speed="unchanged", power_profile="unchanged",
+                 stop_containers=False, keep="", screen_brightness="20", keyboard_light="off", wifi="off", bluetooth="off",
                  state=os.path.join(self.root, "state.json"))
         d.update(kw)
         return argparse.Namespace(**d)
@@ -1428,7 +1428,7 @@ class FixesFromTheRealCheck(LaptopSettings):
             os.makedirs(os.path.join(bench, fam))
         cfg = os.path.join(d, "c.config")
         with open(cfg, "w") as fh:
-            fh.write("ENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\n"
+            fh.write("ENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\n"
                      "ENV_KEYBOARD_LIGHT=unchanged\nENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n")
         before = set(os.listdir(os.path.join(ROOT, "results")))
         env = dict(os.environ, PATH=os.path.join(ROOT, "tests", "fakes") + os.pathsep + os.environ["PATH"],
@@ -1481,7 +1481,7 @@ class WhatToMeasure(unittest.TestCase):
     @staticmethod
     def config_text(config, config_cpu_speed="unchanged"):
         return ("SETTLE_SECONDS=0\nRESTING_MEASURE_SECONDS=1\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\n"
-                f"ENV_CPU_SPEED={config_cpu_speed}\n"
+                f"ENV_CPU_SPEED={config_cpu_speed}\nENV_POWER_PROFILE=unchanged\n"
                 "ENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\n"
                 "ENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n" + config)
 
@@ -1706,11 +1706,92 @@ class CpuCapClues(unittest.TestCase):
                  "/p/BAT0/status": "Discharging", "/p/BAT0/power_now": "12300000"}
         globs = {"/sys/class/power_supply/*": ["/p/usbc", "/p/BAT0"], "/sys/class/power_supply/BAT*": ["/p/BAT0"]}
         with mock.patch.object(m, "_read", files.get), mock.patch.object(m.glob, "glob", lambda g: globs.get(g, [])), \
-                mock.patch.object(m, "cpu_package_temp_c", lambda: 41.0):
+                mock.patch.object(m, "cpu_package_temp_c", lambda: 41.0), \
+                mock.patch.object(m, "_power_profiles_daemon", lambda *a: None):            # not this machine's
             clues = m.cpu_cap_clues()
         # the offer (20 V x 3.25 A), not the unreliable voltage_now (5 V)
         self.assertEqual(clues, "lap mode on, USB-C charger up to 20 V 3.25 A (65 W), power profile balanced, "
                                 "battery discharging 12.3 W, CPU 41 C")
+
+
+class PowerProfile(unittest.TestCase):
+    """ENV_POWER_PROFILE: the standard power profile, through power-profiles-daemon or the kernel file."""
+
+    DAEMON_LIST = ("  performance:\n    CpuDriver:\tintel_pstate\n    Degraded:   {deg}\n\n"
+                   "* balanced:\n    CpuDriver:\tintel_pstate\n\n  power-saver:\n    CpuDriver:\tintel_pstate\n")
+
+    def firmware(self, now="balanced", choices="low-power balanced performance"):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "platform_profile")
+        for f, v in ((path, now), (path + "_choices", choices)):
+            with open(f, "w") as fh:
+                fh.write(v + "\n")
+        return d, path
+
+    def test_kernel_file_set_and_restored(self):
+        import prepare_environment as pe
+        import run_metadata as m
+        from unittest import mock
+        d, path = self.firmware()
+        state = {}
+        with mock.patch.object(m, "PLATFORM_PROFILE", path), mock.patch.object(m, "_power_profiles_daemon", lambda *a: None):
+            pe.set_power_profile("performance", state)
+            self.assertEqual(m.power_profile(), ("performance", "firmware"))
+            self.assertEqual(state["power_profile"], {"prev": "balanced", "manager": "firmware"})
+            self.assertTrue(pe.write_power_profile("balanced", "firmware"))            # the restore
+            self.assertEqual(m.power_profile(), ("balanced", "firmware"))
+        shutil.rmtree(d)
+
+    def test_not_offered_or_not_there(self):
+        import prepare_environment as pe
+        import run_metadata as m
+        from unittest import mock
+        d, path = self.firmware(choices="low-power balanced")
+        state = {}
+        with mock.patch.object(m, "PLATFORM_PROFILE", path), mock.patch.object(m, "_power_profiles_daemon", lambda *a: None):
+            pe.set_power_profile("performance", state)                             # not offered: left as it is
+            self.assertEqual(m.power_profile()[0], "balanced")
+        with mock.patch.object(m, "PLATFORM_PROFILE", os.path.join(d, "none")), \
+                mock.patch.object(m, "_power_profiles_daemon", lambda *a: None):
+            self.assertEqual(m.power_profile(), ("", ""))                          # a desktop, server or VM
+            pe.set_power_profile("performance", state)
+        self.assertEqual(state, {})                                                # nothing to restore
+        shutil.rmtree(d)
+
+    def test_through_the_daemon_never_behind_its_back(self):
+        import prepare_environment as pe
+        import run_metadata as m
+        from unittest import mock
+        answers = {("get",): "balanced\n", ("list",): self.DAEMON_LIST.format(deg="no")}
+        calls = []
+        with mock.patch.object(m, "_power_profiles_daemon", lambda *a: answers.get(a)), \
+                mock.patch.object(pe.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or mock.Mock(returncode=0)):
+            self.assertEqual(m.power_profile_choices(), ["performance", "balanced", "low-power"])
+            state = {}
+            pe.set_power_profile("performance", state)
+            pe.write_power_profile("low-power", "daemon")
+        self.assertEqual(calls, [["powerprofilesctl", "set", "performance"], ["powerprofilesctl", "set", "power-saver"]])
+        self.assertEqual(state["power_profile"], {"prev": "balanced", "manager": "daemon"})
+
+    def test_degraded_reason_is_a_clue(self):
+        import run_metadata as m
+        from unittest import mock
+        with mock.patch.object(m, "_power_profiles_daemon",
+                               lambda *a: self.DAEMON_LIST.format(deg="yes (lap-detected)") if a == ("list",) else "balanced\n"):
+            self.assertEqual(m.performance_degraded(), "lap-detected")
+        with mock.patch.object(m, "_power_profiles_daemon", lambda *a: None):
+            self.assertEqual(m.performance_degraded(), "")
+
+    def test_config_and_profiles(self):
+        import bench_config
+        self.assertEqual(bench_config.parse("")["ENV_POWER_PROFILE"], "performance")
+        with self.assertRaises(bench_config.ConfigError):
+            bench_config.parse("ENV_POWER_PROFILE=turbo")
+        for name, want in (("minimal", "performance"), ("untouched", "unchanged")):
+            with open(os.path.join(ROOT, "configs", "machine", f"{name}.config")) as fh:
+                self.assertIn(f"ENV_POWER_PROFILE={want}\n", fh.read())
+        import run_metadata
+        self.assertIn("power_profile", run_metadata.STABLE_KEYS)                  # a change mid-run is recorded
 
 
 class UnfinishedMeasurement(unittest.TestCase):

@@ -653,7 +653,7 @@ if [ -n "${CONFIG_FILE:-}" ]; then
     [ -n "$RESUME_DIR" ] && [ -n "$RESUME_SEED" ] && CFG_SHUFFLE_SEED="$RESUME_SEED"
 else
     CFG_REPEATS=1; CFG_SHUFFLE=0; CFG_SHUFFLE_SEED=""; CFG_SETTLE_SECONDS=0; CFG_FAILURES_STOP_AFTER=0
-    CFG_ENV_GOVERNOR=unchanged; CFG_ENV_TURBO=unchanged; CFG_ENV_CPU_SPEED=unchanged; CFG_ENV_STOP_CONTAINERS=0; CFG_ENV_KEEP_CONTAINERS=""
+    CFG_ENV_GOVERNOR=unchanged; CFG_ENV_TURBO=unchanged; CFG_ENV_CPU_SPEED=unchanged; CFG_ENV_POWER_PROFILE=unchanged; CFG_ENV_STOP_CONTAINERS=0; CFG_ENV_KEEP_CONTAINERS=""
     CFG_ENV_SCREEN_BRIGHTNESS=unchanged; CFG_ENV_KEYBOARD_LIGHT=unchanged; CFG_ENV_WIFI=unchanged; CFG_ENV_BLUETOOTH=unchanged
     CFG_ON_BATTERY=ignore
     CFG_HTTP_CONNECTION=reuse
@@ -1521,7 +1521,7 @@ print("\n".join(items))' "$CFG_SHUFFLE_SEED" "$pass" "$@"
 
 bench_apply_environment() {
     if [ "$CFG_ENV_GOVERNOR" = "unchanged" ] && [ "$CFG_ENV_TURBO" = "unchanged" ] && [ "$CFG_ENV_STOP_CONTAINERS" = "0" ] \
-            && [ "${CFG_ENV_CPU_SPEED:-unchanged}" = "unchanged" ] \
+            && [ "${CFG_ENV_CPU_SPEED:-unchanged}" = "unchanged" ] && [ "${CFG_ENV_POWER_PROFILE:-unchanged}" = "unchanged" ] \
             && [ "$CFG_ENV_SCREEN_BRIGHTNESS" = "unchanged" ] && [ "$CFG_ENV_KEYBOARD_LIGHT" = "unchanged" ] \
             && [ "$CFG_ENV_WIFI" = "unchanged" ] && [ "$CFG_ENV_BLUETOOTH" = "unchanged" ]; then
         print_status "INFO" "Machine settings: left unchanged"
@@ -1537,6 +1537,7 @@ bench_apply_environment() {
         bench_stop_early
     done
     local env_args=(--governor "$CFG_ENV_GOVERNOR" --turbo "$CFG_ENV_TURBO" --cpu-speed "${CFG_ENV_CPU_SPEED:-unchanged}"
+        --power-profile "${CFG_ENV_POWER_PROFILE:-unchanged}"
         --keep "$CFG_ENV_KEEP_CONTAINERS"
         --screen-brightness "$CFG_ENV_SCREEN_BRIGHTNESS" --keyboard-light "$CFG_ENV_KEYBOARD_LIGHT"
         --wifi "$CFG_ENV_WIFI" --bluetooth "$CFG_ENV_BLUETOOTH")
@@ -1547,7 +1548,7 @@ bench_apply_environment() {
         exit 1
     fi
     BENCH_ENV_STATE="$RESULTS_DIR/.environment_state.json"
-    print_status "INFO" "Machine settings: governor=$CFG_ENV_GOVERNOR turbo=$CFG_ENV_TURBO cpu_speed=${CFG_ENV_CPU_SPEED:-unchanged} stop_containers=$CFG_ENV_STOP_CONTAINERS screen=$CFG_ENV_SCREEN_BRIGHTNESS keyboard_light=$CFG_ENV_KEYBOARD_LIGHT wifi=$CFG_ENV_WIFI bluetooth=$CFG_ENV_BLUETOOTH"
+    print_status "INFO" "Machine settings: governor=$CFG_ENV_GOVERNOR turbo=$CFG_ENV_TURBO cpu_speed=${CFG_ENV_CPU_SPEED:-unchanged} power_profile=${CFG_ENV_POWER_PROFILE:-unchanged} stop_containers=$CFG_ENV_STOP_CONTAINERS screen=$CFG_ENV_SCREEN_BRIGHTNESS keyboard_light=$CFG_ENV_KEYBOARD_LIGHT wifi=$CFG_ENV_WIFI bluetooth=$CFG_ENV_BLUETOOTH"
     sudo "$PYTHON_PATH" ./tools/prepare_environment.py apply "${env_args[@]}" --state "$BENCH_ENV_STATE"
     BENCH_ENV_APPLIED=1
     if ! "$PYTHON_PATH" ./tools/prepare_environment.py verify "${env_args[@]}"; then
@@ -1846,7 +1847,7 @@ main() {
         --set ready_cpu_busy_margin_percent="${CFG_READY_CPU_BUSY_MARGIN_PERCENT:-}" --set ready_no_throttling="${CFG_READY_NO_THROTTLING:-}" --set ready_cpu_speed="${CFG_READY_CPU_SPEED:-}" --set env_cpu_speed="${CFG_ENV_CPU_SPEED:-}" --set ready_cpu_speed_expected_mhz="${BENCH_CPU_SPEED:-}" \
         --set ready_consecutive_checks="${CFG_READY_CONSECUTIVE_CHECKS:-}" --set ready_min_wait_s="${CFG_READY_MIN_WAIT_SECONDS:-}" \
         --set ready_max_wait_s="${CFG_READY_MAX_WAIT_SECONDS:-}" --set ready_on_timeout="${CFG_READY_ON_TIMEOUT:-}" \
-        --set env_governor="$CFG_ENV_GOVERNOR" \
+        --set env_governor="$CFG_ENV_GOVERNOR" --set env_power_profile="${CFG_ENV_POWER_PROFILE:-}" \
         --set env_turbo="$CFG_ENV_TURBO" --set env_stop_containers="$CFG_ENV_STOP_CONTAINERS" \
         --set http_connection="$CFG_HTTP_CONNECTION" --set failures_stop_after="$CFG_FAILURES_STOP_AFTER" \
         --set idle_s="${CFG_IDLE_SECONDS:-0}" --set warmup_s="${CFG_WARMUP_SECONDS:-0}" \
