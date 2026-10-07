@@ -18,6 +18,11 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
+# The tests never touch the real native/ copies: the run script and native_server use this folder
+os.environ["MEASURE_NATIVE_DIR"] = tempfile.mkdtemp(prefix="wseb-test-native-")
+import atexit  # noqa: E402
+atexit.register(shutil.rmtree, os.environ["MEASURE_NATIVE_DIR"], True)
+
 import scaphandre_energy as se  # noqa: E402
 
 with open("/proc/sys/kernel/pid_max") as _fh:
@@ -1759,7 +1764,10 @@ class Deploy(WhatToMeasure):
             fake = fh.read()
         fake = fake.replace("#!/bin/sh\n", '#!/bin/sh\nif [ "$1" = "cp" ]; then case "$2" in *:/app) mkdir -p "$3" ;; '
                             '*:/start.sh) printf "%s" "$FAKE_START" > "$3" ;; esac; exit 0; fi\n'
-                            'if [ "$1 $2 $4" = "image inspect {{.Id}}" ]; then echo "sha256:id-$5"; exit 0; fi\n', 1)
+                            'if [ "$1 $2 $4" = "image inspect {{.Id}}" ]; then echo "sha256:id-$5"; exit 0; fi\n'
+                            # the files: a -nobw variant has its server's layers
+                            'if [ "$1 $2 $4" = "image inspect {{json .RootFS.Layers}}" ]; then '
+                            'echo "[\\"sha256:l-${5%-nobw}\\"]"; exit 0; fi\n', 1)
         with open(os.path.join(self.bin, "docker"), "w") as fh:
             fh.write(fake)
         self.native = os.path.join(self.d, "native")
@@ -1773,7 +1781,11 @@ class Deploy(WhatToMeasure):
         rc, out = self.run_until_plan("MEASURE=static\nSERVERS=st-a st-b\nHTTP_REQUESTS=1000\nDEPLOY=container native\n"
                                       "VARIANTS=nobw:ERL_FLAGS=+sbwt none\n")
         self.assertIn("Static HTTP:     8 containers × 1 levels = 8", out)       # 2 servers x 2 variants x 2 ways
-        self.assertEqual(sorted(os.listdir(self.native)), ["st-a", "st-a-nobw", "st-b", "st-b-nobw"])
+        # one copy per server: its -nobw variant has the same files (the copy is named after whichever came first)
+        copies = sorted(os.listdir(self.native))
+        self.assertEqual(len(copies), 2)
+        self.assertEqual(sorted(c.replace("-nobw", "") for c in copies), ["st-a", "st-b"])
+        self.assertEqual(out.count("Preparing native copies"), 4)                # every image is still checked
 
     def test_native_only(self):
         rc, out = self.run_until_plan("MEASURE=static\nSERVERS=st-a\nHTTP_REQUESTS=1000\nDEPLOY=native\n")
@@ -2081,19 +2093,28 @@ class Tidy(unittest.TestCase):
 
     def native_dir(self):
         d = tempfile.mkdtemp()
-        for name, image_id in (("st-current", "sha256:aaa"), ("st-rebuilt", "sha256:old"), ("st-gone", "sha256:x")):
+        for name, fid in (("st-current", "sha256:aaa"), ("st-rebuilt", "sha256:old"), ("st-gone", "sha256:x"),
+                          ("st-older", ""), ("st-docker-down", "sha256:d")):
             os.makedirs(os.path.join(d, name, "app"))
-            with open(os.path.join(d, name, ".image_id"), "w") as fh:
-                fh.write(image_id)
+            if fid:
+                with open(os.path.join(d, name, ".files_id"), "w") as fh:
+                    fh.write(fid)
         os.makedirs(os.path.join(d, ".st-current-cut"))                  # an unpacking that was cut off
         open(os.path.join(d, "wseb-st-current.scope.log"), "w").close()
         return d
 
     def fake_docker(self):
-        ids = {"st-current": "sha256:aaa", "st-rebuilt": "sha256:new"}
+        ids = {"st-current": "sha256:aaa", "st-rebuilt": "sha256:new", "st-older": "sha256:o"}
+        ns = __import__("native_server")
         from unittest import mock
-        return mock.patch.object(__import__("native_server").subprocess, "run",
-                                 lambda cmd, **kw: mock.Mock(stdout=ids.get(cmd[-1], "")))
+
+        def files_id(name, docker_path="docker"):
+            if name == "st-docker-down":
+                raise ns.subprocess.CalledProcessError(1, "docker", stderr="Cannot connect to the Docker daemon")
+            if name not in ids:
+                raise ns.subprocess.CalledProcessError(1, "docker", stderr=f"Error response from daemon: No such image: {name}")
+            return ids[name]
+        return mock.patch.object(ns, "files_id", files_id)
 
     def test_prune_deletes_only_copies_never_used_again(self):
         import native_server as ns
@@ -2101,13 +2122,29 @@ class Tidy(unittest.TestCase):
         with self.fake_docker():
             why = {os.path.basename(f): r for f, _, r in ns.stale_copies(root=d)}
             self.assertEqual(why, {"st-rebuilt": "its image was rebuilt", "st-gone": "its image no longer exists",
+                                   "st-older": "copied by an older version (made again when needed)",
                                    ".st-current-cut": "unpacking was cut off"})
-            self.assertEqual(ns.tidy("prune", root=d)[0], 3)
-        self.assertEqual(sorted(os.listdir(d)), ["st-current", "wseb-st-current.scope.log"])
+            self.assertEqual(ns.tidy("prune", root=d)[0], 4)
+        # a Docker problem is no proof that the image is gone: that copy stays
+        self.assertEqual(sorted(os.listdir(d)), ["st-current", "st-docker-down", "wseb-st-current.scope.log"])
         self.assertEqual(ns.tidy("keep", root=d), (0, 0))
-        self.assertEqual(ns.tidy("delete", root=d)[0], 1)
+        self.assertEqual(ns.tidy("delete", root=d)[0], 2)
         self.assertEqual(os.listdir(d), ["wseb-st-current.scope.log"])   # small logs stay
         shutil.rmtree(d)
+
+    def test_docker_without_answer_deletes_nothing(self):
+        import native_server as ns
+        from unittest import mock
+        d = self.native_dir()
+        # a fake or broken docker that exits 0 and prints nothing (as in the script tests)
+        with mock.patch.object(ns.subprocess, "run", lambda cmd, **kw: mock.Mock(returncode=0, stdout="", stderr="")):
+            self.assertEqual([f for f, _, why in ns.stale_copies(root=d) if why != "unpacking was cut off"], [])
+        shutil.rmtree(d)
+
+    def test_script_tests_use_their_own_native_folder(self):
+        self.assertNotEqual(os.path.realpath(os.environ["MEASURE_NATIVE_DIR"]), os.path.realpath(os.path.join(ROOT, "native")))
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            self.assertIn('if [ -d "${MEASURE_NATIVE_DIR:-native}" ]; then', fh.read())
 
     def test_never_deletes_outside_its_folder(self):
         import native_server as ns
@@ -2859,6 +2896,63 @@ class NativeServer(unittest.TestCase):
         shutil.rmtree(d)
         self.assertAlmostEqual(cpu_stats["avg"], 50.0)          # % of one core, as docker stats
         self.assertAlmostEqual(mem["peak"], 100.0)              # MB
+
+    def fake_images(self, layers):
+        """A fake docker: image inspect answers the layers (or fails: no such image); create/cp/rm make a copy."""
+        ns = __import__("native_server")
+        from unittest import mock
+        copies = []
+
+        def docker(docker_path, *args):
+            if args[:2] == ("image", "inspect"):
+                if args[-1] not in layers:
+                    raise ns.subprocess.CalledProcessError(1, "docker")
+                return layers[args[-1]]
+            if args[0] == "create":
+                copies.append(args[1])
+                return "box"
+            if args[0] == "cp":
+                os.makedirs(os.path.dirname(args[2]), exist_ok=True)
+                if args[2].endswith("app"):
+                    os.makedirs(args[2])
+                else:
+                    open(args[2], "w").close()
+            return ""
+
+        def run(cmd, **kw):                                     # docker cp -L of os-release, docker rm
+            if cmd[1:3] == ["cp", "-L"]:
+                open(cmd[-1], "w").close()
+            return mock.Mock(returncode=0, stdout="")
+        return copies, mock.patch.object(ns, "_docker", docker), mock.patch.object(ns.subprocess, "run", run)
+
+    def test_variant_uses_its_servers_copy(self):
+        import native_server as ns
+        d = tempfile.mkdtemp()
+        copies, p1, p2 = self.fake_images({"st-x": '["sha256:l1","sha256:l2"]', "st-x-nobw": '["sha256:l1","sha256:l2"]'})
+        with p1, p2:
+            first = ns.unpack("st-x", root=d)
+            self.assertEqual(ns.unpack("st-x-nobw", root=d), first)        # same files: no second copy
+            self.assertEqual(copies, ["st-x"])
+            self.assertEqual(ns.stale_copies(root=d), [])
+        self.assertEqual(sorted(os.listdir(d)), ["st-x"])
+        shutil.rmtree(d)
+
+    def test_variant_first_and_other_files(self):
+        import native_server as ns
+        d = tempfile.mkdtemp()
+        copies, p1, p2 = self.fake_images({"st-x": '["sha256:l1"]', "st-x-nobw": '["sha256:l1"]', "st-y": '["sha256:l9"]'})
+        with p1, p2:
+            shared = ns.unpack("st-x-nobw", root=d)                      # shuffled order: the variant can come first
+            self.assertEqual(ns.unpack("st-x", root=d), shared)
+            self.assertNotEqual(ns.unpack("st-y", root=d), shared)        # other files: its own copy
+            self.assertEqual(copies, ["st-x-nobw", "st-y"])
+        shutil.rmtree(d)
+
+    def test_variant_keeps_its_own_settings(self):
+        with open(os.path.join(ROOT, "tools", "native_server.py")) as fh:
+            src = fh.read()
+        # the copy may be shared, the settings are always the started image's own (ERL_FLAGS of -nobw)
+        self.assertIn("command(unit, folder, image_env(image, docker_path), port)", src)
 
     def test_failure_stops_the_scope(self):
         import measure_failure

@@ -2,7 +2,8 @@
 
 The program is the one inside the server's image: /app and /start.sh are copied out of the image
 (native/<image>/), so container and native runs use the same build, the same runtime version and the
-same settings (the image's ENV, except PATH). Only the box differs.
+same settings (the image's ENV, except PATH). Only the box differs. Images with the same files share
+one copy: a variant (FROM <server> + ENV, e.g. -nobw) runs from its server's copy with its own ENV.
 
 A scope is not a container: it is only a cgroup, the group every Linux process belongs to anyway.
 It gives the server's processes one name, so they can be found for the energy (by that name in
@@ -11,6 +12,7 @@ no own network: the server listens on the machine's port directly.
 
 Shared by measure_docker.py and measure_websocket.py.
 """
+import hashlib
 import json
 import logging
 import os
@@ -48,19 +50,52 @@ def image_env(image, docker_path="docker"):
     return env
 
 
+def files_id(image, docker_path="docker"):
+    """Fingerprint of the image's files: its layers. A variant (FROM <server> + ENV) adds no layer, so it
+    has its server's fingerprint while its image ID differs. Raises when the image does not exist."""
+    layers = _docker(docker_path, "image", "inspect", "--format", "{{json .RootFS.Layers}}", image)
+    if not layers.startswith("["):
+        raise ValueError(f"docker gave no layer list for {image}")
+    return "sha256:" + hashlib.sha256(layers.encode()).hexdigest()
+
+
+STAMP = ".files_id"     # in every copy: the files_id it was copied from
+
+
+def _stamp(folder):
+    try:
+        with open(os.path.join(folder, STAMP), encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def find_copy(fid, image, root):
+    """A copy with these files: <root>/<image>/ first, else any other (e.g. the server's copy for its
+    variant). None when there is none. A stamp means complete: it is written last, in the work folder
+    that is then renamed into place."""
+    try:
+        others = sorted(n for n in os.listdir(root) if n != image and not n.startswith("."))
+    except OSError:
+        return None
+    for name in [image] + others:
+        folder = os.path.join(root, name)
+        if _stamp(folder) == fid:
+            return os.path.abspath(folder)
+    return None
+
+
 def unpack(image, docker_path="docker", root=None):
     """Copy /app, /start.sh and the image's OS name (os-release) out of the image into <root>/<image>/;
-    reused while the image is the same."""
+    reused while the image's files are the same, also by other images with the same files."""
     root = root or NATIVE_DIR
+    fid = files_id(image, docker_path)
+    found = find_copy(fid, image, root)
+    if found:
+        if os.path.basename(found) != image:
+            logger.info("Native copy of %s: %s (same files)", image, found)
+        return found
     target = os.path.join(root, image)
-    image_id = _docker(docker_path, "image", "inspect", "--format", "{{.Id}}", image)
-    stamp = os.path.join(target, ".image_id")
-    try:
-        with open(stamp, encoding="utf-8") as fh:
-            if fh.read().strip() == image_id and os.path.exists(os.path.join(target, "os-release")):
-                return os.path.abspath(target)
-    except OSError:
-        pass
     os.makedirs(root, exist_ok=True)
     work = tempfile.mkdtemp(prefix=f".{image}-", dir=root)
     box = _docker(docker_path, "create", image)
@@ -73,8 +108,8 @@ def unpack(image, docker_path="docker", root=None):
             open(os.path.join(work, "os-release"), "w").close()
     finally:
         subprocess.run([docker_path, "rm", "-f", box], capture_output=True, text=True, check=False)
-    with open(os.path.join(work, ".image_id"), "w", encoding="utf-8") as fh:
-        fh.write(image_id)
+    with open(os.path.join(work, STAMP), "w", encoding="utf-8") as fh:
+        fh.write(fid)
     shutil.rmtree(target, ignore_errors=True)
     os.rename(work, target)
     logger.info("Unpacked %s into %s", image, target)
@@ -216,7 +251,8 @@ def _size(path):
 
 def stale_copies(docker_path="docker", root=None):
     """[(folder, bytes, reason)] of copies that can never be used again: their image is gone or was
-    rebuilt (another image ID), or an unpacking was cut off (a hidden .<image>-... work folder)."""
+    rebuilt (other files), or an unpacking was cut off (a hidden .<image>-... work folder). A copy
+    shared with a variant belongs to the image it is named after, which also has the variant's files."""
     root = root or NATIVE_DIR
     stale = []
     try:
@@ -230,15 +266,21 @@ def stale_copies(docker_path="docker", root=None):
         if name.startswith("."):
             stale.append((folder, _size(folder), "unpacking was cut off"))
             continue
+        # Only Docker's own "No such image" means gone; any other trouble (Docker down, no answer)
+        # keeps the copy, so a Docker problem never deletes copies that are still good
         try:
-            with open(os.path.join(folder, ".image_id"), encoding="utf-8") as fh:
-                copied = fh.read().strip()
-        except OSError:
-            copied = ""
-        now = subprocess.run([docker_path, "image", "inspect", "--format", "{{.Id}}", name],
-                             capture_output=True, text=True).stdout.strip()
+            now = files_id(name, docker_path)
+        except subprocess.CalledProcessError as e:
+            if "no such image" not in (e.stderr or "").lower():
+                continue
+            now = ""
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            continue
+        copied = _stamp(folder)
         if not now:
             stale.append((folder, _size(folder), "its image no longer exists"))
+        elif not copied:
+            stale.append((folder, _size(folder), "copied by an older version (made again when needed)"))
         elif now != copied:
             stale.append((folder, _size(folder), "its image was rebuilt"))
     return stale

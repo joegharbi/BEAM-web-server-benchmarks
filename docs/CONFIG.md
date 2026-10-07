@@ -384,7 +384,7 @@ Scaphandre's raw power log of each run, after its energy has been calculated.
 
 Default: `prune`
 
-Native mode runs each server from a copy taken out of its image (native/<image>/, reused while the image is the same). Copies hold no results; any copy is made again when needed. At the end of a run:
+Native mode runs each server from a copy taken out of its image (native/<image>/, reused while the image's files are the same; a variant such as -nobw uses its server's copy). Copies hold no results; any copy is made again when needed. At the end of a run:
 
 | Option | Meaning |
 |---|---|

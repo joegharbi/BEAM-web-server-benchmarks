@@ -376,7 +376,8 @@ SCHEMA = {
                  "delete": "delete it (saves disk space)"}),
     "NATIVE_COPIES": dict(default="prune", check=_choice("prune", "keep", "delete"),
         help="Native mode runs each server from a copy taken out of its image (native/<image>/, reused while the\n"
-             "image is the same). Copies hold no results; any copy is made again when needed. At the end of a run:",
+             "image's files are the same; a variant such as -nobw uses its server's copy). Copies hold no results;\n"
+             "any copy is made again when needed. At the end of a run:",
         options={"prune": "delete the copies that can never be used again: image gone or rebuilt (recommended)",
                  "keep": "keep every copy",
                  "delete": "delete every copy (the next native run copies again, a few seconds per server)"}),
