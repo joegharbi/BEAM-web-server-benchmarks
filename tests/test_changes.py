@@ -1693,6 +1693,26 @@ class LeftoverSettings(unittest.TestCase):
 
 
 
+class CpuCapClues(unittest.TestCase):
+    """The waiting message names what can make the firmware cap the CPU, from what the machine reports."""
+
+    def test_charger_offer_and_battery_drain(self):
+        import run_metadata as m
+        from unittest import mock
+        files = {"/sys/devices/platform/thinkpad_acpi/dytc_lapmode": "1",
+                 "/p/usbc/online": "1", "/p/usbc/type": "USB", "/p/usbc/voltage_now": "5000000",
+                 "/p/usbc/voltage_max": "20000000", "/p/usbc/current_max": "3250000",
+                 "/sys/firmware/acpi/platform_profile": "balanced",
+                 "/p/BAT0/status": "Discharging", "/p/BAT0/power_now": "12300000"}
+        globs = {"/sys/class/power_supply/*": ["/p/usbc", "/p/BAT0"], "/sys/class/power_supply/BAT*": ["/p/BAT0"]}
+        with mock.patch.object(m, "_read", files.get), mock.patch.object(m.glob, "glob", lambda g: globs.get(g, [])), \
+                mock.patch.object(m, "cpu_package_temp_c", lambda: 41.0):
+            clues = m.cpu_cap_clues()
+        # the offer (20 V x 3.25 A), not the unreliable voltage_now (5 V)
+        self.assertEqual(clues, "lap mode on, USB-C charger up to 20 V 3.25 A (65 W), power profile balanced, "
+                                "battery discharging 12.3 W, CPU 41 C")
+
+
 class UnfinishedMeasurement(unittest.TestCase):
     """A fresh run of a config with an unfinished measurement asks: continue (default), from zero, stop."""
     CONFIG = "MEASURE=static\nSERVERS=st-a\nHTTP_REQUESTS=1000\n# unfinished-test\n"

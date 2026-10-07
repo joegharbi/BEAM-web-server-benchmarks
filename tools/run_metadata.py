@@ -187,7 +187,7 @@ def rated_cpu_speed_mhz(cpuinfo="/proc/cpuinfo"):
 
 def cpu_cap_clues():
     """What the machine reports that can make its firmware cap the CPU, for the waiting message:
-    laptop lap mode, the USB-C power contract, the power profile, the battery, the temperature.
+    laptop lap mode, what the USB-C charger offers, the power profile, the battery, the temperature.
     Each clue only when the machine has it."""
     clues = []
     lap = _read("/sys/devices/platform/thinkpad_acpi/dytc_lapmode")
@@ -195,16 +195,22 @@ def cpu_cap_clues():
         clues.append(f"lap mode {'on' if lap == '1' else 'off'}")
     for psy in sorted(glob.glob("/sys/class/power_supply/*")):
         if _read(os.path.join(psy, "online")) == "1" and _read(os.path.join(psy, "type")) == "USB":
-            volts, amps = _read(os.path.join(psy, "voltage_now")), _read(os.path.join(psy, "current_max"))
+            # What the charger offers (voltage_max x current_max): voltage_now is unreliable on some
+            # machines (a 65 W charger read as 5 V); whether it is enough shows in the battery clue
+            volts, amps = _read(os.path.join(psy, "voltage_max")), _read(os.path.join(psy, "current_max"))
             if volts and amps and volts.isdigit() and amps.isdigit():
-                clues.append(f"USB-C charger contract {int(volts) / 1e6:g} V {int(amps) / 1e6:g} A")
+                v, a = int(volts) / 1e6, int(amps) / 1e6
+                clues.append(f"USB-C charger up to {v:g} V {a:g} A ({v * a:.0f} W)")
     profile = _read("/sys/firmware/acpi/platform_profile")
     if profile:
         clues.append(f"power profile {profile}")
     for bat in sorted(glob.glob("/sys/class/power_supply/BAT*")):
         status = _read(os.path.join(bat, "status"))
         if status:
-            clues.append(f"battery {status.lower()}")
+            # Draining while plugged in: the charger does not cover the load
+            watts = _read(os.path.join(bat, "power_now"))
+            drain = f" {int(watts) / 1e6:.1f} W" if status == "Discharging" and watts and watts.isdigit() else ""
+            clues.append(f"battery {status.lower()}{drain}")
     temp = cpu_package_temp_c()
     if temp != "":
         clues.append(f"CPU {temp:g} C")
