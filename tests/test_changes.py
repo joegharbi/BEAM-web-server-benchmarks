@@ -2026,13 +2026,15 @@ class ConfirmStop(unittest.TestCase):
             with open(tty, "w") as fh:
                 fh.write(answer or "")
         script = f"""
+            set -e                                                  # as in run_benchmarks.sh
             print_status() {{ echo "[$1] $2"; }}
             BENCH_TTY="{tty}"; BENCH_STOP_CONFIRM_SECONDS=2
             eval "$(sed -n '/^BENCH_CHILD=""$/,/^bench_restore_environment() {{$/p' "{ROOT}/scripts/run_benchmarks.sh" | sed '$d')"
             trap 'echo "exit $? interrupted=${{BENCH_INTERRUPTED:-0}}"' EXIT
             {body}
         """
-        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30).stdout
+        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                             start_new_session=True).stdout
         shutil.rmtree(d)
         return out
 
@@ -2048,6 +2050,44 @@ class ConfirmStop(unittest.TestCase):
             self.assertIn("continuing (nothing was interrupted)", out, repr(answer))
             self.assertIn("after", out)
 
+    def test_timeout_continues_under_set_e(self):
+        d = tempfile.mkdtemp()
+        fifo = os.path.join(d, "tty")
+        os.mkfifo(fifo)
+        script = f"""
+            set -e
+            print_status() {{ echo "[$1] $2"; }}
+            BENCH_TTY="{fifo}"; BENCH_STOP_CONFIRM_SECONDS=1
+            eval "$(sed -n '/^BENCH_CHILD=""$/,/^bench_restore_environment() {{$/p' "{ROOT}/scripts/run_benchmarks.sh" | sed '$d')"
+            sleep 5 <> "{fifo}" >/dev/null 2>&1 &              # a terminal nobody types on
+            bench_ask_stop; echo after
+        """
+        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                             start_new_session=True).stdout
+        shutil.rmtree(d)
+        self.assertIn("continuing", out)
+        self.assertIn("after", out)
+
+    @unittest.skipUnless(shutil.which("systemd-inhibit") and shutil.which("setsid"), "needs systemd-inhibit")
+    def test_sleep_block_survives_ctrl_c(self):
+        script = f"""
+            set -e
+            print_status() {{ :; }}
+            eval "$(sed -n '/^bench_block_sleep() {{/,/^}}/p;/^bench_unblock_sleep() {{/,/^}}/p' "{ROOT}/scripts/run_benchmarks.sh")"
+            trap ':' INT
+            bench_block_sleep
+            sleep 1
+            kill -INT -$$; sleep 1                                  # a terminal Ctrl-C to the whole group
+            kill -0 "$BENCH_INHIBIT_PID" && echo "inhibitor alive after Ctrl-C"
+            pid=$BENCH_INHIBIT_PID
+            bench_unblock_sleep; sleep 1
+            pgrep -g "$pid" >/dev/null && echo "group left behind" || echo "group gone"
+        """
+        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                             start_new_session=True).stdout
+        self.assertIn("inhibitor alive after Ctrl-C", out)
+        self.assertIn("group gone", out)
+
     def test_without_a_terminal_stops_at_once(self):
         out = self.harness(tty_exists=False, body="bench_on_ctrl_c; echo after")
         self.assertNotIn("after", out)
@@ -2056,15 +2096,15 @@ class ConfirmStop(unittest.TestCase):
     def test_the_step_goes_on_and_its_exit_code_comes_back(self):
         # a Ctrl-C (SIGINT to the script) during a step, answered "no": the step is not disturbed
         body = """trap bench_on_ctrl_c INT
-            ( sleep 1; kill -INT $$ ) &
-            bench_run sh -c 'sleep 2; exit 7'; echo "step exit $?" """
+            ( sleep 1; kill -INT -$$ ) &                     # the whole group, as a terminal Ctrl-C
+            rc=0; bench_run sh -c 'sleep 2; exit 7' || rc=$?; echo "step exit $rc" """
         out = self.harness("n\n", body=body)
         self.assertIn("continuing", out)
         self.assertIn("step exit 7", out)
 
     def test_stop_ends_the_step(self):
         body = """trap bench_on_ctrl_c INT
-            ( sleep 1; kill -INT $$ ) &
+            ( sleep 1; kill -INT -$$ ) &
             bench_run sleep 20; echo "not reached" """
         out = self.harness("y\n", body=body)
         self.assertNotIn("not reached", out)
@@ -2075,17 +2115,19 @@ class ConfirmStop(unittest.TestCase):
         fifo = os.path.join(d, "tty")
         os.mkfifo(fifo)
         script = f"""
+            set -e
             print_status() {{ echo "[$1] $2"; }}
             BENCH_TTY="{fifo}"; BENCH_STOP_CONFIRM_SECONDS=10
             eval "$(sed -n '/^BENCH_CHILD=""$/,/^bench_restore_environment() {{$/p' "{ROOT}/scripts/run_benchmarks.sh" | sed '$d')"
             trap 'echo "exit $? interrupted=${{BENCH_INTERRUPTED:-0}}"' EXIT
             sleep 8 <> "{fifo}" >/dev/null 2>&1 &       # a terminal nobody types on
             trap bench_on_ctrl_c INT
-            ( sleep 1; kill -INT $$; sleep 1; kill -INT $$ ) >/dev/null 2>&1 &
+            ( sleep 1; kill -INT -$$; sleep 1; kill -INT -$$ ) >/dev/null 2>&1 &
             bench_run sleep 20; echo "not reached"
         """
         t0 = time.monotonic()
-        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30).stdout
+        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                             start_new_session=True).stdout
         shutil.rmtree(d)
         self.assertIn("exit 130 interrupted=1", out)
         self.assertNotIn("not reached", out)

@@ -1533,8 +1533,9 @@ bench_run() {
     BENCH_CHILD=$!
     local rc
     while :; do
-        wait "$BENCH_CHILD"
-        rc=$?
+        # "|| rc=$?": under set -e a wait cut short by Ctrl-C (130) would otherwise end the script
+        rc=0
+        wait "$BENCH_CHILD" || rc=$?
         # A wait cut short by a handled signal (> 128) while the step still runs: after a Ctrl-C ask
         # whether to stop (here, outside the signal handler, so a second Ctrl-C is handled at once),
         # then wait again
@@ -1542,7 +1543,7 @@ bench_run() {
             [ -n "$BENCH_CTRL_C" ] && { BENCH_CTRL_C=""; bench_ask_stop; }
             continue
         fi
-        [ "$rc" -gt 128 ] && { wait "$BENCH_CHILD" 2>/dev/null; rc=$?; }
+        [ "$rc" -gt 128 ] && { rc=0; wait "$BENCH_CHILD" 2>/dev/null || rc=$?; }
         break
     done
     BENCH_CHILD=""
@@ -1554,8 +1555,8 @@ bench_run() {
 bench_stop() {
     BENCH_INTERRUPTED=1
     if [ -n "$BENCH_CHILD" ] && kill -0 "$BENCH_CHILD" 2>/dev/null; then
-        kill -TERM "$BENCH_CHILD" 2>/dev/null
-        wait "$BENCH_CHILD" 2>/dev/null
+        kill -TERM "$BENCH_CHILD" 2>/dev/null || true
+        wait "$BENCH_CHILD" 2>/dev/null || true
     fi
     exit 130
 }
@@ -1582,8 +1583,8 @@ bench_ask_stop() {
     fi
     BENCH_ASKING=1
     printf '\n[QUESTION] Stop the measurement? y = stop (settings restored; continue later with make resume),\n           anything else or no answer within %ss = continue: ' "$seconds" >&2
-    read -r -t "$seconds" answer < "$tty"
-    rc=$?
+    rc=0
+    read -r -t "$seconds" answer < "$tty" || rc=$?
     BENCH_ASKING=""
     # read cut short before the timeout (a second Ctrl-C), or y: stop
     if [[ "$answer" == [yY]* ]] || { [ "$rc" -gt 128 ] && [ $((SECONDS - t0)) -lt "$seconds" ]; }; then
@@ -1615,7 +1616,9 @@ bench_block_sleep() {
         print_status "WARNING" "systemd-inhibit not found; make sure the machine does not go to sleep while measuring"
         return 0
     fi
-    systemd-inhibit --what=sleep:handle-lid-switch --mode=block --who="web-server benchmarks" \
+    # In its own process group (setsid): systemd-inhibit starts its sleep with Ctrl-C reset to normal,
+    # so a Ctrl-C at the terminal would end the block while the measurement goes on
+    setsid systemd-inhibit --what=sleep:handle-lid-switch --mode=block --who="web-server benchmarks" \
         --why="energy measurement running" sleep infinity &
     BENCH_INHIBIT_PID=$!
     print_status "INFO" "Sleep and lid-close suspend are blocked until the measurement ends"
@@ -1623,7 +1626,8 @@ bench_block_sleep() {
 
 bench_unblock_sleep() {
     [ -n "${BENCH_INHIBIT_PID:-}" ] || return 0
-    kill "$BENCH_INHIBIT_PID" >/dev/null 2>&1 || true
+    # The whole group: systemd-inhibit and its sleep (setsid made the inhibitor the group's leader)
+    kill -- "-$BENCH_INHIBIT_PID" >/dev/null 2>&1 || kill "$BENCH_INHIBIT_PID" >/dev/null 2>&1 || true
     BENCH_INHIBIT_PID=""
 }
 
