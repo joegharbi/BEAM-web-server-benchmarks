@@ -18,7 +18,9 @@ WebSocket: burst and stream with 100 clients, 8 KB and 1 MB messages.
 | WebSocket | `make run CONFIG=campaigns/paper/websocket.config` | 440 | ~10 h | ~0.5 GB + ~1 GB native copies |
 
 Time: about 1.4 min per measurement (check runs of October 2026). Native copies (each image's /app,
-50-180 MB) exist only during a part; NATIVE_COPIES=prune removes them afterwards.
+50-180 MB, one per server and per variant) are reused by the next part while the image is unchanged;
+NATIVE_COPIES=prune removes only copies whose image is gone or rebuilt. A part stops (resumable) when
+less than 2 GB is free.
 
 ## Short (5 HTTP load levels: 5k, 10k, 20k, 40k, 80k)
 

@@ -1,183 +1,76 @@
 # Minimal Bases and Unification
 
-All benchmark containers use **three minimal base types**, built with the **same stages and pattern**, so image size and footprint are comparable.
+All benchmark images are built the **same way**, so image size and footprint are comparable and every
+image can also run natively (see the server contract in the [README](../README.md#adding-a-server)).
 
 ---
 
-## 1. Minimal bases (Trixie-slim / Alpine)
+## 1. One base for every runtime image
 
-Every runtime image is **debian:trixie-slim** plus only what the app needs. No full Erlang/Elixir image as runtime.
+Every runtime image is **`debian:trixie-slim`** (the host's OS, Debian 13, so native mode can run the same
+program) plus one apt line, the same in every image:
 
-| Base type | Final image contents | Used by |
-|-----------|----------------------|--------|
-| **Minimal Erlang** | trixie-slim + same apt deps + `/usr/local/lib/erlang` only | Erlang apps (cowboy, pure, index) |
-| **Minimal Yaws** | trixie-slim + same apt deps + yaws (two-stage: builder prepares config/content) | Yaws (static, dynamic, websocket) |
-| **Minimal Elixir** | trixie-slim + same apt deps + Erlang + Elixir + Hex (`.mix`) | Elixir apps (cowboy, phoenix, pure, index) |
-| **Minimal Gleam** | Alpine + same apk deps + Erlang + Gleam binary (no compiler, no build) | Gleam apps (mist, index) |
+```
+libncurses6 libssl3t64 ca-certificates
+```
 
-So:
-- **One common OS** for Erlang/Elixir/Yaws: `debian:trixie-slim`. **Gleam**: `alpine` (no Debian Gleam image yet).
-- **Same apt list** (Debian): `libncurses6`, `libssl3t64`, `ca-certificates` (then clean). **Same apk list** (Gleam): `openssl`, `ncurses-libs`, `ca-certificates`, `libgcc`, `libstdc++`.
-- **Only the runtime layer differs**: Erlang only, or Erlang+Elixir, or system packages, or Erlang+Gleam binary.
+The runtime differs only in **what is copied under `/app`**: the program together with its own runtime.
 
-That gives comparable, minimal images and similar footprint.
+| Language | Built with | Copied to `/app` | Started by `/start.sh` |
+|----------|------------|------------------|------------------------|
+| Erlang (Cowboy, pure, index, Yaws) | `erlang:29.1.1`, `rebar3 as prod release` | the release, with its own ERTS (`include_erts`) | `bin/<release> -noinput` (no node name) |
+| Elixir (Cowboy, Phoenix, Bandit, pure, index) | `elixir:1.20.4-otp-29`, `mix release` | the release, with its own ERTS (the `mix release` default) | `bin/<release> start` (no node name) |
+| Gleam (mist, pure, index) | `erlang:29.1.1` + the Gleam 1.19.0 binary, `gleam export erlang-shipment` | the shipment (`/app/shipment`) and OTP (`/app/erlang`) | `shipment/entrypoint.sh run`, with `/app/erlang/bin` first on `PATH` |
+| Java (Netty, reference) | `maven:3.10.0-eclipse-temurin-27`, `jlink` | the jar and a `jlink` Java runtime (`/app/jre`) | `/app/jre/bin/java -jar /app/app.jar` |
+
+No image contains a build tool (`rebar3`, `mix`, `gleam`, Maven), `epmd`, or a second copy of a runtime.
+The exact versions are part of each folder name (e.g. `st-erlang-cowboy-29-1-1`); dependency versions are
+pinned in `rebar.config` / `mix.lock` / `manifest.toml` / `pom.xml`.
 
 ---
 
-## 2. Unified build pattern (same stages)
-
-Every Dockerfile follows this structure:
+## 2. Same stages in every Dockerfile
 
 ```
 Stage 1 (builder)
-  FROM <language-image> AS builder
-  WORKDIR /app
-  ... install build tools, copy source, compile ...
+  FROM <language image> AS builder
+  ... copy source, fetch pinned dependencies, build the release / shipment / jar ...
 
-Stage 2 (runtime) — same for all
+Stage 2 (runtime) — the same for all
   FROM debian:trixie-slim
-  RUN apt-get update && apt-get install -y \
-      libncurses6 \
-      libssl3t64 \
-      ca-certificates \
+  RUN apt-get update && apt-get install -y libncurses6 libssl3t64 ca-certificates \
       && apt-get clean && rm -rf /var/lib/apt/lists/*
-  COPY --from=builder <only what's needed for runtime>
-  ENV PATH=...
   WORKDIR /app
-  COPY --from=builder /app /app   # or app-specific path
-  EXPOSE 80
-  CMD ...
+  COPY --from=builder <program + its runtime> /app/...
+  EXPOSE 8001
+  COPY start.sh /start.sh
+  CMD ["/start.sh"]
 ```
 
 Rules:
-- **Single final stage**: always `FROM debian:trixie-slim`.
-- **Same apt packages** in that stage (no extra packages unless strictly required).
-- **No build tools** in the final image; copy only runtime (Erlang beams, Elixir libs, or app release).
-- **Same order**: apt → copy runtime → env → workdir → app → expose → cmd.
-
-**Yaws** uses the same two-stage pattern: Stage 1 (builder) prepares config and content (and compiles the WebSocket handler for ws); Stage 2 is trixie-slim + same apt list + yaws, COPY config/content from builder. **Gleam** uses the same two-stage pattern but Stage 2 is Alpine with the same apk deps and COPY-only runtime (Erlang + Gleam binary + app).
+- **Single final stage** from `debian:trixie-slim`, with the **same apt line**.
+- **Everything the server needs is under `/app`**; `/start.sh` finds it under `${APP_DIR:-/app}`, so
+  native mode can run the same script on a copy.
+- **Port** from `PORT` (default 8001), `EXPOSE 8001`.
+- **Runtime options from the environment** (`ERL_FLAGS`, `JAVA_TOOL_OPTIONS`); an image that does not read
+  `ERL_FLAGS` names what it reads with `LABEL wseb.options` (Java: `JAVA_TOOL_OPTIONS`).
+- `make build` adds `LABEL wseb.recipe=<fingerprint of the folder>`, so a run notices an image that is
+  older than its folder.
 
 ---
 
-## 3. Naming (folder = container name)
-
-Folder name under `benchmarks/` is the Docker image name and the name used in results/graphs. Names should make the **base type** and **app** clear.
-
-Proposed pattern:
+## 3. Naming (folder = image name)
 
 ```
 <type>-<language>-<framework>-<version>
 ```
 
 - **type**: `st` | `dy` | `ws`
-- **language**: `erlang` | `elixir` | `gleam` (matches minimal base: Erlang vs Elixir vs Gleam)
-- **framework**: `cowboy` | `phoenix` | `pure` | `index` | `yaws` | `mist`
-- **version**: e.g. `27`, `1-16`, `1-8`, `1-0`
+- **language**: `erlang` | `elixir` | `gleam` | `java`
+- **framework**: `cowboy` | `phoenix` | `bandit` | `pure` | `index` | `yaws` | `mist` | `netty`
+- **version**: the real version with dashes: OTP for Erlang (`29-1-1`), Elixir (`1-20-4`) or the framework
+  (`phoenix-1-8-15`, `bandit-1-12-5`), Gleam (`1-19-0`), Netty (`4-2-19`)
 
-Examples (all minimal, trixie-slim except Gleam):
-
-| Container name | Base type | Meaning |
-|----------------|-----------|--------|
-| st-erlang-cowboy-27 | Minimal Erlang | Static, Erlang, Cowboy, OTP 27 |
-| dy-erlang-pure-27 | Minimal Erlang | Dynamic, Erlang, pure |
-| st-elixir-cowboy-1-16 | Minimal Elixir | Static, Elixir, Cowboy, 1.16 |
-| dy-elixir-phoenix-1-8 | Minimal Elixir | Dynamic, Elixir, Phoenix, 1.8 |
-| st-erlang-yaws-27 | Minimal Yaws (two-stage, same pattern) | Static, Erlang stack, Yaws |
-| st-gleam-mist-1-0 | Minimal Gleam (Alpine; two-stage, same pattern) | Static, Gleam, Mist |
-
-So from the name you see: **language = which minimal base** (erlang → minimal Erlang, elixir → minimal Elixir, yaws → trixie-slim + system Yaws).
-
----
-
-## 4. Same approximate footprint
-
-- **Same base OS**: trixie-slim (Erlang/Elixir/Yaws); Alpine (Gleam).
-- **Same apt/apk set**: one line, same packages, then clean.
-- **Runtime**: only BEAM runtime + app, no compilers or build deps.
-
-So:
-- Erlang-only images: trixie-slim + erlang lib + app (smallest).
-- Elixir images: trixie-slim + erlang + elixir + .mix + app (larger but still minimal).
-- Yaws: trixie-slim + yaws (two-stage: builder prepares config/content; runtime copies from builder).
-- Gleam: Alpine + erlang + gleam binary + app (two-stage: build on Gleam image, copy to minimal Alpine).
-
-Image sizes will sit in a narrow band per base type; we can document expected ranges and check in CI later.
-
----
-
-## 5. Summary
-
-- **Four minimal bases**: Minimal Erlang, Minimal Yaws, Minimal Elixir (all trixie-slim, same two-stage pattern); Minimal Gleam (Alpine, same two-stage pattern).
-- **Unification**: Same stages (builder → minimal runtime), same apt/apk list per base, copy-only runtime, no build tools in final image.
-- **Naming**: Folder = container name; pattern `st-erlang-cowboy-27` / `dy-elixir-cowboy-1-16` so the name encodes type, language (base), framework, and version.
-
-Implementing this means: (1) every Dockerfile follows the same two-stage pattern (builder → minimal runtime), (2) container folders use the unified naming scheme, (3) Gleam uses Alpine for runtime (no Debian Gleam image yet) but the same Stage 1 / Stage 2 structure.
-
----
-
-## 6. Unified Dockerfile template (Minimal Elixir example)
-
-Every **Elixir** container (minimal Elixir base) should follow this pattern:
-
-```dockerfile
-# Stage 1: build (language image)
-FROM elixir:1.16 AS builder
-ENV MIX_ENV=prod
-WORKDIR /app
-RUN mix local.hex --force && mix local.rebar --force
-COPY mix.exs ./
-COPY lib ./lib
-RUN mix deps.get --only prod && mix compile
-
-# Stage 2: minimal runtime (same for all — trixie-slim + same apt)
-FROM debian:trixie-slim
-RUN apt-get update && apt-get install -y \
-    libncurses6 \
-    libssl3t64 \
-    ca-certificates \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Minimal Elixir base: Erlang + Elixir + Hex only (no build tools)
-COPY --from=builder /usr/local/lib/erlang /usr/local/lib/erlang
-COPY --from=builder /usr/local/lib/elixir /usr/local/lib/elixir
-COPY --from=builder /root/.mix /root/.mix
-
-ENV PATH="/usr/local/lib/erlang/bin:/usr/local/lib/elixir/bin:${PATH}"
-ENV LANG=C.UTF-8
-ENV MIX_ENV=prod
-ENV HEX_OFFLINE=1
-
-WORKDIR /app
-COPY --from=builder /app /app
-
-EXPOSE 80
-COPY start.sh /start.sh
-RUN chmod +x /start.sh
-CMD ["/start.sh"]
-```
-
-**Minimal Erlang** containers use the same Stage 2 base (trixie-slim + same apt), then only `COPY --from=builder /usr/local/lib/erlang` and app beams/release — no Elixir.
-
-**Minimal Gleam** containers use the same two-stage pattern but Stage 2 is Alpine:
-
-```dockerfile
-# Stage 1: build (Gleam language image)
-FROM ghcr.io/gleam-lang/gleam:v1.14.0-erlang-alpine AS builder
-WORKDIR /app
-COPY gleam.toml ./
-COPY src ./src
-RUN gleam deps download && gleam build
-
-# Stage 2: minimal runtime (Alpine + same apk deps; no build tools)
-FROM alpine:3.20
-RUN apk add --no-cache openssl ncurses-libs ca-certificates libgcc libstdc++ && rm -rf /var/cache/apk/*
-COPY --from=builder /usr/local/lib/erlang /usr/local/lib/erlang
-COPY --from=builder /bin/gleam /usr/local/bin/gleam
-COPY --from=builder /app /app
-ENV PATH="/usr/local/lib/erlang/bin:/usr/local/bin:${PATH}"
-WORKDIR /app
-COPY start.sh /start.sh
-RUN chmod +x /start.sh
-EXPOSE 80
-CMD ["/start.sh"]
-```
+The current servers are listed in [BENCHMARKS_AUDIT.md](BENCHMARKS_AUDIT.md). Older servers (OTP 23-27,
+Elixir 1.16, Gleam 1.0, Alpine-based Gleam) are kept in `benchmarks_old/` for earlier results; they follow
+an older layout (port 80, a separate Erlang/Elixir install) and are not part of the current measurements.
