@@ -69,7 +69,7 @@ Every server echoes each message on `/ws`.
 
 ### Older servers
 
-Older versions (OTP 23-27, Elixir 1.16, Phoenix 1.8, Gleam 1.0) are kept in `benchmarks_old/` for earlier
+Older versions (OTP 23-27, Elixir 1.16, Phoenix 1.8, Gleam 1.0) are kept in `archive/benchmarks_old/` for earlier
 results. They follow an older layout (port 80, a separate Erlang/Elixir install, node names) and are not
 discovered by `make build` or `make run`.
 

@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QLineEdit,
     QDialog, QTableWidget, QTableWidgetItem,
+    QInputDialog,
 )
 from PyQt5.QtCore import Qt, QPoint, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QKeySequence, QColor, QPalette
@@ -465,6 +466,7 @@ class ArrowDoubleSpinBox(QDoubleSpinBox):
 # --- Helper Functions ---
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aggregate_repeats  # noqa: E402  same statistics as <family>/summary.csv
+import results_index  # noqa: E402  what each run CSV holds (results/<run>/manifest.jsonl)
 import statistics  # noqa: E402
 
 REPEATS_MEDIAN_IQR = "Median + IQR"
@@ -522,9 +524,28 @@ def is_run_list(path):
 
 
 def in_abandoned_measurement(path):
-    """A run file of a measurement that was abandoned (started again from zero): <folder>/.abandoned."""
+    """A run file of a measurement that was abandoned (started again from zero): its .abandoned file,
+    or abandoned in its metadata.json (results index)."""
     folder = os.path.dirname(os.path.dirname(os.path.abspath(path)))
-    return os.path.exists(os.path.join(folder, ".abandoned"))
+    if os.path.exists(os.path.join(folder, ".abandoned")):
+        return True
+    meta = results_index._json(os.path.join(folder, "metadata.json"))
+    return bool(meta) and results_index.status(folder, meta) == "abandoned"
+
+
+def facts_text(path):
+    """What the server of a run CSV is, from the results index, for the file list's tooltip ("" if unknown)."""
+    e = results_index.csv_entry(path)
+    if not e:
+        return ""
+    f = e.get("facts") or {}
+    what = ", ".join(x for x in (
+        f"{f.get('language', '')} {f.get('language_version', '')}".strip(),
+        f.get("kind", ""),
+        f"{f.get('framework', '')} {f.get('framework_version', '')}".strip() if f.get("framework") not in (None, "", "none") else "",
+        f.get("runtime_version", "")) if x)
+    return "\n".join(x for x in (f"server: {e.get('server', '')}", what,
+                                  f"deploy: {e.get('deploy', '')}" + (f", variant: {e['variant']}" if e.get("variant") else "")) if x)
 
 
 def safe_float(val, default=0.0):
@@ -797,6 +818,7 @@ class BenchmarkGrapher(QMainWindow):
         row1.setSpacing(GAP)
         row1.addWidget(_btn("Select files", self.browse_files, role="primary"))
         row1.addWidget(_btn("Select folder", self.load_all_csvs_in_folder, role="secondary"))
+        row1.addWidget(_btn("Open measurement", self.open_measurement, role="secondary"))
         row1.addStretch()
         data_layout.addLayout(row1)
         row2 = QHBoxLayout()
@@ -2164,6 +2186,8 @@ class BenchmarkGrapher(QMainWindow):
                         suffix = f"  [{typ} / {sub_display}]"
             item = QListWidgetItem(os.path.basename(f) + suffix)
             item.setData(Qt.UserRole, f)
+            tip = facts_text(f)
+            item.setToolTip(f"{f}\n{tip}" if tip else f)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if self.file_checked_state.get(f, True) else Qt.Unchecked)
             self.file_listbox.addItem(item)
@@ -3669,6 +3693,8 @@ class BenchmarkGrapher(QMainWindow):
                 label = container_name
         else:
             label = file_basename or label
+        if filepath:                               # which file a series is, for _variant_base
+            self.__dict__.setdefault("_label_files", {})[label] = filepath
         if typ == "websocket":
             subtype = self.file_ws_subtypes.get(filepath) if filepath and getattr(self, "file_ws_subtypes", None) else None
             xcol = websocket_xaxis_column(header_list, rows, subtype)
@@ -3744,7 +3770,21 @@ class BenchmarkGrapher(QMainWindow):
         return lines
 
     def _variant_base(self, label, labels):
-        """'st-x-nobw' -> 'st-x' when both are plotted: a variant is drawn like its server, dashed."""
+        """The plotted series a variant or native run is drawn like (same colour, dashed): its server with
+        the same variant in a container, else the plain server ('st-x-nobw-native' -> 'st-x-nobw' -> 'st-x').
+        Exact from the results index; by name ('st-x-...' belongs to 'st-x') for files without one."""
+        files = self.__dict__.get("_label_files", {})
+        entries = {lab: results_index.csv_entry(files[lab]) if lab in files else {} for lab in labels}
+        me = entries.get(label) or {}
+        if me and all(entries[lab] for lab in labels):
+            for want in ((me.get("variant", ""), "container"), ("", "container")):
+                if want == (me.get("variant", ""), me.get("deploy", "")):
+                    continue
+                for lab in labels:
+                    o = entries[lab]
+                    if lab != label and o.get("server") == me.get("server") and (o.get("variant", ""), o.get("deploy", "")) == want:
+                        return lab
+            return None
         bases = [b for b in labels if b != label and label.startswith(b + "-")]
         return max(bases, key=len) if bases else None
 
@@ -4382,6 +4422,30 @@ class BenchmarkGrapher(QMainWindow):
             "• Select folder: recursively loads all CSVs from subfolders.\n"
         )
         QMessageBox.information(self, "Help", msg)
+
+    def open_measurement(self):
+        """Pick a measurement from results/index.json (config, status, counts) and load its run files."""
+        root = os.path.abspath("results")
+        try:
+            runs = list(reversed(results_index.runs(root)))                  # newest first
+        except Exception as e:  # noqa: BLE001 - a broken index must not crash the GUI
+            QMessageBox.warning(self, "Results index", f"Could not read the results index: {e}")
+            return
+        runs = [r for r in runs if r.get("status") != "abandoned" and r.get("measured")]
+        if not runs:
+            QMessageBox.information(self, "No measurements", f"No finished or running measurement in {root}.")
+            return
+        items = [f"{r['folder']}  ·  {r.get('config') or '-'}  ·  {r['status']}  ·  "
+                 f"{r['measured']}/{r.get('planned') or '?'} measured" + (f", {r['invalid']} redone" if r.get("invalid") else "")
+                 for r in runs]
+        choice, ok = QInputDialog.getItem(self, "Open measurement", "Measurement (results/index.json):", items, 0, False)
+        if ok and choice:
+            folder = os.path.join(root, runs[items.index(choice)]["folder"])
+            files = results_index.run_csvs(folder)
+            if not files:
+                QMessageBox.warning(self, "No run files", f"No run CSVs in {folder}.")
+                return
+            self.add_files(files)
 
     def load_all_csvs_in_folder(self):
         start_dir = os.path.abspath("results") if os.path.isdir("results") else ""

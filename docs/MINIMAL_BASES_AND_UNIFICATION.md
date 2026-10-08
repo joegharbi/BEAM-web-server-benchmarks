@@ -72,5 +72,5 @@ Rules:
   (`phoenix-1-8-15`, `bandit-1-12-5`), Gleam (`1-19-0`), Netty (`4-2-19`), the JDK for Java pure and index (`27`)
 
 The current servers are listed in [BENCHMARKS_AUDIT.md](BENCHMARKS_AUDIT.md). Older servers (OTP 23-27,
-Elixir 1.16, Gleam 1.0, Alpine-based Gleam) are kept in `benchmarks_old/` for earlier results; they follow
+Elixir 1.16, Gleam 1.0, Alpine-based Gleam) are kept in `archive/benchmarks_old/` for earlier results; they follow
 an older layout (port 80, a separate Erlang/Elixir install) and are not part of the current measurements.

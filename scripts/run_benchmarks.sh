@@ -1697,7 +1697,7 @@ bench_on_exit() {
     bench_unblock_sleep
     "$PYTHON_PATH" ./tools/results_index.py index "$RESULTS_PARENT_DIR" --quiet 2>/dev/null || true
     # Native copies (NATIVE_COPIES): by default the ones that can never be used again are deleted
-    if [ -d "${MEASURE_NATIVE_DIR:-native}" ]; then
+    if [ -d "${MEASURE_NATIVE_DIR:-.cache/native}" ]; then
         "$PYTHON_PATH" ./tools/native_server.py tidy "${CFG_NATIVE_COPIES:-prune}" || true
     fi
     # Stopped before the measurement wrote anything (e.g. during the settle wait): nothing to keep or to

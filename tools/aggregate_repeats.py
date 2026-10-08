@@ -16,7 +16,7 @@ are always reported as well:
 With a single run the measures of spread (sd, +/-95%, IQR, CV%) are left empty.
 
 Standard library only. Usage:
-  python3 tools/aggregate_repeats.py results_docker/fair-erlang-index.csv
+  python3 tools/aggregate_repeats.py results/manual/st-erlang-index-29-1-1_repeats.csv
   python3 tools/aggregate_repeats.py in.csv --output summary.csv
   python3 tools/aggregate_repeats.py static/*.csv --output static/summary.csv   # all servers in one table
 """

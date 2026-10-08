@@ -12,7 +12,8 @@ Two files, both only an index (the numbers stay in the CSVs and raw logs, so not
                                  unfinished, abandoned), dates, machine, counts. Rebuilt from the
                                  folders at any time (make index), so it is never out of date for long.
 
-The GUI, reports and scripts read these through runs(), measurements() and row().
+The GUI, reports and scripts read these through runs(), measurements(), row(), csv_entry() and
+run_csvs().
 
   python3 tools/results_index.py index            rebuild results/index.json and list the runs
   python3 tools/results_index.py backfill FOLDER  write manifest.jsonl for a folder measured before it existed
@@ -155,6 +156,40 @@ def row(folder, m):
     except (OSError, KeyError):
         pass
     return {}
+
+
+def run_folder_of(path):
+    """The measurement folder of a run CSV (results/<run>/<family>/x.csv), or None."""
+    folder = os.path.dirname(os.path.dirname(os.path.abspath(path)))
+    return folder if os.path.isfile(os.path.join(folder, "metadata.json")) else None
+
+
+_by_folder = {}
+
+
+def csv_entry(path):
+    """What a run CSV holds, from its folder's manifest: {server, image, variant, deploy, facts}; {} for a
+    CSV outside a measurement folder, or in a folder measured before manifests existed (its older CSVs
+    may lack the Variant and Deploy columns, so nothing is guessed). Read once per folder (and again
+    when its manifest changed)."""
+    folder = run_folder_of(path)
+    manifest = os.path.join(folder, MANIFEST) if folder else ""
+    if not folder or not os.path.exists(manifest):
+        return {}
+    stamp = os.path.getmtime(manifest)
+    if _by_folder.get(folder, (None,))[0] != stamp:
+        entries = {}
+        for m in measurements(folder, facts=False):
+            if m.get("valid", True):
+                entries.setdefault(m.get("csv", ""), {k: m.get(k) for k in ("server", "image", "variant", "deploy", "facts")})
+        _by_folder[folder] = (stamp, entries)
+    return _by_folder[folder][1].get(os.path.relpath(os.path.abspath(path), folder), {})
+
+
+def run_csvs(folder):
+    """The run CSVs of a measurement folder (valid measurements only; no statistics or run lists)."""
+    return sorted({os.path.join(folder, m["csv"]) for m in measurements(folder, facts=False)
+                   if m.get("valid", True) and m.get("csv")})
 
 
 def _json(path):

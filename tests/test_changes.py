@@ -866,7 +866,7 @@ class RawData(unittest.TestCase):
 
     def test_without_config_nothing_changes(self):
         p = se.raw_json_path("srv", "static")
-        self.assertTrue(p.startswith("output" + os.sep))
+        self.assertTrue(p.startswith(os.path.join("results", "manual", "raw") + os.sep))   # a measurement started by hand
         self.assertEqual(se.finish_raw("/nonexistent.json"), "/nonexistent.json")
 
 
@@ -2530,9 +2530,9 @@ class Tidy(unittest.TestCase):
         shutil.rmtree(d)
 
     def test_script_tests_use_their_own_native_folder(self):
-        self.assertNotEqual(os.path.realpath(os.environ["MEASURE_NATIVE_DIR"]), os.path.realpath(os.path.join(ROOT, "native")))
+        self.assertNotEqual(os.path.realpath(os.environ["MEASURE_NATIVE_DIR"]), os.path.realpath(os.path.join(ROOT, ".cache", "native")))
         with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
-            self.assertIn('if [ -d "${MEASURE_NATIVE_DIR:-native}" ]; then', fh.read())
+            self.assertIn('if [ -d "${MEASURE_NATIVE_DIR:-.cache/native}" ]; then', fh.read())
 
     def test_never_deletes_outside_its_folder(self):
         import native_server as ns
@@ -2797,6 +2797,47 @@ class GuiRepeats(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
         import gui_graph_generator
         cls.g = gui_graph_generator
+
+    def test_index_pairs_variants_exactly(self):
+        import csv_columns
+        import results_index as ri
+        g = self.g
+        root = tempfile.mkdtemp()
+        run = os.path.join(root, "2026-10-08_120000")
+        os.makedirs(os.path.join(run, "static"))
+        with open(os.path.join(run, "metadata.json"), "w") as fh:
+            json.dump({"started_at_utc": "x", "finished_at_utc": "y"}, fh)
+        # st-x-2 is another server whose name only starts like st-x: the name rule would pair it wrongly
+        series = [("st-x", "st-x", "", "container"), ("st-x-nobw", "st-x", "nobw", "container"),
+                  ("st-x-native", "st-x", "", "native"), ("st-x-2", "st-x-2", "", "container")]
+        files = []
+        for name, server, variant, deploy in series:
+            path = os.path.join(run, "static", name + ".csv")
+            for n, energy in ((1000, 1.0), (2000, 2.0)):
+                csv_columns.append(path, csv_columns.HTTP_COLUMNS, {"Container Name": name, "Variant": variant, "Deploy": deploy,
+                                                                     "Repeat": 1, "Total Requests": n, "Container Energy (J)": energy})
+                ri.append(run, {"server": server, "image": server + ("-" + variant if variant else ""), "name": name,
+                                "variant": variant, "deploy": deploy, "valid": True, "facts": {"language": "erlang", "kind": "pure"},
+                                "csv": f"static/{name}.csv", "csv_row": 1 if n == 1000 else 2})
+            files.append(path)
+        saved = g.QMessageBox.information
+        g.QMessageBox.information = lambda *a, **k: None
+        try:
+            w = g.BenchmarkGrapher()
+            w.add_files(files)
+            self.assertTrue(w._render_plot(w.files, "Container Energy (J)", g.WS_PLOT_MULTILINE, enable_interactivity=False))
+            lines = {l.get_label(): l for l in w.ax.get_lines() if not l.get_label().startswith("_")}
+            for name in ("st-x-nobw", "st-x-native"):                              # drawn like st-x, dashed
+                self.assertEqual(lines[name].get_color(), lines["st-x"].get_color(), name)
+                self.assertEqual(lines[name].get_linestyle(), "--", name)
+            self.assertNotEqual(lines["st-x-2"].get_linestyle(), "--")             # its own server, not a variant
+            self.assertNotEqual(lines["st-x-2"].get_color(), lines["st-x"].get_color())
+            self.assertIn("deploy: native", g.facts_text(files[2]))
+            self.assertIn("erlang, pure", g.facts_text(files[0]))
+            self.assertEqual(ri.run_csvs(run), sorted(files))
+        finally:
+            g.QMessageBox.information = saved
+            shutil.rmtree(root)
 
     def test_one_point_per_load_with_quartiles(self):
         import aggregate_repeats

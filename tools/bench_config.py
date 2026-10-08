@@ -421,7 +421,7 @@ SCHEMA = {
         options={"keep": "keep it as it is (plain JSON) in <results>/raw/ (energy can be recalculated later; recommended)",
                  "delete": "delete it (saves disk space)"}),
     "NATIVE_COPIES": dict(default="prune", check=_choice("prune", "keep", "delete"),
-        help="Native mode runs each server from a copy taken out of its image (native/<image>/, reused while the\n"
+        help="Native mode runs each server from a copy taken out of its image (.cache/native/<image>/, reused while the\n"
              "image's files are the same; a variant such as -nobw uses its server's copy). Copies hold no results;\n"
              "any copy is made again when needed. At the end of a run:",
         options={"prune": "delete the copies that can never be used again: image gone or rebuilt (recommended)",

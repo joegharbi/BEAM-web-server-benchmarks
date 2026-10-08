@@ -24,7 +24,7 @@ class Plugin(Meter):
         time.sleep(2)  # Ensure OS releases resources
 
     def start(self):
-        os.makedirs("output", exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(self.output_json)), exist_ok=True)
         self.process = subprocess.Popen(["sudo", self.path] + scaphandre_json_args(self.output_json),
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         time.sleep(2)

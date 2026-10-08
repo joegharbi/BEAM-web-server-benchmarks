@@ -66,6 +66,9 @@ def measure_quiet_heartbeat_interval_sec():
         return 60
 
 
+# A measurement started by hand (not by run_benchmarks.sh) writes here
+MANUAL_DIR = os.path.join("results", "manual")
+
 # Required tools and how to install them (shown when missing)
 REQUIRED_TOOLS = {
     "docker": "Install Docker (e.g. apt install docker.io) and ensure the docker daemon is running.",
@@ -142,8 +145,8 @@ def add_common_arguments(parser):
     parser.add_argument('--container_name', type=str, default=None, help="Name of the Docker container (defaults to server_image)")
     parser.add_argument('--port_mapping', type=str, default='8001:80', help="Port mapping (default: 8001:80)")
     parser.add_argument('--network', type=str, default='bridge', choices=['bridge', 'host'], help="Network mode (default: bridge)")
-    parser.add_argument('--output_csv', type=str, default=None, help="Output CSV file path (default: results_docker/<container_name>.csv)")
-    parser.add_argument('--output_json', type=str, default=None, help="Output JSON file path (default: output/<timestamp>.json)")
+    parser.add_argument('--output_csv', type=str, default=None, help="Output CSV file path (default: results/manual/<container_name>.csv)")
+    parser.add_argument('--output_json', type=str, default=None, help="Scaphandre's raw log (default: results/manual/raw/<time>.json)")
     parser.add_argument('--verbose', action='store_true', help="Enable verbose logging")
     parser.add_argument('--deploy', choices=plugins.names("deploy"), default='container',
                         help="where the server runs (tools/plugins/deploy/): container = the image in Docker (default); "
@@ -167,9 +170,9 @@ def run_repeats(args, script, workload):
     if args.output_csv:
         target_csv = args.output_csv
     else:
-        os.makedirs("results_docker", exist_ok=True)
+        os.makedirs(MANUAL_DIR, exist_ok=True)
         stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-        target_csv = os.path.join("results_docker", f"{container_name}_{stamp}_repeats.csv")
+        target_csv = os.path.join(MANUAL_DIR, f"{container_name}_{stamp}_repeats.csv")
     base_cmd = [sys.executable, os.path.abspath(script), "--server_image", args.server_image,
                 "--port_mapping", args.port_mapping, "--network", args.network, "--output_csv", target_csv,
                 "--repeat", "1", *workload.repeat_args(args)]
@@ -255,7 +258,7 @@ def measure(args, workload):
     num_cores = os.cpu_count()
     name = args.container_name or args.server_image
     output_json = args.output_json or raw_json_path(name, args.measurement_type)
-    output_csv = args.output_csv or os.path.join("results_docker", f"{name}.csv")
+    output_csv = args.output_csv or os.path.join(MANUAL_DIR, f"{name}.csv")
     if os.path.dirname(output_csv):
         os.makedirs(os.path.dirname(output_csv), exist_ok=True)
     port_in_use(args.port_mapping.split(":")[0])

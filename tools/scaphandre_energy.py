@@ -48,11 +48,12 @@ def raw_json_path(container_name, measurement_type):
     """Where Scaphandre writes its log for one run.
 
     With MEASURE_RAW_DIR (set by run_benchmarks.sh --config): <raw dir>/<server>_<type>_<UTC time>.json,
-    inside the measurement's own results folder. Without it: output/<local time>.json, as before.
+    inside the measurement's own results folder. Without it (a measurement started by hand):
+    results/manual/raw/<local time>.json.
     """
     raw_dir = os.environ.get("MEASURE_RAW_DIR")
     if not raw_dir:
-        return os.path.join("output", datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S") + ".json")
+        return os.path.join("results", "manual", "raw", datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S") + ".json")
     os.makedirs(raw_dir, exist_ok=True)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return os.path.join(raw_dir, f"{container_name}_{measurement_type or 'unknown'}_{stamp}.json")

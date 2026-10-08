@@ -23,7 +23,8 @@ _build/
 **/build/
 # Legacy path (replaced by benchmarks/websocket/)
 web-socket/
-TODObench.config
 bench.config
 pilot.config
 native/
+.cache/
+archive/old-manual-runs/

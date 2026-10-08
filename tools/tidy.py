@@ -7,7 +7,7 @@ Groups (results are never touched):
                        note: an image may belong to another WSEB checkout, so read the list
   unused image layers  Docker's dangling images (left behind by rebuilds)
   build cache          Docker's stored build steps (rebuilt when needed; builds are slower once)
-  native copies        native/ copies whose image is gone or was rebuilt (never used again)
+  native copies        .cache/native/ copies whose image is gone or was rebuilt (never used again)
   empty/abandoned      result folders with no file, or marked abandoned (started again from zero)
 
   python3 tools/tidy.py            list, then ask per group (needs a terminal; else only lists)

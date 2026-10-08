@@ -1,7 +1,7 @@
 """Native mode: run a server's own program without Docker, in a systemd user scope.
 
 The program is the one inside the server's image: /app and /start.sh are copied out of the image
-(native/<image>/), so container and native runs use the same build, the same runtime version and the
+(.cache/native/<image>/), so container and native runs use the same build, the same runtime version and the
 same settings (the image's ENV, except PATH). Only the box differs. Images with the same files share
 one copy: a variant (FROM <server> + ENV, e.g. -nobw) runs from its server's copy with its own ENV.
 
@@ -24,7 +24,7 @@ import time
 
 logger = logging.getLogger()
 
-NATIVE_DIR = os.environ.get("MEASURE_NATIVE_DIR", "native")      # the copies out of the images
+NATIVE_DIR = os.environ.get("MEASURE_NATIVE_DIR", os.path.join(".cache", "native"))   # the copies out of the images (a cache)
 HOST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
