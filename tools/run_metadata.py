@@ -272,7 +272,9 @@ def cpu_cap_advice():
     degraded = performance_degraded()
     advice = []
     if _read("/sys/devices/platform/thinkpad_acpi/dytc_lapmode") == "1" or "lap" in degraded:
-        advice.append("the laptop's lap sensor is on: put it on a hard, flat desk and leave it alone "
+        # A motion sensor: it switches off by itself about 5 minutes after the last movement
+        advice.append("the laptop's lap sensor is on (it reacts to movement): leave the laptop still on a hard, "
+                      "flat desk; it switches off about 5 minutes after the last movement "
                       "(if it keeps coming back: measure at a fixed lower speed, ENV_CPU_SPEED=800)")
     if "temperature" in degraded:
         advice.append("the machine is too hot: let it cool down, free its vents")

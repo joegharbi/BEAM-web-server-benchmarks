@@ -168,7 +168,9 @@ What only you can do, before a long measurement:
 2. **The original charger, plugged straight into the laptop** (no hub or dock), strong enough for
    the laptop under full load (check: the battery must not drain while measuring).
 3. **Do not touch or move the laptop** while it measures; leave the lid open. If it is moved anyway,
-   only the run during which the CPU was slowed is redone; nothing wrong enters the results.
+   only the run during which the CPU was slowed is redone; nothing wrong enters the results. (On
+   ThinkPads the lap sensor reacts to movement and switches off about 5 minutes after the laptop
+   was last moved; until then the next run waits.)
    If the lap sensor keeps triggering on a machine, measure the whole campaign at a fixed lower
    speed that the cap does not go below (e.g. `ENV_CPU_SPEED=800`): slower, but every run equal.
 4. **Room temperature steady**, the fan not blocked, no direct sun.
