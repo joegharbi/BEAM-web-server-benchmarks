@@ -13,13 +13,13 @@ WebSocket: burst and stream with 100 clients, 8 KB and 1 MB messages.
 
 | Part | Command | Measurements | Time (estimate) | Disk (estimate) |
 |---|---|---|---|---|
-| Pilot (first) | `make run CONFIG=campaigns/paper/pilot.config` | 40 | ~1.5 h | small; times every kind of step |
-| Static HTTP | `make run CONFIG=campaigns/paper/static.config` | 1,000 | ~23 h | ~2.4 GB + ~1.2 GB native copies |
-| Dynamic HTTP | `make run CONFIG=campaigns/paper/dynamic.config` | 1,000 | ~23 h | ~2.4 GB + ~1.2 GB native copies |
+| Pilot (done 2026-10-08) | `make run CONFIG=campaigns/paper/pilot.config` | 40 | 1 h 13 min | small; timed every kind of step |
+| Static HTTP | `make run CONFIG=campaigns/paper/static.config` | 1,000 | ~27 h | ~2.4 GB + ~1.2 GB native copies |
+| Dynamic HTTP | `make run CONFIG=campaigns/paper/dynamic.config` | 1,000 | ~27 h | ~2.4 GB + ~1.2 GB native copies |
 | WebSocket | `make run CONFIG=campaigns/paper/websocket.config` | 440 | ~10 h | ~0.5 GB + ~0.5 GB native copies |
 
-Time: about 1.4 min per measurement in check runs at 20,000 requests; with all four load levels at ~800
-requests/s the HTTP parts may take closer to 30 h each. The pilot measures it; update these estimates after it. Native copies (each image's /app,
+Time, from the pilot (one measurement, overhead included): HTTP 5k / 20k / 40k / 80k requests 69 / 86 / 110 /
+158 s (~800 requests/s); a WebSocket step ~78 s. About 64 h for the three parts. Native copies (each image's /app,
 50-180 MB, one per server; its -nobw variant uses the same copy) stay for the next run while the image is
 unchanged; NATIVE_COPIES=prune removes only copies whose image is gone or rebuilt. A part stops (resumable) when
 less than 2 GB is free.

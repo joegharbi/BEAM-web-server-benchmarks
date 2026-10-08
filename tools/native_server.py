@@ -34,6 +34,7 @@ def unit_name(name):
     return "wseb-" + re.sub(r"[^A-Za-z0-9_.-]", "_", name) + ".scope"
 
 
+STOP_GRACE_S = 10          # seconds a native server has to end after SIGTERM, as `docker stop` gives a container
 DOCKER_TIMEOUT_S = 300      # a Docker call that does not answer within this ends with an error, not a hang
 
 
@@ -121,7 +122,9 @@ def command(unit, folder, env, port):
     (env -i: nothing of the measuring tool's environment leaks in), APP_DIR and PORT."""
     settings = {**env, "PATH": HOST_PATH, "HOME": os.environ.get("HOME", "/"),
                 "APP_DIR": os.path.join(folder, "app"), "PORT": str(port)}
-    return (["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={unit}", "env", "-i"]
+    # Stopping: SIGTERM, then SIGKILL after STOP_GRACE_S, like `docker stop` (systemd would wait 90 s)
+    return (["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={unit}",
+             f"--property=TimeoutStopSec={STOP_GRACE_S}", "env", "-i"]
             + [f"{k}={v}" for k, v in sorted(settings.items())] + [os.path.join(folder, "start.sh")])
 
 

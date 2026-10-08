@@ -3292,7 +3292,8 @@ class NativeServer(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MEASURE_SECRET": "leak"}):
             cmd = ns.command("wseb-s.scope", "/n/s", {"ERL_FLAGS": "+sbwt none"}, 8001)
         self.assertEqual(cmd[:6], ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit=wseb-s.scope"])
-        self.assertEqual(cmd[6:8], ["env", "-i"])           # nothing of the measuring tool's environment
+        self.assertEqual(cmd[6], "--property=TimeoutStopSec=10")   # stopped like docker stop: 10 s, then killed
+        self.assertEqual(cmd[7:9], ["env", "-i"])           # nothing of the measuring tool's environment
         self.assertEqual(cmd[-1], "/n/s/start.sh")
         self.assertIn("ERL_FLAGS=+sbwt none", cmd)
         self.assertIn("PORT=8001", cmd)

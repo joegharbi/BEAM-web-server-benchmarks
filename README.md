@@ -390,6 +390,9 @@ an image is a **self-contained bundle** that runs **only the server**.
   its energy is counted with the system, not hidden. The processes found in the server's box
   (container or scope) are recorded with every run (CSV column `Server Processes`), and known
   helpers are reported.
+- **Stops when asked:** end within 10 s of SIGTERM (as `docker stop` expects; natively the same grace
+  applies, then the server is killed). A BEAM application returns its top supervisor from `start/2`,
+  or it never finishes stopping.
 - **HTTP** (`static/`, `dynamic/`): answer `GET /` with status 200, and should support HTTP/1.1
   keep-alive (the client reuses connections).
 - **WebSocket** (`websocket/`): accept a WebSocket on `/ws` and echo every message back.
