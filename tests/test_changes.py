@@ -233,7 +233,7 @@ class ScaphandreArgs(unittest.TestCase):
 class ConnectionMode(unittest.TestCase):
     def test_reuse_keeps_one_session_per_thread(self):
         import threading
-        import measure_docker as m
+        import plugins.workload.http as m
         seen = []
 
         class FakeSession:
@@ -259,7 +259,7 @@ class ConnectionMode(unittest.TestCase):
         self.assertNotEqual(main_ids, other_ids)  # a separate session per thread
 
     def test_per_request_uses_plain_get(self):
-        import measure_docker as m
+        import plugins.workload.http as m
         calls = []
         orig = m.requests.get
         m.requests.get = lambda url, timeout: calls.append(url) or type("R", (), {"status_code": 200})()
@@ -405,8 +405,9 @@ class Provenance(unittest.TestCase):
         self.assertEqual(self.rm.framework_version().endswith("-dirty"), bool(dirty))
 
     def test_csv_rows_carry_no_provenance(self):
-        import measure_docker, measure_websocket, inspect
-        for mod in (measure_docker, measure_websocket):
+        import measure_core, inspect
+        import plugins.workload.http, plugins.workload.websocket
+        for mod in (measure_core, plugins.workload.http, plugins.workload.websocket):
             self.assertNotIn("row_fields", inspect.getsource(mod))
 
     def test_cli_start_end(self):
@@ -595,17 +596,17 @@ class ReadinessGate(unittest.TestCase):
 
 class ThermalColumns(unittest.TestCase):
     def test_fields(self):
-        import argparse, measure_docker
+        import argparse, measure_core
         a = argparse.Namespace(waited_s=12.5, ready_check="yes")
-        f = measure_docker.thermal_fields((45.0, 100), (52.0, 130), a, (3.0, "yes"))
+        f = measure_core.thermal_fields((45.0, 100), (52.0, 130), a, (3.0, "yes"))
         self.assertEqual(f, {"Host CPU Temp Start (C)": 45.0, "Host CPU Temp End (C)": 52.0, "Host Throttled (ms)": 30,
                              "Waited Before Start (s)": 12.5, "Waited Before Load (s)": 3.0,
                              "Ready Check": "yes"})
 
     def test_without_gate_says_not_checked(self):
-        import argparse, measure_websocket
+        import argparse, measure_core
         a = argparse.Namespace(waited_s=None, ready_check="not checked")
-        f = measure_websocket.thermal_fields(("", ""), ("", ""), a)
+        f = measure_core.thermal_fields(("", ""), ("", ""), a)
         self.assertEqual((f["Host Throttled (ms)"], f["Waited Before Start (s)"], f["Waited Before Load (s)"],
                           f["Ready Check"]), ("", "", "", "not checked"))
 
@@ -1098,7 +1099,8 @@ class IdleAndWarmup(unittest.TestCase):
         self.assertEqual((f["Idle Time (s)"], f["Warm-up (s)"]), (5, 3))
 
     def test_http_warmup_is_not_counted(self):
-        import http.server, threading, measure_docker as md
+        import http.server, threading
+        import plugins.workload.http as md
 
         class Ok(http.server.BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
@@ -1117,10 +1119,11 @@ class IdleAndWarmup(unittest.TestCase):
         srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Ok)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         try:
-            md.results_counter.update(success=0, failure=0, total=0)
-            md.warm_up(f"http://127.0.0.1:{srv.server_port}/", 0.5, 4, "reuse")
+            import argparse
+            w = md.Plugin()
+            w.warm_up(argparse.Namespace(warmup_s=0.5, max_workers=4, connection="reuse"), f"http://127.0.0.1:{srv.server_port}/")
             self.assertGreater(Ok.hits, 0)                              # the server got traffic
-            self.assertEqual(md.results_counter["total"], 0)            # but nothing was counted
+            self.assertEqual(w.counts(), (0, 0))                          # but nothing was counted
         finally:
             srv.shutdown()
 
@@ -1895,11 +1898,10 @@ class ResultsIndex(unittest.TestCase):
         shutil.rmtree(root)
 
     def test_measuring_scripts_record_every_measurement(self):
-        for name in ("measure_docker.py", "measure_websocket.py"):
-            with open(os.path.join(ROOT, "tools", name)) as fh:
-                src = fh.read()
-            self.assertIn("results_index.record(", src)
-            self.assertIn("args.server_image, workload)", src)                 # invalid runs too, via judge
+        with open(os.path.join(ROOT, "tools", "measure_core.py")) as fh:        # every workload, every deploy
+            src = fh.read()
+        self.assertIn("results_index.record(output_csv, values, args.server_image, index)", src)
+        self.assertIn("workload.measurement(args), args.server_image, index)", src)   # invalid runs too, via judge
         with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
             self.assertEqual(fh.read().count("./tools/results_index.py index"), 2)  # at the start and the end
 
@@ -2018,6 +2020,44 @@ class QuietMachine(unittest.TestCase):
         self.assertEqual((cfg["ENV_PAUSE_TIMERS"], cfg["ENV_PAUSE_SERVICES"]), ("maintenance", ""))
         with open(os.path.join(ROOT, "configs", "machine", "untouched.config")) as fh:
             self.assertIn("ENV_PAUSE_TIMERS=none\n", fh.read())
+
+
+class MeasuringCore(unittest.TestCase):
+    """One measuring core for every workload and deploy; the parts that differ are plugins."""
+
+    def test_plugins_are_found_by_file_name(self):
+        import plugins
+        self.assertEqual(plugins.names("deploy"), ["container", "native"])
+        self.assertEqual(plugins.names("workload"), ["http", "websocket"])
+        self.assertEqual(plugins.names("meter"), ["scaphandre"])
+        with self.assertRaises(ValueError):
+            plugins.load("deploy", "kubernetes")                               # not there (yet): a clear error
+        from plugins.deploy import Deploy
+        from plugins.workload import Workload
+        for kind, base in (("deploy", Deploy), ("workload", Workload)):
+            for name in plugins.names(kind):
+                cls = plugins.load(kind, name)
+                self.assertTrue(issubclass(cls, base), name)
+                for method in vars(base):                                       # the whole interface, no gaps
+                    if callable(getattr(base, method)) and not method.startswith("_") and method not in ("add_arguments", "warm_up", "summary"):
+                        self.assertIsNot(getattr(cls, method), getattr(base, method), f"{kind}/{name} lacks {method}")
+
+    def test_entry_points_are_thin(self):
+        for name, workload in (("measure_docker.py", '"http"'), ("measure_websocket.py", '"websocket"')):
+            with open(os.path.join(ROOT, "tools", name)) as fh:
+                src = fh.read()
+            self.assertIn(f"measure_core.main(__file__, {workload}", src)
+            self.assertLess(len(src.splitlines()), 20)                           # nothing of the method lives here
+
+    def test_same_options_as_before(self):
+        import subprocess
+        for name, opts in (("measure_docker.py", ["--num_requests", "--max_workers", "--connection", "--measurement_type"]),
+                           ("measure_websocket.py", ["--pattern", "--clients", "--size_kb", "--rate", "--bursts", "--interval",
+                                                     "--duration", "--url"])):
+            out = subprocess.run([sys.executable, os.path.join(ROOT, "tools", name), "--help"], capture_output=True, text=True).stdout
+            for opt in opts + ["--server_image", "--container_name", "--port_mapping", "--deploy", "--output_csv",
+                               "--warmup_s", "--idle_s", "--waited_s", "--ready_check", "--repeat", "--cooldown"]:
+                self.assertIn(opt, out, f"{name} {opt}")
 
 
 class UnfinishedMeasurement(unittest.TestCase):
@@ -2211,11 +2251,10 @@ class ServerContract(unittest.TestCase):
         import csv_columns
         self.assertEqual(csv_columns.RUN_QUALITY[-1], "Server Processes")
         self.assertIn("Server Processes", csv_columns.NOT_MEASURED)
-        for name in ("measure_docker.py", "measure_websocket.py"):
-            with open(os.path.join(ROOT, "tools", name)) as fh:
-                src = fh.read()
-            self.assertIn('"Server Processes": server_box.describe(box_processes)', src)
-            self.assertLess(src.index("box_processes = server_box.processes(box)"), src.index("\n    stop_server()\n"))
+        with open(os.path.join(ROOT, "tools", "measure_core.py")) as fh:
+            src = fh.read()
+        self.assertIn('"Server Processes": server_box.describe(box_processes)', src)
+        self.assertLess(src.index("box_processes = server_box.processes(deploy.box())"), src.index("\n    deploy.stop()\n"))
 
     def bundle(self, start="exec $APP_DIR/bin/x", os_release='ID=debian\nVERSION_ID="13"\n'):
         d = tempfile.mkdtemp()
@@ -2321,12 +2360,11 @@ class LoadConditions(unittest.TestCase):
         import csv_columns
         self.assertIn("Host CPU Speed Limit Min (MHz)", csv_columns.HOST)
         self.assertIn("Host CPU Avg Speed (MHz)", csv_columns.NOT_MEASURED)
-        for name in ("measure_docker.py", "measure_websocket.py"):
-            with open(os.path.join(ROOT, "tools", name)) as fh:
-                src = fh.read()
-            self.assertIn("watch = load_conditions.Watch().start()", src)
-            self.assertLess(src.index("load_conditions.judge("), src.rindex("values)\n"))   # judged before written
-            self.assertNotIn("charger_unplugged", src)
+        with open(os.path.join(ROOT, "tools", "measure_core.py")) as fh:
+            src = fh.read()
+        self.assertIn("watch = load_conditions.Watch().start()", src)
+        self.assertLess(src.index("load_conditions.judge("), src.index("csv_columns.append(output_csv, workload.columns, values)"))
+        self.assertNotIn("charger_unplugged", src)
         with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
             src = fh.read()
         self.assertIn('[ "$rc" = 4 ] || break', src)
@@ -2934,8 +2972,8 @@ class ServerPort(unittest.TestCase):
         return [c.args[0] for c in run.call_args_list if c.args and "run" in c.args[0]][-1]
 
     def test_port_is_the_container_side_of_the_mapping(self):
-        import measure_docker, measure_websocket
-        for module in (measure_docker, measure_websocket):
+        import plugins.deploy.container                                           # every workload starts it here
+        for module in (plugins.deploy.container,):
             cmd = self.started_with(module, "8001:80")
             self.assertIn("PORT=80", cmd)
             self.assertEqual(cmd[cmd.index("PORT=80") - 1], "-e")
@@ -3316,10 +3354,10 @@ class NativeServer(unittest.TestCase):
         self.assertIn(["systemctl", "--user", "stop", "wseb-s.scope"], [c.args[0] for c in run.call_args_list])
 
     def test_measure_docker_has_deploy(self):
-        with open(os.path.join(ROOT, "tools", "measure_docker.py")) as fh:
-            src = fh.read()
-        self.assertIn("'--deploy', choices=['container', 'native']", src)
-        self.assertIn("container_id = unit if native else None", src)   # energy by the scope's cgroup
+        import plugins
+        self.assertEqual(plugins.names("deploy"), ["container", "native"])      # --deploy lists the plugins
+        native = plugins.load("deploy", "native")("img", "st-x-native", "8001:8001", "bridge", "docker")
+        self.assertEqual(native.energy_id(), "wseb-st-x-native.scope")         # energy by the scope's cgroup
 
     @unittest.skipUnless(shutil.which("systemd-run") and shutil.which("docker"), "needs systemd and Docker")
     def test_real_server_runs_and_stops_completely(self):

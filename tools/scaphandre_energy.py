@@ -1,6 +1,6 @@
 """Energy of one container over the load window, from a Scaphandre JSON log.
 
-Shared by measure_docker.py and measure_websocket.py.
+Shared by every measurement (tools/measure_core.py).
 
 How Scaphandre reports power: every step it writes one entry with a host
 timestamp and, for each top process, the average power (microwatts) since the

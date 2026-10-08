@@ -11,7 +11,7 @@ The readiness check (readiness.py) looks at the machine *before* a load. This mo
 A run that breaks a rule is invalid: it is not added to the results, but kept with its values and
 reason in invalid_runs.csv (and its raw log), and run_benchmarks.sh measures it again (exit code
 EXIT_INVALID, at most INVALID_RUN_RETRIES times). Without a config (a measurement by hand) nothing
-is judged; the values are still recorded. Shared by measure_docker.py and measure_websocket.py.
+is judged; the values are still recorded. Shared by every measurement (tools/measure_core.py).
 """
 import csv
 import glob

@@ -1,6 +1,6 @@
 """The columns of a measurement CSV: blocks, names, and the names of earlier releases.
 
-One definition used by measure_docker.py and measure_websocket.py (writing), and by
+One definition used by the measuring core (writing, tools/measure_core.py), and by
 aggregate_repeats.py, progress.py and the GUI (reading). Every measured value says whose it is:
 
   1. What was measured     server, variant, repeat, session, time, workload

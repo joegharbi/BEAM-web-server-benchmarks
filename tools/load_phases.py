@@ -1,4 +1,4 @@
-"""Optional phases around the measured load, shared by measure_docker.py and measure_websocket.py.
+"""Optional phases around the measured load, shared by every measurement (tools/measure_core.py).
 
 Order of one measurement:
   server start -> health check -> warm-up -> readiness check 2 -> Scaphandre start -> idle -> load

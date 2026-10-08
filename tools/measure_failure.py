@@ -1,6 +1,6 @@
 """How a measurement tool ends when a measurement cannot be made.
 
-Shared by measure_docker.py and measure_websocket.py. Exit codes, read by
+Shared by every measurement (tools/measure_core.py). Exit codes, read by
 run_benchmarks.sh:
   0  measured
   1  this measurement failed; the reason is written to $MEASURE_FAILURE_REASON_FILE

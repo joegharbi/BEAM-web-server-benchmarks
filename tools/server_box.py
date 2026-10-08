@@ -2,7 +2,7 @@
 
 Which processes ran in it is recorded with every run (CSV column "Server Processes"), so a run
 that measured more than the server (README server contract: only the server runs) shows it.
-Shared by measure_docker.py and measure_websocket.py.
+Shared by every measurement (tools/measure_core.py).
 """
 import collections
 import os

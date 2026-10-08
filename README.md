@@ -347,11 +347,14 @@ benchmarks/           # Type → Language → Framework → container (with Dock
   dynamic/            # Dynamic HTTP
   websocket/          # WebSocket (must expose /ws)
 scripts/              # check_health.sh, run_benchmarks.sh, install_benchmarks.sh
-tools/                # measure_docker.py, measure_websocket.py, gui_graph_generator.py
-results/              # Output CSVs (results/<timestamp>/{static,dynamic,websocket}/)
+tools/                # measure_core.py (the one measuring method), its entry points measure_docker.py
+                      # (HTTP) and measure_websocket.py (WebSocket), results_index.py, gui_graph_generator.py
+tools/plugins/        # deploy/ (container, native), workload/ (http, websocket), meter/ (scaphandre):
+                      # the parts of a measurement that differ; one file each (docs/EXTENDING.md)
+results/              # results/<timestamp>/{static,dynamic,websocket}/ CSVs, manifest.jsonl; results/index.json
 ```
 
-Each directory containing a `Dockerfile` under `benchmarks/` is one benchmark. The **directory name** is the Docker image name (use unified naming: `<type>-<language>-<framework>-<version>`, e.g. `st-erlang-cowboy-27`). Type is inferred from the path (`benchmarks/websocket/...` → WebSocket test). See [docs/MINIMAL_BASES_AND_UNIFICATION.md](docs/MINIMAL_BASES_AND_UNIFICATION.md) for base images and Dockerfile structure.
+Each directory containing a `Dockerfile` under `benchmarks/` is one benchmark. The **directory name** is the Docker image name (use unified naming: `<type>-<language>-<framework>-<version>`, e.g. `st-erlang-cowboy-29-1-1`). Type is inferred from the path (`benchmarks/websocket/...` → WebSocket test). See [docs/MINIMAL_BASES_AND_UNIFICATION.md](docs/MINIMAL_BASES_AND_UNIFICATION.md) for base images and Dockerfile structure.
 
 ## Adding a Server
 

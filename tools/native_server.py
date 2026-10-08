@@ -10,7 +10,7 @@ It gives the server's processes one name, so they can be found for the energy (b
 /proc/<pid>/cgroup, as for a container) and stopped together. No namespaces, no own file system,
 no own network: the server listens on the machine's port directly.
 
-Shared by measure_docker.py and measure_websocket.py.
+Shared by every measurement (tools/measure_core.py).
 """
 import hashlib
 import json
