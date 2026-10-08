@@ -206,6 +206,13 @@ def do_apply(args):
     if args.bluetooth == "off":
         radio_off("bluetooth", "Bluetooth", state["radios"])
 
+    timers = units_from(_text(args, "pause_timers", "none"), _profiles().MAINTENANCE_TIMERS)
+    services = service_names(_text(args, "pause_services", ""))
+    if timers:
+        pause_units("Maintenance timers", timers, state)
+    if services:
+        pause_units("Services", services, state)
+
     keep = {n.strip() for n in (args.keep or "").split(",") if n.strip()}
     to_stop = [n for n in docker_running() if n not in keep] if args.stop_containers else []
     if not args.stop_containers:
@@ -285,6 +292,43 @@ def set_power_profile(wanted, state):
     print(f"Power profile: {wanted} (through {how})" if ok else f"Power profile: could not set '{wanted}'")
 
 
+def pause_units(kind, names, state):
+    """Stop the active ones of these systemd units (timers or services) for the measurement: stop
+    only, never disable, so a restart or reboot brings them back in any case. Saved for the restore."""
+    m = _profiles()
+    active = m.active_units(names)
+    if not active:
+        print(f"{kind}: none active to pause")
+        return
+    r = subprocess.run(["systemctl", "stop", *active], capture_output=True, text=True)
+    paused = [n for n in active if n not in m.active_units(active)]
+    state.setdefault("paused_units", []).extend(paused)
+    print(f"{kind} paused: {', '.join(paused)}" + ("" if r.returncode == 0 else f" (systemctl: {r.stderr.strip()})"))
+
+
+def _text(args, name, default):
+    """An option's value, or `default` when the caller has no such option (older callers)."""
+    v = getattr(args, name, default)
+    return v if isinstance(v, str) else default
+
+
+def units_from(value, default):
+    """'maintenance' -> the default list, 'none' -> [], else the names given (comma or space separated)."""
+    if value in ("", "none"):
+        return []
+    if value == "maintenance":
+        return list(default)
+    return [n for n in value.replace(",", " ").split() if n]
+
+
+def service_names(value):
+    names = [n if n.endswith(".service") else n + ".service" for n in units_from(value, ())]
+    refused = [n for n in names if _profiles().protected_service(n)]
+    if refused:
+        sys.exit(f"ENV_PAUSE_SERVICES: never paused, the machine or the measurement needs them: {', '.join(refused)}")
+    return names
+
+
 def cpu_speed_arg(v):
     if v in ("max", "unchanged") or (v.isdigit() and int(v) >= 100):
         return v
@@ -341,6 +385,15 @@ def _restore(args):
                     if os.path.exists(p)]
     if pp_failed:
         not_restored.append(f"power profile {pp['prev']}")
+    paused = state.get("paused_units") or []
+    if paused:
+        subprocess.run(["systemctl", "start", *paused], capture_output=True, text=True)
+        back = _profiles().active_units(paused)
+        down_units = [n for n in paused if n not in back]
+        print(f"Timers and services started again: {', '.join(back) or 'none'}")
+        if down_units:
+            print(f"NOT started again: {', '.join(down_units)} (sudo systemctl start {' '.join(down_units)})")
+            not_restored += down_units
     if stopped:
         up, down, error = restart_containers(stopped)
         if up:
@@ -395,6 +448,12 @@ def do_verify(args):
         # Only where the machine offers it (else apply said so and left it)
         if manager and args.power_profile in run_metadata.power_profile_choices() and now != args.power_profile:
             problems.append(f"power profile is '{now}', expected '{args.power_profile}'")
+    for kind, names in (("maintenance timer", units_from(_text(args, "pause_timers", "none"), run_metadata.MAINTENANCE_TIMERS)),
+                        ("service", [n if n.endswith(".service") else n + ".service"
+                                     for n in units_from(_text(args, "pause_services", ""), ())])):
+        still = run_metadata.active_units(names)
+        if still:
+            problems.append(f"{kind}s still active: {', '.join(still)}")
     if args.screen_brightness != "unchanged":
         now = brightness_percent(BACKLIGHT_GLOB)
         # The steps of a backlight are coarse, so a difference of 2% is still the requested level
@@ -428,6 +487,10 @@ def main():
                     help="fix every core at this speed: max (the highest allowed), a speed in MHz, or unchanged")
     ap.add_argument("--power-profile", choices=["performance", "balanced", "low-power", "unchanged"],
                     default="unchanged", help="Power profile on apply (default: unchanged)")
+    ap.add_argument("--pause-timers", default="none",
+                    help="maintenance timers to stop during the measurement: maintenance (the known list), none, or names")
+    ap.add_argument("--pause-services", default="",
+                    help="services to stop during the measurement (names; protected ones are refused)")
     ap.add_argument("--no-stop-containers", dest="stop_containers", action="store_false",
                     help="Leave other running containers alone on apply")
     ap.add_argument("--keep", default="",

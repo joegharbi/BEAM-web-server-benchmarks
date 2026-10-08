@@ -981,7 +981,7 @@ exec "$@"
             os.makedirs(os.path.join(bench, fam))
         cfg = os.path.join(d, "c.config")
         with open(cfg, "w") as fh:
-            fh.write("SETTLE_SECONDS=60\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_STOP_CONTAINERS=1\n"
+            fh.write("SETTLE_SECONDS=60\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\nENV_STOP_CONTAINERS=1\n"
                      "ENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\nENV_WIFI=unchanged\n"
                      "ENV_BLUETOOTH=unchanged\n")
         before = set(os.listdir(os.path.join(ROOT, "results"))) if os.path.isdir(os.path.join(ROOT, "results")) else set()
@@ -1428,7 +1428,7 @@ class FixesFromTheRealCheck(LaptopSettings):
             os.makedirs(os.path.join(bench, fam))
         cfg = os.path.join(d, "c.config")
         with open(cfg, "w") as fh:
-            fh.write("ENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\n"
+            fh.write("ENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\nENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\n"
                      "ENV_KEYBOARD_LIGHT=unchanged\nENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n")
         before = set(os.listdir(os.path.join(ROOT, "results")))
         env = dict(os.environ, PATH=os.path.join(ROOT, "tests", "fakes") + os.pathsep + os.environ["PATH"],
@@ -1481,7 +1481,7 @@ class WhatToMeasure(unittest.TestCase):
     @staticmethod
     def config_text(config, config_cpu_speed="unchanged"):
         return ("SETTLE_SECONDS=0\nRESTING_MEASURE_SECONDS=1\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\n"
-                f"ENV_CPU_SPEED={config_cpu_speed}\nENV_POWER_PROFILE=unchanged\n"
+                f"ENV_CPU_SPEED={config_cpu_speed}\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\n"
                 "ENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\n"
                 "ENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n" + config)
 
@@ -1947,6 +1947,77 @@ class CpuCapAdvice(unittest.TestCase):
         self.assertIn("too hot", self.advice({}, degraded="high-operating-temperature"))
         self.assertIn("battery drains", self.advice({"/p/BAT0/status": "Discharging"}))
         self.assertEqual(self.advice({"/p/BAT0/status": "Full"}), "")                      # nothing known: no advice
+
+
+class QuietMachine(unittest.TestCase):
+    """Who keeps the machine busy (reported), maintenance timers and named services paused and restored."""
+
+    def test_busy_programs_from_proc(self):
+        import readiness
+        d = tempfile.mkdtemp()
+
+        def proc(pid, name, ticks, cmdline=b"x\0"):
+            os.makedirs(os.path.join(d, str(pid)), exist_ok=True)
+            with open(os.path.join(d, str(pid), "stat"), "w") as fh:            # fields 14, 15: utime, stime
+                fh.write(f"{pid} ({name}) S 1 1 1 0 -1 0 0 0 0 0 {ticks} 0 0 0 20 0\n")
+            with open(os.path.join(d, str(pid), "cmdline"), "wb") as fh:
+                fh.write(cmdline)
+        proc(10, "code", 100)
+        proc(11, "code", 50)
+        proc(12, "Web (Content)", 5)
+        proc(13, "kworker/0:1", 0, cmdline=b"")                                # a kernel thread: left out
+        before = readiness.process_cpu_ticks(d)
+        self.assertEqual(sorted(before), [10, 11, 12])
+        proc(10, "code", 300)                                                   # +200 + 100 ticks in 10 s
+        proc(11, "code", 150)
+        proc(12, "Web (Content)", 15)
+        busy = readiness.busy_programs(before, readiness.process_cpu_ticks(d), 10, ticks_per_s=100, skip={12})
+        self.assertEqual(busy, [("code", 30.0)])                                # 30 % of one core
+        shutil.rmtree(d)
+
+    def test_pause_and_restore(self):
+        import prepare_environment as pe
+        import run_metadata as m
+        from unittest import mock
+        active = {"apt-daily.timer", "fstrim.timer", "cups.service"}
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            if cmd[:2] == ["systemctl", "stop"]:
+                active.difference_update(cmd[2:])
+            if cmd[:2] == ["systemctl", "start"]:
+                active.update(n for n in cmd[2:] if n != "broken.service")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(pe.subprocess, "run", run), \
+                mock.patch.object(m, "active_units", lambda names: [n for n in names if n in active]):
+            state = {}
+            pe.pause_units("Maintenance timers", pe.units_from("maintenance", m.MAINTENANCE_TIMERS), state)
+            pe.pause_units("Services", pe.service_names("cups"), state)
+            self.assertEqual(state["paused_units"], ["apt-daily.timer", "fstrim.timer", "cups.service"])
+            self.assertEqual(active, set())
+            self.assertNotIn("disable", " ".join(" ".join(c) for c in calls))   # stopped only, never disabled
+            with self.assertRaises(SystemExit):
+                pe.service_names("dbus")                                          # protected: refused
+        self.assertEqual(pe.units_from("none", ("a",)), [])
+        self.assertEqual(pe.units_from("apt-daily.timer, fstrim.timer", ()), ["apt-daily.timer", "fstrim.timer"])
+
+    def test_protected_services(self):
+        import run_metadata as m
+        import bench_config
+        for name in ("dbus", "systemd-journald", "user@1000.service", "NetworkManager", "docker", "ssh",
+                     "power-profiles-daemon", "gdm"):
+            self.assertTrue(m.protected_service(name), name)
+        for name in ("cups", "packagekit.service", "fwupd", "colord"):
+            self.assertFalse(m.protected_service(name), name)
+        with self.assertRaises(bench_config.ConfigError):
+            bench_config.parse("ENV_PAUSE_SERVICES=cups docker")
+        with self.assertRaises(bench_config.ConfigError):
+            bench_config.parse("ENV_PAUSE_TIMERS=apt-daily")                      # must end in .timer
+        cfg = bench_config.parse("")
+        self.assertEqual((cfg["ENV_PAUSE_TIMERS"], cfg["ENV_PAUSE_SERVICES"]), ("maintenance", ""))
+        with open(os.path.join(ROOT, "configs", "machine", "untouched.config")) as fh:
+            self.assertIn("ENV_PAUSE_TIMERS=none\n", fh.read())
 
 
 class UnfinishedMeasurement(unittest.TestCase):

@@ -39,7 +39,46 @@ STATUS_EVERY_S = 60
 ON_BATTERY_REASON = "on battery (connect the charger)"
 
 
-def resting_state(seconds=10, every=1.0):
+QUIET_LIMIT_PERCENT = 2.0      # a program using more than this share of one CPU core at rest is reported
+
+
+def process_cpu_ticks(proc="/proc"):
+    """{pid: (CPU ticks used so far, program name)} of every user program (kernel threads, which have
+    no command line, are left out)."""
+    out = {}
+    for d in os.listdir(proc):
+        if not d.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, d, "stat"), encoding="utf-8", errors="replace") as fh:
+                stat = fh.read()
+            with open(os.path.join(proc, d, "cmdline"), "rb") as fh:
+                if not fh.read(1):
+                    continue
+        except OSError:
+            continue
+        name = stat[stat.find("(") + 1:stat.rfind(")")]
+        fields = stat[stat.rfind(")") + 2:].split()
+        out[int(d)] = (int(fields[11]) + int(fields[12]), name)          # utime + stime
+    return out
+
+
+def busy_programs(before, after, seconds, ticks_per_s=None, skip=()):
+    """[(program, percent of one core)] of the programs that used CPU between two process_cpu_ticks
+    readings, busiest first; processes in `skip` (this tool itself) are left out."""
+    ticks_per_s = ticks_per_s or os.sysconf("SC_CLK_TCK")
+    used = {}
+    for pid, (ticks, name) in after.items():
+        if pid in skip or pid not in before or seconds <= 0:
+            continue
+        delta = ticks - before[pid][0]
+        if delta > 0:
+            used[name] = used.get(name, 0) + delta
+    return sorted(((n, round(100.0 * t / ticks_per_s / seconds, 1)) for n, t in used.items()),
+                  key=lambda x: -x[1])
+
+
+def resting_state(seconds=10, every=1.0, programs=None):
     """Resting temperature and CPU use over `seconds`.
 
     Temperature: one reading every `every` seconds, both ends included; the middle value
@@ -48,6 +87,7 @@ def resting_state(seconds=10, every=1.0):
     """
     readings = int(round(seconds / every)) + 1
     vals = []
+    ticks0, t0 = process_cpu_ticks(), time.monotonic()
     busy0, total0 = run_metadata.cpu_times()
     for i in range(readings):
         t = run_metadata.cpu_package_temp_c()
@@ -56,6 +96,8 @@ def resting_state(seconds=10, every=1.0):
         if i < readings - 1:
             time.sleep(every)
     busy1, total1 = run_metadata.cpu_times()
+    if programs is not None:                                  # who kept the machine busy while it rested
+        programs.extend(busy_programs(ticks0, process_cpu_ticks(), time.monotonic() - t0, skip={os.getpid()}))
     temp = round(statistics.median(vals), 1) if vals else ""
     cpu = round(100.0 * (busy1 - busy0) / (total1 - total0), 1) if total1 > total0 else ""
     return temp, cpu
@@ -186,6 +228,8 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("baseline", help="Print the resting CPU temperature and CPU use (two values)")
     b.add_argument("--seconds", type=float, default=10, help="How long to measure (default 10)")
+    b.add_argument("--programs", action="store_true", help=f"then print the programs that used more than "
+                   f"{QUIET_LIMIT_PERCENT:g}%% of a core meanwhile (name and percent, one per line)")
     w = sub.add_parser("wait", help="Wait until the machine is ready")
     w.add_argument("--result", required=True, help="JSON file to write waited_s and ready_check to")
     w.add_argument("--temp-reference", type=optional_float, default=None,
@@ -205,8 +249,13 @@ def main():
     args = ap.parse_args()
 
     if args.cmd == "baseline":
-        temp, cpu = resting_state(args.seconds)
+        programs = []
+        temp, cpu = resting_state(args.seconds, programs=programs)
         print(temp, cpu)
+        if args.programs:                                     # then "name 12.3" per line, over the limit only
+            for n, p in programs:
+                if p > QUIET_LIMIT_PERCENT:
+                    print(n.replace(" ", "_"), p)
         return
     waited, ready = wait(args)
     with open(args.result, "w", encoding="utf-8") as fh:

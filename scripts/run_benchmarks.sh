@@ -653,7 +653,7 @@ if [ -n "${CONFIG_FILE:-}" ]; then
     [ -n "$RESUME_DIR" ] && [ -n "$RESUME_SEED" ] && CFG_SHUFFLE_SEED="$RESUME_SEED"
 else
     CFG_REPEATS=1; CFG_SHUFFLE=0; CFG_SHUFFLE_SEED=""; CFG_SETTLE_SECONDS=0; CFG_FAILURES_STOP_AFTER=0
-    CFG_ENV_GOVERNOR=unchanged; CFG_ENV_TURBO=unchanged; CFG_ENV_CPU_SPEED=unchanged; CFG_ENV_POWER_PROFILE=unchanged; CFG_ENV_STOP_CONTAINERS=0; CFG_ENV_KEEP_CONTAINERS=""
+    CFG_ENV_GOVERNOR=unchanged; CFG_ENV_TURBO=unchanged; CFG_ENV_CPU_SPEED=unchanged; CFG_ENV_POWER_PROFILE=unchanged; CFG_ENV_PAUSE_TIMERS=none; CFG_ENV_PAUSE_SERVICES=""; CFG_ENV_STOP_CONTAINERS=0; CFG_ENV_KEEP_CONTAINERS=""
     CFG_ENV_SCREEN_BRIGHTNESS=unchanged; CFG_ENV_KEYBOARD_LIGHT=unchanged; CFG_ENV_WIFI=unchanged; CFG_ENV_BLUETOOTH=unchanged
     CFG_ON_BATTERY=ignore
     CFG_HTTP_CONNECTION=reuse
@@ -1522,6 +1522,7 @@ print("\n".join(items))' "$CFG_SHUFFLE_SEED" "$pass" "$@"
 bench_apply_environment() {
     if [ "$CFG_ENV_GOVERNOR" = "unchanged" ] && [ "$CFG_ENV_TURBO" = "unchanged" ] && [ "$CFG_ENV_STOP_CONTAINERS" = "0" ] \
             && [ "${CFG_ENV_CPU_SPEED:-unchanged}" = "unchanged" ] && [ "${CFG_ENV_POWER_PROFILE:-unchanged}" = "unchanged" ] \
+            && [ "${CFG_ENV_PAUSE_TIMERS:-none}" = "none" ] && [ -z "${CFG_ENV_PAUSE_SERVICES:-}" ] \
             && [ "$CFG_ENV_SCREEN_BRIGHTNESS" = "unchanged" ] && [ "$CFG_ENV_KEYBOARD_LIGHT" = "unchanged" ] \
             && [ "$CFG_ENV_WIFI" = "unchanged" ] && [ "$CFG_ENV_BLUETOOTH" = "unchanged" ]; then
         print_status "INFO" "Machine settings: left unchanged"
@@ -1537,7 +1538,8 @@ bench_apply_environment() {
         bench_stop_early
     done
     local env_args=(--governor "$CFG_ENV_GOVERNOR" --turbo "$CFG_ENV_TURBO" --cpu-speed "${CFG_ENV_CPU_SPEED:-unchanged}"
-        --power-profile "${CFG_ENV_POWER_PROFILE:-unchanged}"
+        --power-profile "${CFG_ENV_POWER_PROFILE:-unchanged}" --pause-timers "${CFG_ENV_PAUSE_TIMERS:-none}"
+        --pause-services "${CFG_ENV_PAUSE_SERVICES:-}"
         --keep "$CFG_ENV_KEEP_CONTAINERS"
         --screen-brightness "$CFG_ENV_SCREEN_BRIGHTNESS" --keyboard-light "$CFG_ENV_KEYBOARD_LIGHT"
         --wifi "$CFG_ENV_WIFI" --bluetooth "$CFG_ENV_BLUETOOTH")
@@ -1548,7 +1550,7 @@ bench_apply_environment() {
         exit 1
     fi
     BENCH_ENV_STATE="$RESULTS_DIR/.environment_state.json"
-    print_status "INFO" "Machine settings: governor=$CFG_ENV_GOVERNOR turbo=$CFG_ENV_TURBO cpu_speed=${CFG_ENV_CPU_SPEED:-unchanged} power_profile=${CFG_ENV_POWER_PROFILE:-unchanged} stop_containers=$CFG_ENV_STOP_CONTAINERS screen=$CFG_ENV_SCREEN_BRIGHTNESS keyboard_light=$CFG_ENV_KEYBOARD_LIGHT wifi=$CFG_ENV_WIFI bluetooth=$CFG_ENV_BLUETOOTH"
+    print_status "INFO" "Machine settings: governor=$CFG_ENV_GOVERNOR turbo=$CFG_ENV_TURBO cpu_speed=${CFG_ENV_CPU_SPEED:-unchanged} power_profile=${CFG_ENV_POWER_PROFILE:-unchanged} pause_timers=${CFG_ENV_PAUSE_TIMERS:-none} pause_services=${CFG_ENV_PAUSE_SERVICES:-none} stop_containers=$CFG_ENV_STOP_CONTAINERS screen=$CFG_ENV_SCREEN_BRIGHTNESS keyboard_light=$CFG_ENV_KEYBOARD_LIGHT wifi=$CFG_ENV_WIFI bluetooth=$CFG_ENV_BLUETOOTH"
     sudo "$PYTHON_PATH" ./tools/prepare_environment.py apply "${env_args[@]}" --state "$BENCH_ENV_STATE"
     BENCH_ENV_APPLIED=1
     if ! "$PYTHON_PATH" ./tools/prepare_environment.py verify "${env_args[@]}"; then
@@ -1780,7 +1782,14 @@ main() {
             bench_run sleep "$CFG_SETTLE_SECONDS"
         fi
         print_status "INFO" "Measuring the resting state for ${CFG_RESTING_MEASURE_SECONDS}s ..."
-        read -r BENCH_RESTING_TEMP BENCH_RESTING_CPU < <("$PYTHON_PATH" ./tools/readiness.py baseline --seconds "$CFG_RESTING_MEASURE_SECONDS")
+        local _resting
+        mapfile -t _resting < <("$PYTHON_PATH" ./tools/readiness.py baseline --seconds "$CFG_RESTING_MEASURE_SECONDS" --programs)
+        read -r BENCH_RESTING_TEMP BENCH_RESTING_CPU <<< "${_resting[0]:-}"
+        # Who kept the machine busy while it rested: a quiet machine has nobody here
+        BENCH_BUSY_PROGRAMS=$(printf '%s\n' "${_resting[@]:1}" | awk 'NF {printf "%s%s %s%%", (n++ ? ", " : ""), $1, $2}')
+        if [ -n "$BENCH_BUSY_PROGRAMS" ]; then
+            print_status "WARNING" "Not quiet: these programs used CPU while the machine rested (% of one core): $BENCH_BUSY_PROGRAMS. Close them for a measurement you publish (README: machine checklist)"
+        fi
         # References the readiness checks compare to: fixed if configured, else the measured resting values
         BENCH_TEMP_REFERENCE="${CFG_READY_TEMP_REFERENCE_C:-$BENCH_RESTING_TEMP}"
         BENCH_CPU_REFERENCE="${CFG_READY_CPU_BUSY_REFERENCE_PERCENT:-$BENCH_RESTING_CPU}"
@@ -1849,6 +1858,8 @@ main() {
         --set ready_consecutive_checks="${CFG_READY_CONSECUTIVE_CHECKS:-}" --set ready_min_wait_s="${CFG_READY_MIN_WAIT_SECONDS:-}" \
         --set ready_max_wait_s="${CFG_READY_MAX_WAIT_SECONDS:-}" --set ready_on_timeout="${CFG_READY_ON_TIMEOUT:-}" \
         --set env_governor="$CFG_ENV_GOVERNOR" --set env_power_profile="${CFG_ENV_POWER_PROFILE:-}" \
+        --set env_pause_timers="${CFG_ENV_PAUSE_TIMERS:-}" --set env_pause_services="${CFG_ENV_PAUSE_SERVICES:-}" \
+        --set resting_busy_programs="${BENCH_BUSY_PROGRAMS:-}" \
         --set env_turbo="$CFG_ENV_TURBO" --set env_stop_containers="$CFG_ENV_STOP_CONTAINERS" \
         --set http_connection="$CFG_HTTP_CONNECTION" --set failures_stop_after="$CFG_FAILURES_STOP_AFTER" \
         --set idle_s="${CFG_IDLE_SECONDS:-0}" --set warmup_s="${CFG_WARMUP_SECONDS:-0}" \

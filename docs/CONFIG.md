@@ -137,6 +137,26 @@ Power profile: how much power and heat the machine's firmware allows. The firmwa
 | `low-power` | the least power and heat |
 | `unchanged` | leave the machine's current setting |
 
+### `ENV_PAUSE_TIMERS`
+
+Default: `maintenance`
+
+Scheduled maintenance that could start in the middle of a measurement (updates, disk trim, index rebuilds): its timers are stopped for the measurement and started again afterwards. Only stopped, never disabled: a reboot brings them back in any case, and a missed one runs once afterwards.
+
+| Option | Meaning |
+|---|---|
+| `maintenance` | the known maintenance timers that are active (apt-daily, apt-daily-upgrade, fstrim, man-db, logrotate, fwupd-refresh, ...; tools/run_metadata.py) (recommended) |
+| `none` | leave them alone |
+| `<names>` | exactly these timers, e.g. apt-daily.timer fstrim.timer |
+
+### `ENV_PAUSE_SERVICES`
+
+Default: `(empty)`
+
+Background services to stop for the measurement and start again afterwards (empty = none). Only the ones named here. Services the machine or the measurement needs (dbus, systemd-*, the network, ssh, Docker, power-profiles-daemon, the desktop, ...) are refused. Which programs keep the machine busy is shown at the start of every measurement (resting state) and kept in metadata.json.
+
+Unit: service names, or empty
+
 ### `ENV_STOP_CONTAINERS`
 
 Default: `1`

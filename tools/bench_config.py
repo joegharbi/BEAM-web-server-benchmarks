@@ -155,6 +155,29 @@ def _names(v):
     return v
 
 
+def _pause_timers(v):
+    if v in ("maintenance", "none"):
+        return v
+    names = v.replace(",", " ").split()
+    bad = [n for n in names if not re.fullmatch(r"[A-Za-z0-9_.@-]+\.timer", n)]
+    if not names or bad:
+        raise ValueError("must be maintenance, none, or timer names ending in .timer, e.g. apt-daily.timer")
+    return v
+
+
+def _pause_services(v):
+    names = v.replace(",", " ").split()
+    bad = [n for n in names if not re.fullmatch(r"[A-Za-z0-9_.@-]+", n)]
+    if bad:
+        raise ValueError(f"must be service names, e.g. cups packagekit ({', '.join(bad)} is not one)")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import run_metadata
+    refused = [n for n in names if run_metadata.protected_service(n)]
+    if refused:
+        raise ValueError(f"never paused, the machine or the measurement needs them: {', '.join(refused)}")
+    return v
+
+
 def _env_cpu_speed(v):
     if v in ("max", "unchanged"):
         return v
@@ -285,6 +308,19 @@ SCHEMA = {
                  "balanced": "the usual laptop setting",
                  "low-power": "the least power and heat",
                  "unchanged": "leave the machine's current setting"}),
+    "ENV_PAUSE_TIMERS": dict(default="maintenance", check=_pause_timers, unit="maintenance, none, or timer names",
+        help="Scheduled maintenance that could start in the middle of a measurement (updates, disk trim, index\n"
+             "rebuilds): its timers are stopped for the measurement and started again afterwards. Only stopped,\n"
+             "never disabled: a reboot brings them back in any case, and a missed one runs once afterwards.",
+        options={"maintenance": "the known maintenance timers that are active (apt-daily, apt-daily-upgrade, fstrim,\n"
+                                "#            man-db, logrotate, fwupd-refresh, ...; tools/run_metadata.py) (recommended)",
+                 "none": "leave them alone",
+                 "<names>": "exactly these timers, e.g. apt-daily.timer fstrim.timer"}),
+    "ENV_PAUSE_SERVICES": dict(default="", check=_pause_services, unit="service names, or empty",
+        help="Background services to stop for the measurement and start again afterwards (empty = none). Only\n"
+             "the ones named here. Services the machine or the measurement needs (dbus, systemd-*, the network,\n"
+             "ssh, Docker, power-profiles-daemon, the desktop, ...) are refused. Which programs keep the machine\n"
+             "busy is shown at the start of every measurement (resting state) and kept in metadata.json."),
     "ENV_STOP_CONTAINERS": dict(default="1", check=_choice("0", "1"),
         help="Other Docker containers running during the measurement.",
         options={"1": "stop them before, restart them after (recommended)", "0": "leave them running"}),
@@ -556,6 +592,8 @@ SHORT = {
     "ENV_GOVERNOR": "CPU governor: performance | powersave | schedutil | ondemand | conservative | unchanged",
     "ENV_TURBO": "turbo boost: off | on | unchanged",
     "ENV_POWER_PROFILE": "firmware power profile: performance | balanced | low-power | unchanged",
+    "ENV_PAUSE_TIMERS": "maintenance timers stopped while measuring: maintenance | none | names",
+    "ENV_PAUSE_SERVICES": "background services stopped while measuring (names; protected ones refused)",
     "ENV_CPU_SPEED": "fix every core at one speed: max | MHz | unchanged",
     "ENV_STOP_CONTAINERS": "1 = stop other Docker containers (restarted after), 0 = leave them",
     "ENV_KEEP_CONTAINERS": "containers to keep running anyway, comma-separated",
@@ -618,7 +656,8 @@ EXAMPLE_LAYOUT = [
 # docs/CONFIG.md: every setting, the machine ones grouped as in the profiles
 DOCS_LAYOUT = EXAMPLE_LAYOUT[:2] + [
     ("Machine settings (configs/machine/ profiles)",
-     ["ENV_GOVERNOR", "ENV_TURBO", "ENV_CPU_SPEED", "ENV_POWER_PROFILE", "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "ENV_SCREEN_BRIGHTNESS",
+     ["ENV_GOVERNOR", "ENV_TURBO", "ENV_CPU_SPEED", "ENV_POWER_PROFILE", "ENV_PAUSE_TIMERS", "ENV_PAUSE_SERVICES",
+      "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "ENV_SCREEN_BRIGHTNESS",
       "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH", "ON_BATTERY", "SETTLE_SECONDS", "RESTING_MEASURE_SECONDS"]),
     ("Readiness check before every run, and the conditions during its load (configs/machine/ profiles)",
      ["READY_CHECK_EVERY_SECONDS", "READY_TEMP_REFERENCE_C", "READY_TEMP_MARGIN_C",

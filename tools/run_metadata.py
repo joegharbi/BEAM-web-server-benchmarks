@@ -200,6 +200,40 @@ def performance_degraded():
     return m.group(1).strip() if m else ""
 
 
+# Scheduled maintenance that can start in the middle of a measurement (updates, disk trim, index
+# rebuilds): ENV_PAUSE_TIMERS=maintenance stops these timers' alarms (never disables them) and starts
+# them again afterwards. Missed ones run once later (systemd Persistent=), so nothing is lost.
+MAINTENANCE_TIMERS = ("apt-daily.timer", "apt-daily-upgrade.timer", "unattended-upgrades.timer",
+                      "dnf-makecache.timer", "packagekit-offline-update.timer", "fwupd-refresh.timer",
+                      "man-db.timer", "logrotate.timer", "e2scrub_all.timer", "fstrim.timer",
+                      "dpkg-db-backup.timer", "anacron.timer", "plocate-updatedb.timer", "mlocate.timer",
+                      "updatedb.timer", "snapd.snap-repair.timer")
+
+# Services the machine needs to run, to be measured, or to be reached: never paused (ENV_PAUSE_SERVICES
+# refuses them). Patterns: a trailing * matches any name starting with the rest.
+PROTECTED_SERVICES = ("dbus*", "systemd-*", "user@*", "getty@*", "polkit*", "NetworkManager*", "wpa_supplicant*",
+                      "iwd*", "ssh*", "sshd*", "docker*", "containerd*", "power-profiles-daemon*", "upower*",
+                      "gdm*", "sddm*", "lightdm*", "display-manager*", "accounts-daemon*", "udisks2*")
+
+
+def protected_service(name):
+    """True for a service the framework never pauses (PROTECTED_SERVICES)."""
+    unit = name if name.endswith(".service") else name + ".service"
+    return any(unit.startswith(p[:-1]) if p.endswith("*") else unit == p + ".service" for p in PROTECTED_SERVICES)
+
+
+def active_units(names):
+    """The given systemd units that are active now (one systemctl call)."""
+    names = list(names)
+    if not names or not shutil.which("systemctl"):
+        return []
+    try:
+        out = subprocess.run(["systemctl", "is-active", *names], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [n for n, s in zip(names, out.split()) if s == "active"]
+
+
 def cpu_max_freq_mhz():
     vals = {_read(p) for p in glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq")} - {None}
     return "/".join(str(int(v) // 1000) for v in sorted(vals, key=int))
@@ -421,6 +455,7 @@ def machine_state():
         "turbo": turbo_state(),
         "cpu_max_freq_mhz": cpu_max_freq_mhz(),
         "power_profile": power_profile()[0],
+        "maintenance_timers_active": " ".join(active_units(MAINTENANCE_TIMERS)),
         "ac_power": ac_power(),
         "battery": battery(),
         "screen_brightness_percent": screen_brightness_percent(),

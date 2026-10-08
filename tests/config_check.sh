@@ -30,6 +30,7 @@ READY_ON_TIMEOUT=stop
 ENV_GOVERNOR=performance
 ENV_TURBO=off
 ENV_POWER_PROFILE=performance
+ENV_PAUSE_TIMERS=maintenance
 ENV_STOP_CONTAINERS=1
 RAW_DATA=keep
 IDLE_SECONDS=5
@@ -43,7 +44,7 @@ ON_BATTERY=wait
 EOF
 
 state() {
-    srv/bin/python -c 'import sys; sys.path.insert(0, "tools"); import run_metadata as m; import glob; lim = lambda n: "/".join(sorted({open(f).read().strip() for f in glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/" + n)})); print(m.cpu_governor(), m.turbo_state(), "profile", m.power_profile()[0] or "-", "cpu", lim("scaling_min_freq") + "-" + lim("scaling_max_freq"), "screen", m.screen_brightness_percent(), "kbd", m.keyboard_backlight_percent(), "bt", m.radios().get("bluetooth"))'
+    srv/bin/python -c 'import sys; sys.path.insert(0, "tools"); import run_metadata as m; import glob; lim = lambda n: "/".join(sorted({open(f).read().strip() for f in glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/" + n)})); print(m.cpu_governor(), m.turbo_state(), "profile", m.power_profile()[0] or "-", "timers", len(m.active_units(m.MAINTENANCE_TIMERS)), "cpu", lim("scaling_min_freq") + "-" + lim("scaling_max_freq"), "screen", m.screen_brightness_percent(), "kbd", m.keyboard_backlight_percent(), "bt", m.radios().get("bluetooth"))'
     docker ps --format '{{.Names}}' | sort | tr '\n' ' '
 }
 BEFORE=$(state)
@@ -108,6 +109,8 @@ checks = [
     ("measured with turbo off", s["turbo"] == "off"),
     # only where the machine has power profiles
     ("power profile performance while measuring", s.get("power_profile") in ("performance", "")),
+    ("maintenance timers paused while measuring", s.get("maintenance_timers_active") == ""),
+    ("programs busy at rest recorded (empty = quiet)", "resting_busy_programs" in m["settings"]),
     ("conditions stable start to end", m.get("conditions_stable") is True),
     ("4 measurements (2 servers x 2 repeats)", rows == 4),
     ("every run passed both readiness checks", all(r["Ready Check"] == "yes" for r in runs)),
@@ -121,7 +124,7 @@ checks = [
      and os.path.isfile(os.path.join(d, "static", "summary.csv"))),
     ("bench.config.resolved saved", os.path.isfile(os.path.join(d, "bench.config.resolved"))),
     ("schedule and config saved", os.path.isfile(os.path.join(d, "schedule.txt")) and os.path.isfile(os.path.join(d, "bench.config"))),
-    ("machine restored exactly (governor, turbo, power profile, CPU speed limits, containers, screen, keyboard light, Bluetooth)", before == after),
+    ("machine restored exactly (governor, turbo, power profile, maintenance timers, CPU speed limits, containers, screen, keyboard light, Bluetooth)", before == after),
     ("screen at 20%, keyboard light and Bluetooth off while measuring",
      abs(int(s["screen_brightness_percent"] or -99) - 20) <= 2 and s["keyboard_backlight_percent"] in (0, "")
      and s["bluetooth"] in ("off", "")),

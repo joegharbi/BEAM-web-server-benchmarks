@@ -162,8 +162,17 @@ makes them less likely and catches them when they happen anyway:
 | Wait | a capped CPU is not ready: the next run waits until the cap is gone |
 | Explain | the waiting message names the clues the machine reports: lap mode, what the charger offers, the power profile and why performance is held back (e.g. `lap-detected`), the battery (draining while plugged in = charger too weak), the temperature |
 
+Programs and services are the other source of noise. At the start of every measurement the
+framework lists the programs that kept the machine busy while it rested ("Not quiet: ...", also in
+`metadata.json`); scheduled maintenance (updates, disk trim, index rebuilds) is paused for the
+measurement (`ENV_PAUSE_TIMERS=maintenance`), and background services you name are stopped and
+started again afterwards (`ENV_PAUSE_SERVICES`; services the machine needs are refused). Nothing is
+ever disabled: a reboot brings everything back in any case.
+
 What only you can do, before a long measurement:
 
+0. **Close every program you do not need**: editor (VS Code with its assistants used about 20% of a
+   core while idle on the test laptop), browser, chat, music. The "Not quiet" warning names what is left.
 1. **A hard, flat desk** – not a lap, bed or cushion (blocked vents, and the lap sensor).
 2. **The original charger, plugged straight into the laptop** (no hub or dock), strong enough for
    the laptop under full load (check: the battery must not drain while measuring).
