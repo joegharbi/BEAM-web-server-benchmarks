@@ -14,11 +14,18 @@ from plugins.workload import Workload
 logger = logging.getLogger()
 
 
+def connect(url):
+    """One client connection: no size limit, no pings, and no compression. The websockets library offers
+    permessage-deflate by default and servers differ in accepting it (mist does, Cowboy does not), so the
+    servers would do different work for the same message; without the offer every server echoes plain frames."""
+    return websockets.connect(url, max_size=None, ping_interval=None, compression=None)
+
+
 async def echo_burst_client(url, size_kb, bursts, interval, results, client_id, verbose=False):
     latencies = []
     completed_bursts = 0
     try:
-        async with websockets.connect(url, max_size=None, ping_interval=None) as ws:
+        async with connect(url) as ws:
             payload = os.urandom(size_kb * 1024)
             for b in range(bursts):
                 start = time.perf_counter()
@@ -47,7 +54,7 @@ async def echo_burst_client(url, size_kb, bursts, interval, results, client_id, 
 async def echo_stream_client(url, size_kb, rate, duration, results, client_id, verbose=False):
     latencies = []
     try:
-        async with websockets.connect(url, max_size=None, ping_interval=None) as ws:
+        async with connect(url) as ws:
             payload = os.urandom(size_kb * 1024)
             end_time = time.time() + duration
             while time.time() < end_time:
@@ -77,7 +84,7 @@ async def warm_up(url, seconds, size_kb=8):
     deadline = time.time() + seconds
     payload = os.urandom(size_kb * 1024)
     try:
-        async with websockets.connect(url, max_size=None, ping_interval=None) as ws:
+        async with connect(url) as ws:
             while time.time() < deadline:
                 await ws.send(payload)
                 await ws.recv()
@@ -86,7 +93,7 @@ async def warm_up(url, seconds, size_kb=8):
 
 
 async def echo_once(url):
-    async with websockets.connect(url, max_size=None, ping_interval=None) as ws:
+    async with connect(url) as ws:
         payload = os.urandom(64)                               # a small binary message
         await ws.send(payload)
         return await ws.recv() == payload

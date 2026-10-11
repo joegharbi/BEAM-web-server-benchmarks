@@ -3432,3 +3432,28 @@ class NativeServer(unittest.TestCase):
         time.sleep(1)
         shutil.rmtree(folder)
         self.assertFalse([p for p in pids if os.path.exists(f"/proc/{p}")])   # nothing outlives the stop
+
+
+class WebSocketClient(unittest.TestCase):
+    """Every server gets the same work: the load client never offers compression (permessage-deflate)."""
+
+    def test_no_compression_even_when_the_server_accepts_it(self):
+        import asyncio
+        import websockets
+        from plugins.workload import websocket as ws_workload
+
+        async def echo(conn):
+            async for message in conn:
+                await conn.send(message)
+
+        async def check():
+            # websockets.serve accepts permessage-deflate whenever a client offers it, like mist does
+            async with websockets.serve(echo, "127.0.0.1", 0) as server:
+                port = server.sockets[0].getsockname()[1]
+                async with ws_workload.connect(f"ws://127.0.0.1:{port}") as conn:
+                    self.assertIsNone(conn.response.headers.get("Sec-WebSocket-Extensions"))
+                    await conn.send(b"x" * 1024)
+                    self.assertEqual(await conn.recv(), b"x" * 1024)
+                self.assertTrue(await ws_workload.echo_once(f"ws://127.0.0.1:{port}"))
+
+        asyncio.run(check())

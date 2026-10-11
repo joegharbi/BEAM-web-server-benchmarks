@@ -17,6 +17,11 @@ WebSocket: burst and stream with 100 clients, 8 KB and 1 MB messages.
 | Static HTTP | `make run CONFIG=campaigns/paper/static.config` | 1,000 | ~27 h | ~2.4 GB + ~1.2 GB native copies |
 | Dynamic HTTP | `make run CONFIG=campaigns/paper/dynamic.config` | 1,000 | ~27 h | ~2.4 GB + ~1.2 GB native copies |
 | WebSocket | `make run CONFIG=campaigns/paper/websocket.config` | 440 | ~10 h | ~0.5 GB + ~0.5 GB native copies |
+| WebSocket, mist again | `make run CONFIG=campaigns/paper/websocket-mist.config` | 80 | ~2 h | small |
+
+The campaign ran 2026-10-08 to 2026-10-11 with WSEB v1.6.0. Its WebSocket client offered compression
+(permessage-deflate); only mist accepted it, so mist compressed every message and the other servers did not. The
+client no longer offers it, and `websocket-mist.config` measures mist again; the other servers' results stay valid.
 
 Time, from the pilot (one measurement, overhead included): HTTP 5k / 20k / 40k / 80k requests 69 / 86 / 110 /
 158 s (~800 requests/s); a WebSocket step ~78 s. About 64 h for the three parts. Native copies (each image's /app,
