@@ -15,7 +15,7 @@ They only read `results/<folder>` (the per-container CSVs and `manifest.jsonl`);
 | `busy_wait_http.py` | 2 | BEAM busy-waiting on vs off per server, deploy and load: server and machine energy, spread between repeats, CPU ratio, throughput |
 | `stats.py` | 3 | Exact Mann-Whitney p, Cliff's delta and bootstrap 95% intervals per server; sign test across servers |
 | `busy_wait_websocket.py` | 4 | Busy-waiting on vs off for WebSocket; only the streams are tested (the bursts are too short for the meter) |
-| `figures.py` | 5 | The paper's figures (1-4 HTTP, 5 WebSocket streams) as images (one column 8.8 cm or two columns 18.1 cm) in `graphs/paper/`, and `figures.json` with the same numbers for the web page |
+| `figures.py` | 5 | The paper's figures (1-4 HTTP, 5 WebSocket streams) as images (one column 8.8 cm or two columns 18.1 cm, no title unless `--title`), `figures.json` with the same numbers for the web page, and `FIGURES.md` (what every image shows, draft caption; also stored inside PNG/SVG) |
 | `data.py` | | Shared: reading rows, server name, on/off, load level |
 
 Busy-wait paper (MIPRO, v1.6.0/v1.6.1): static `results/2026-10-08_231638`, dynamic `results/2026-10-10_044609`,

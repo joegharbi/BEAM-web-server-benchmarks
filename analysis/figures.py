@@ -6,7 +6,9 @@ Both come from the same numbers (busy_wait_http.py, stats.py), so the page and t
                                           [results/<websocket folder> results/<mist re-run folder>]
 
 --width one = one IEEE column (8.8 cm), two = the full page width (18.1 cm). One image per workload and deploy,
-e.g. graphs/paper/fig1_static_container.png, and graphs/paper/figures.json.
+e.g. graphs/paper/fig1_static_container.png, plus figures.json (the numbers) and FIGURES.md (what every image shows
+and a draft caption). The setting is not drawn on the images (the paper's caption says it) unless --title is given;
+PNG and SVG files also carry it inside (title and description fields).
 """
 import argparse
 import json
@@ -105,8 +107,7 @@ def fig1(rows, title, width, path, dpi):
     a.scatter([], [], s=16, color=OFF, label="off (+sbwt none)")
     b.plot([], [], color=OFF, lw=0.9, alpha=0.55, marker="s", markersize=3.5, label="median, 95% CI")
     legend(fig, a.get_legend_handles_labels()[0] + b.get_legend_handles_labels()[0])
-    fig.savefig(path, dpi=dpi)
-    plt.close(fig)
+    save(fig, path, dpi)
 
 
 def runs(folder, load=80000):
@@ -135,14 +136,47 @@ def rows_axis(ax, names):
     return dict(zip(names, y))
 
 
-# The line on top of every figure that says what it shows (workload, Docker or native, load); set by main()
-CONTEXT = {"text": ""}
+# What the figure being drawn shows (workload, Docker or native, load) and its draft caption; set by main().
+# The setting is drawn on top only with --title (the paper's caption says it); it is always stored in the file.
+CONTEXT = {"text": "", "show": False, "caption": "", "sources": []}
+DESCRIBED = []          # (file, setting, caption) of every image written, for FIGURES.md
+
+CAPTIONS = {
+    "fig1": "Busy-waiting on (default) vs off (+sbwt none) for 11 BEAM servers. (a) Energy attributed to the server "
+            "process; (b) energy saved by the whole machine with busy-waiting off, with bootstrap 95% confidence intervals.",
+    "fig2": "Docker vs native deployment. (a) Additional whole-machine energy in Docker relative to native, for BEAM "
+            "(busy-waiting on and off) and Java; (b) busy-wait on/off ratio of the attributed server energy in Docker "
+            "(filled) and native (hollow).",
+    "fig3": "Run-to-run variation of the attributed server energy: the 5 runs of every server as deviation from that "
+            "server's median, busy-waiting on vs off. Right: coefficient of variation on / off.",
+    "fig4": "Java reference servers (no busy-waiting) vs BEAM servers with busy-waiting on and off. (a) Attributed "
+            "server energy; (b) whole-machine energy.",
+    "fig5": "WebSocket streams (100 clients, 10 messages/s each, 5 s): attributed server energy with busy-waiting on "
+            "vs off, log scale. (a) 8 KB messages; (b) 1 MB messages. Java Netty as reference. Gleam mist without "
+            "per-message compression (re-run) and with it (first run; the only server that accepted the client's offer).",
+}
+
+
+def about(fig_id, setting):
+    """Set what the next figure shows: its setting line and its draft caption."""
+    CONTEXT["text"], CONTEXT["caption"] = setting, CAPTIONS[fig_id]
+
+
+def save(fig, path, dpi):
+    """Write the image with its description inside (PNG and SVG text fields) and note it for FIGURES.md."""
+    description = f"{CONTEXT['text']}. {CONTEXT['caption']} Data: {', '.join(CONTEXT['sources'])}."
+    fmt = os.path.splitext(path)[1][1:]
+    meta = {"png": {"Title": CONTEXT["text"], "Description": description, "Software": "WSEB analysis/figures.py"},
+            "svg": {"Title": CONTEXT["text"], "Description": description}}.get(fmt)
+    fig.savefig(path, dpi=dpi, metadata=meta)
+    plt.close(fig)
+    DESCRIBED.append((os.path.basename(path), CONTEXT["text"], CONTEXT["caption"]))
 
 
 def legend(fig, items, ncol=3, titles=True):
     """The context line, then one legend row, above the panels and close to their titles."""
     height = fig.get_size_inches()[1]
-    context = 0.17 if CONTEXT["text"] else 0.0
+    context = 0.17 if CONTEXT["show"] and CONTEXT["text"] else 0.0
     fig.subplots_adjust(top=1 - ((0.42 if titles else 0.2) + context) / height)
     if context:
         fig.text(0.5, 1.0, CONTEXT["text"], ha="center", va="top", fontsize=7.5, color=INK, fontweight="bold")
@@ -187,8 +221,7 @@ def fig2(r, width, path, dpi):
     b.set_title("(b) Busy-wait effect", loc="left")
     legend(fig, [dot(ON, "BEAM, on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java"),
                  dot(ON, "Docker", "D"), dot(ON, "native", "D", hollow=True)], ncol=5)
-    fig.savefig(path, dpi=dpi)
-    plt.close(fig)
+    save(fig, path, dpi)
     return out
 
 
@@ -213,8 +246,7 @@ def fig3(r, deploy, width, path, dpi):
     a.axvline(0, color=MUTED, lw=0.6)
     a.set_xlabel("Server energy of each run, from its median (%)")
     legend(fig, [dot(ON, "busy-waiting on, 5 runs"), dot(OFF, "off, 5 runs")], ncol=2, titles=False)
-    fig.savefig(path, dpi=dpi)
-    plt.close(fig)
+    save(fig, path, dpi)
     return out
 
 
@@ -246,8 +278,7 @@ def fig4(r, deploy, width, path, dpi):
     b.set_xlabel("Machine energy (J)")
     b.set_title("(b) Machine, measured", loc="left")
     legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
-    fig.savefig(path, dpi=dpi)
-    plt.close(fig)
+    save(fig, path, dpi)
     return out
 
 
@@ -301,8 +332,7 @@ def fig5(r, deploy, width, path, dpi):
         ax.set_xlabel("Server energy (J, log scale)")
         ax.set_title(title, loc="left")
     legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
-    fig.savefig(path, dpi=dpi)
-    plt.close(fig)
+    save(fig, path, dpi)
     return out
 
 
@@ -313,11 +343,13 @@ def main():
     p.add_argument("--format", choices=["png", "jpg", "svg"], default="png")
     p.add_argument("--dpi", type=int, default=300)
     p.add_argument("--out", default="graphs/paper")
-    p.add_argument("--no-context", action="store_true",
-                   help="leave out the line on top (workload, Docker or native, load) when the caption says it")
+    p.add_argument("--title", action="store_true",
+                   help="draw the setting (workload, Docker or native, load) on top of every figure; without it (the "
+                        "default, for the paper) the caption says it, and it is stored in the file and in FIGURES.md")
     args = p.parse_args()
     os.makedirs(args.out, exist_ok=True)
     style()
+    CONTEXT["show"], CONTEXT["sources"] = args.title, args.folders
     figures = {"fig1": {}, "fig2": {}, "fig3": {}, "fig4": {}, "fig5": {}}
 
     def out(name):
@@ -328,26 +360,33 @@ def main():
     if websocket:
         r = ws_runs(websocket)
         for deploy in ("container", "native"):
-            CONTEXT["text"] = "" if args.no_context else (
-                f"WebSocket streams \u00b7 {'Docker (container)' if deploy == 'container' else 'native (no Docker)'} "
-                "\u00b7 100 clients \u00b7 median of 5 runs")
+            about("fig5", f"WebSocket streams \u00b7 {'Docker (container)' if deploy == 'container' else 'native (no Docker)'} "
+                          "\u00b7 100 clients \u00b7 median of 5 runs")
             figures["fig5"][deploy] = fig5(r, deploy, args.width, out(f"fig5_websocket_{deploy}"), args.dpi)
     for folder in (f for f in args.folders if f not in websocket):
         wl, r = workload(folder), runs(folder)
-        setting = lambda deploy: "" if args.no_context else \
-            f"{wl.capitalize()} HTTP \u00b7 {deploy} \u00b7 80,000 requests \u00b7 median of 5 runs"
-        CONTEXT["text"] = setting("Docker vs native")
+        setting = lambda deploy: f"{wl.capitalize()} HTTP \u00b7 {deploy} \u00b7 80,000 requests \u00b7 median of 5 runs"
+        about("fig2", setting("Docker vs native"))
         figures["fig2"][wl] = fig2(r, args.width, out(f"fig2_{wl}"), args.dpi)
         for deploy in ("container", "native"):
-            CONTEXT["text"] = setting({"container": "Docker (container)", "native": "native (no Docker)"}[deploy])
+            where = setting({"container": "Docker (container)", "native": "native (no Docker)"}[deploy])
             rows = fig1_data(folder, deploy)
+            about("fig1", where)
             fig1(rows, "", args.width, out(f"fig1_{wl}_{deploy}"), args.dpi)
             figures["fig1"][f"{wl}_{deploy}"] = rows
+            about("fig3", where)
             figures["fig3"][f"{wl}_{deploy}"] = fig3(r, deploy, args.width, out(f"fig3_{wl}_{deploy}"), args.dpi)
+            about("fig4", where)
             figures["fig4"][f"{wl}_{deploy}"] = fig4(r, deploy, args.width, out(f"fig4_{wl}_{deploy}"), args.dpi)
     with open(os.path.join(args.out, "figures.json"), "w") as fh:
         json.dump({"source": args.folders, "load": 80000, "figures": figures}, fh, indent=1)
     print(os.path.join(args.out, "figures.json"))
+    with open(os.path.join(args.out, "FIGURES.md"), "w") as fh:
+        fh.write(f"# Figures in this folder\n\nMade by `analysis/figures.py` ({args.width} column, {args.dpi} dpi"
+                 f"{', setting drawn on top' if args.title else ''}) from: {', '.join(args.folders)}\n\n")
+        for name, where, caption in sorted(DESCRIBED):
+            fh.write(f"## {name}\n\n- **Shows:** {where}\n- **Draft caption:** {caption}\n\n")
+    print(os.path.join(args.out, "FIGURES.md"))
 
 
 if __name__ == "__main__":
