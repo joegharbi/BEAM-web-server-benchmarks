@@ -247,6 +247,17 @@ def port_in_use(host_port):
     measure_failure.fail(f"port {host_port} already in use")
 
 
+def load_cpu(sampled, cpu_start, cpu_end, runtime, name):
+    """The CPU columns of a run. Total and average come from the cgroup counter read at the start and end
+    of the load (exact, same window as the energy); the samples give only the peak. Before v1.6.2 the total
+    was sum(samples) x 0.5 s, which was wrong when sampling was slower than 0.5 s (docker stats)."""
+    if cpu_start is None or cpu_end is None or runtime <= 0:
+        logger.warning("%s | CPU counter not readable: CPU total and average from the samples (approximate)", name)
+        return sampled
+    total = (cpu_end - cpu_start) / 1e6 * 100                     # %*s: 100 = one core busy for one second
+    return {"avg": total / runtime, "peak": sampled.get('peak', 0.0), "total": total}
+
+
 def measure(args, workload):
     """One measurement of one server (the steps in the module docstring)."""
     quiet = is_measure_quiet() and not args.verbose
@@ -318,6 +329,9 @@ def measure(args, workload):
     thermal_before = thermal_reading()
     # Conditions during the load (CPU speed, throttling, charger), judged before the row is written
     watch = load_conditions.Watch().start()
+    # The server's CPU time over exactly the load window, from its cgroup's own counter
+    box = deploy.box()
+    cpu_start = server_box.cpu_usec(box)
     start_time = time.time()
     try:
         workload.run(args, url)
@@ -326,6 +340,7 @@ def measure(args, workload):
             hb_stop.set()
             hb_thread.join(timeout=3)
     end_time = time.time()
+    cpu_end = server_box.cpu_usec(box)
     watch.stop()
     thermal_after = thermal_reading()
     runtime = end_time - start_time
@@ -350,6 +365,7 @@ def measure(args, workload):
 
     # 7. judge, then the CSV row and the results-index line
     cpu, mem = resources['cpu'], resources['mem']
+    cpu = load_cpu(cpu, cpu_start, cpu_end, runtime, name)
     values = {
         "Container Name": name, **csv_columns.run_fields(args.deploy),
         **workload.values(args, runtime),

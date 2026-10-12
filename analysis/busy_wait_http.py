@@ -13,7 +13,7 @@ MEASURES = {
     "server_j": "Container Energy (J)",          # energy of the server's processes
     "machine_j": "Host Energy (J)",              # energy of the whole laptop (also the load client)
     # CPU time of the server (%*s). Only the on/off RATIO is used: the total assumes one sample every 0.5 s,
-    # but the real sample gap differed (docker stats is slow), so absolute values are off (v1.6.x).
+    # but the real sample gap differed (docker stats is slow), so absolute values are off in results up to v1.6.1.
     "cpu_s": "Container Total CPU (%*s)",
     "rate": "Requests/s",
     "power_w": "Container Avg Power (W)",

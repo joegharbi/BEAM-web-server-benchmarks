@@ -77,6 +77,12 @@ the image, run without Docker in a systemd user scope; `DEPLOY` in the config). 
 `<server>-native`; for them the Container columns describe the scope (its cgroup), and Container CPU Limit is
 `none`. Files written before this column read as empty (container).
 
+**Container CPU:** Total CPU (%*s, 100 = one core busy for one second) and Avg CPU are the server's CPU time
+over exactly the load window, from its cgroup's own counter (`cpu.stat` usage_usec, read at the start and end
+of the load), the same for Docker and native. Peak CPU comes from samples every 0.5 s. Up to v1.6.1 the total was
+the sum of the samples × 0.5 s, but `docker stats` samples about every 1.8 s, so those totals and averages are
+too low for Docker and inexact natively; only on/off ratios within one deploy are usable from those files.
+
 **Server Processes:** the processes found in the server's box (container or scope) at the end of the load,
 e.g. `beam.smp, erl_child_setup`. Anything besides the server (`epmd`, a build tool, a keep-alive loop) means
 the run measured more than the server (README: server contract); the tool also prints a warning.

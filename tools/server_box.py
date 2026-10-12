@@ -35,6 +35,21 @@ def container_cgroup(docker_path, name):
     return ""
 
 
+def cpu_usec(folder):
+    """CPU time used so far by every process in the cgroup `folder`, in microseconds (the kernel's own
+    counter, cpu.stat usage_usec); None when it cannot be read. Read at the start and end of the load,
+    it gives the server's exact CPU time over the same window as its energy, for Docker and native alike."""
+    try:
+        with open(os.path.join(folder, "cpu.stat"), encoding="utf-8") as fh:
+            for line in fh:
+                key, value = line.split()
+                if key == "usage_usec":
+                    return int(value)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def processes(folder):
     """Names of the processes in the cgroup `folder` (threads are not listed), sorted."""
     names = []

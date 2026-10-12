@@ -3457,3 +3457,40 @@ class WebSocketClient(unittest.TestCase):
                 self.assertTrue(await ws_workload.echo_once(f"ws://127.0.0.1:{port}"))
 
         asyncio.run(check())
+
+
+class LoadCpu(unittest.TestCase):
+    """CPU total and average come from the server's cgroup counter over exactly the load window."""
+
+    def test_counter_of_a_box(self):
+        import server_box
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "cpu.stat"), "w") as fh:
+            fh.write("usage_usec 2500000\nuser_usec 2000000\nsystem_usec 500000\n")
+        self.assertEqual(server_box.cpu_usec(d), 2500000)
+        self.assertIsNone(server_box.cpu_usec(os.path.join(d, "missing")))
+        shutil.rmtree(d)
+
+    def test_total_and_average_from_the_counter(self):
+        import measure_core
+        sampled = {"avg": 10.0, "peak": 180.0, "total": 5.0}           # the old, too low sampled figures
+        cpu = measure_core.load_cpu(sampled, 1_000_000, 21_000_000, 10.0, "x")
+        self.assertAlmostEqual(cpu["total"], 2000.0)                   # 20 CPU-seconds = 2000 %*s
+        self.assertAlmostEqual(cpu["avg"], 200.0)                      # two cores busy on average
+        self.assertEqual(cpu["peak"], 180.0)                           # the peak still from the samples
+
+    def test_samples_when_the_counter_is_missing(self):
+        import measure_core
+        sampled = {"avg": 10.0, "peak": 20.0, "total": 5.0}
+        self.assertEqual(measure_core.load_cpu(sampled, None, 5, 10.0, "x"), sampled)
+
+    def test_read_right_around_the_load(self):
+        with open(os.path.join(ROOT, "tools", "measure_core.py")) as fh:
+            src = fh.read()
+        start, run, end = (src.index("cpu_start = server_box.cpu_usec(box)"), src.index("workload.run(args, url)"),
+                           src.index("cpu_end = server_box.cpu_usec(box)"))
+        self.assertLess(start, src.index("start_time = time.time()"))
+        self.assertLess(start, run)
+        self.assertLess(src.index("end_time = time.time()"), end)
+        self.assertLess(end, src.index("watch.stop()"))
+        self.assertIn("cpu = load_cpu(cpu, cpu_start, cpu_end, runtime, name)", src)
