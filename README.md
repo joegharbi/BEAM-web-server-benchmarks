@@ -166,9 +166,9 @@ Programs and services are the other source of noise. At the start of every measu
 framework lists the programs that kept the machine busy while it rested ("Not quiet: ...", also in
 `metadata.json`); scheduled maintenance (updates, disk trim, index rebuilds) is paused for the
 measurement (`ENV_PAUSE_TIMERS=maintenance`), and background services you name are stopped and
-started again afterwards (`ENV_PAUSE_SERVICES`; services the machine needs are refused). The measuring
-profiles also stop Claude Code Remote Control (`user:claude-remote-control`, a session reachable from the phone)
-and start it again afterwards, unless the measurement was started from it. Nothing is ever disabled: a reboot
+started again afterwards (`ENV_PAUSE_SERVICES`; services the machine needs are refused). Known
+remote-session services (Claude Code Remote Control, reachable from the phone) are paused the same way without
+being named, unless the measurement was started from one. Nothing is ever disabled: a reboot
 brings everything back in any case.
 
 What only you can do, before a long measurement:

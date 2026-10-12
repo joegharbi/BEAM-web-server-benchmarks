@@ -317,14 +317,14 @@ SCHEMA = {
                                 "#            man-db, logrotate, fwupd-refresh, ...; tools/run_metadata.py) (recommended)",
                  "none": "leave them alone",
                  "<names>": "exactly these timers, e.g. apt-daily.timer fstrim.timer"}),
-    "ENV_PAUSE_SERVICES": dict(default="user:claude-remote-control", check=_pause_services, unit="service names, or empty",
+    "ENV_PAUSE_SERVICES": dict(default="", check=_pause_services, unit="service names, or empty",
         help="Background services to stop for the measurement and start again afterwards (empty = none). Only\n"
              "the ones named here. Services the machine or the measurement needs (dbus, systemd-*, the network,\n"
              "ssh, Docker, power-profiles-daemon, the desktop, ...) are refused. Which programs keep the machine\n"
              "busy is shown at the start of every measurement (resting state) and kept in metadata.json.\n"
-             "user:<name> = a service of the person running the measurement (systemctl --user), e.g.\n"
-             "user:claude-remote-control (Claude Code Remote Control: a session reachable from the phone). It is\n"
-             "left running when the measurement was started from it, since stopping it would stop the measurement."),
+             "user:<name> = a service of the person running the measurement (systemctl --user). Known ones\n"
+             "(Claude Code Remote Control, tools/run_metadata.py KNOWN_USER_SERVICES) are paused without being named\n"
+             "here; one the measurement was started from is left running (stopping it would stop the measurement)."),
     "ENV_STOP_CONTAINERS": dict(default="1", check=_choice("0", "1"),
         help="Other Docker containers running during the measurement.",
         options={"1": "stop them before, restart them after (recommended)", "0": "leave them running"}),

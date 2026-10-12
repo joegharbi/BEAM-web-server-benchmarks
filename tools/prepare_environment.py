@@ -213,9 +213,8 @@ def do_apply(args):
         pause_units("Maintenance timers", timers, state)
     if services:
         pause_units("Services", services, state)
-    user_units = user_services(_text(args, "pause_services", ""))
-    if user_units:
-        pause_user_units(user_units, state)
+    named = user_services(_text(args, "pause_services", ""))
+    pause_user_units(named + [n for n in _profiles().KNOWN_USER_SERVICES if n not in named], state, quiet=not named)
 
     keep = {n.strip() for n in (args.keep or "").split(",") if n.strip()}
     to_stop = [n for n in docker_running() if n not in keep] if args.stop_containers else []
@@ -386,16 +385,17 @@ def runs_inside(unit, pid=None):
     return False
 
 
-def pause_user_units(names, state):
+def pause_user_units(names, state, quiet=False):
     """Stop the active ones of these user services for the measurement and save them for the restore; a service
-    this measurement was started from is left running (stopping it would stop the measurement too)."""
+    this measurement was started from is left running (stopping it would stop the measurement too). quiet: say
+    nothing when none is running (the built-in list alone, which most machines do not have)."""
     active = user_active(names)
     inside = [n for n in active if runs_inside(n)]
     for n in inside:
         print(f"User service {n}: left running (this measurement was started from it)")
     to_stop = [n for n in active if n not in inside]
     if not to_stop:
-        if not inside:
+        if not inside and not quiet:
             print("User services: none active to pause")
         return
     r = _user_systemctl("stop", *to_stop)

@@ -982,7 +982,7 @@ exec "$@"
             os.makedirs(os.path.join(bench, fam))
         cfg = os.path.join(d, "c.config")
         with open(cfg, "w") as fh:
-            fh.write("SETTLE_SECONDS=60\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\nENV_PAUSE_SERVICES=\nENV_STOP_CONTAINERS=1\n"
+            fh.write("SETTLE_SECONDS=60\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\nENV_STOP_CONTAINERS=1\n"
                      "ENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\nENV_WIFI=unchanged\n"
                      "ENV_BLUETOOTH=unchanged\n")
         before = set(os.listdir(os.path.join(ROOT, "results"))) if os.path.isdir(os.path.join(ROOT, "results")) else set()
@@ -1144,14 +1144,16 @@ class LaptopSettings(unittest.TestCase):
         node(f"{self.root}/rfkill/rfkill0", type="wlan", soft="0", hard="0")
         node(f"{self.root}/rfkill/rfkill1", type="bluetooth", soft="0", hard="0")
         node(f"{self.root}/rfkill/rfkill2", type="bluetooth", soft="0", hard="0")
-        self.saved = (pe.BACKLIGHT_GLOB, pe.KBD_LIGHT_GLOB, pe.RFKILL_GLOB, pe.require_root, pe.docker_running)
+        self.saved = (pe.BACKLIGHT_GLOB, pe.KBD_LIGHT_GLOB, pe.RFKILL_GLOB, pe.require_root, pe.docker_running,
+                      pe.user_active)
         pe.BACKLIGHT_GLOB, pe.KBD_LIGHT_GLOB = f"{self.root}/backlight/*", f"{self.root}/leds/*kbd_backlight*"
         pe.RFKILL_GLOB = f"{self.root}/rfkill/rfkill*"
         pe.require_root, pe.docker_running = (lambda: None), (lambda: [])
+        pe.user_active = lambda names: []           # never the real user services (Remote Control) of this machine
 
     def tearDown(self):
         (self.pe.BACKLIGHT_GLOB, self.pe.KBD_LIGHT_GLOB, self.pe.RFKILL_GLOB,
-         self.pe.require_root, self.pe.docker_running) = self.saved
+         self.pe.require_root, self.pe.docker_running, self.pe.user_active) = self.saved
 
     def read(self, rel):
         with open(os.path.join(self.root, rel)) as fh:
@@ -1431,7 +1433,7 @@ class FixesFromTheRealCheck(LaptopSettings):
             os.makedirs(os.path.join(bench, fam))
         cfg = os.path.join(d, "c.config")
         with open(cfg, "w") as fh:
-            fh.write("ENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\nENV_PAUSE_SERVICES=\nENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\n"
+            fh.write("ENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\nENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\n"
                      "ENV_KEYBOARD_LIGHT=unchanged\nENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n")
         before = set(os.listdir(os.path.join(ROOT, "results")))
         env = dict(os.environ, PATH=os.path.join(ROOT, "tests", "fakes") + os.pathsep + os.environ["PATH"],
@@ -1484,7 +1486,7 @@ class WhatToMeasure(unittest.TestCase):
     @staticmethod
     def config_text(config, config_cpu_speed="unchanged"):
         return ("SETTLE_SECONDS=0\nRESTING_MEASURE_SECONDS=1\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\n"
-                f"ENV_CPU_SPEED={config_cpu_speed}\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\nENV_PAUSE_SERVICES=\n"
+                f"ENV_CPU_SPEED={config_cpu_speed}\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\n"
                 "ENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\n"
                 "ENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n" + config)
 
@@ -2017,11 +2019,9 @@ class QuietMachine(unittest.TestCase):
         with self.assertRaises(bench_config.ConfigError):
             bench_config.parse("ENV_PAUSE_TIMERS=apt-daily")                      # must end in .timer
         cfg = bench_config.parse("")
-        self.assertEqual((cfg["ENV_PAUSE_TIMERS"], cfg["ENV_PAUSE_SERVICES"]), ("maintenance", "user:claude-remote-control"))
+        self.assertEqual((cfg["ENV_PAUSE_TIMERS"], cfg["ENV_PAUSE_SERVICES"]), ("maintenance", ""))
         with open(os.path.join(ROOT, "configs", "machine", "untouched.config")) as fh:
-            text = fh.read()
-        self.assertIn("ENV_PAUSE_TIMERS=none\n", text)
-        self.assertIn("ENV_PAUSE_SERVICES=\n", text)
+            self.assertIn("ENV_PAUSE_TIMERS=none\n", fh.read())
 
 
 class MeasuringCore(unittest.TestCase):
@@ -3570,10 +3570,22 @@ class PauseUserServices(unittest.TestCase):
         with self.assertRaises(ValueError):
             check("docker")
 
-    def test_measuring_profiles_pause_remote_control(self):
-        for profile in ("minimal", "tolerable", "remote", "cloud"):
+    def test_known_remote_sessions_are_paused_without_a_setting(self):
+        import run_metadata
+        self.assertIn("claude-remote-control.service", run_metadata.KNOWN_USER_SERVICES)
+        with open(os.path.join(ROOT, "tools", "prepare_environment.py")) as fh:
+            src = fh.read()
+        self.assertIn("pause_user_units(named + [n for n in _profiles().KNOWN_USER_SERVICES if n not in named]", src)
+        for profile in ("minimal", "tolerable", "remote", "cloud", "untouched"):    # no setting needed anywhere
             with open(os.path.join(ROOT, "configs", "machine", f"{profile}.config")) as fh:
-                self.assertIn("ENV_PAUSE_SERVICES=user:claude-remote-control\n", fh.read(), profile)
+                self.assertNotIn("claude-remote-control", fh.read(), profile)
+
+    def test_built_in_list_is_quiet_where_none_runs(self):
+        from unittest import mock
+        with mock.patch.object(self.pe, "user_active", lambda names: []), mock.patch("builtins.print") as out:
+            self.pe.pause_user_units(["claude-remote-control.service"], {}, quiet=True)
+            self.pe.pause_user_units(["x.service"], {})
+        self.assertEqual([c[0][0] for c in out.call_args_list], ["User services: none active to pause"])
 
     def test_runs_inside_reads_the_cgroups_of_this_process_and_its_parents(self):
         with open("/proc/self/cgroup") as fh:

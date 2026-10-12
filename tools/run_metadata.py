@@ -209,6 +209,12 @@ MAINTENANCE_TIMERS = ("apt-daily.timer", "apt-daily-upgrade.timer", "unattended-
                       "dpkg-db-backup.timer", "anacron.timer", "plocate-updatedb.timer", "mlocate.timer",
                       "updatedb.timer", "snapd.snap-repair.timer")
 
+# Services of the person measuring that keep a remote session alive and use CPU while idle: whenever the
+# framework prepares the machine, the running ones are stopped for the measurement and started again
+# afterwards, with no setting needed (like the maintenance timers). One the measurement was started from is
+# left running, since stopping it would stop the measurement.
+KNOWN_USER_SERVICES = ("claude-remote-control.service",)   # Claude Code Remote Control (claude.ai/code, mobile app)
+
 # Services the machine needs to run, to be measured, or to be reached: never paused (ENV_PAUSE_SERVICES
 # refuses them). Patterns: a trailing * matches any name starting with the rest.
 PROTECTED_SERVICES = ("dbus*", "systemd-*", "user@*", "getty@*", "polkit*", "NetworkManager*", "wpa_supplicant*",
