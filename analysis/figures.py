@@ -32,15 +32,18 @@ ORDER = ["pure", "index", "cowboy", "yaws", "phoenix", "bandit", "mist", "netty"
 WS_TESTS = (("stream 8 KB", "(a) 8 KB: server waits"), ("stream 1024 KB", "(b) 1 MB: server busy"))
 
 
+COMPRESSED = "+compressed"      # a server's runs from before the client stopped offering compression (mist)
+
+
 def label(server):
     """st-erlang-cowboy-29-1-1 -> 'Erlang Cowboy'."""
     _, lang, kind = server.split("-")[:3]
-    return f"{LANG[lang]} {KIND[kind]}"
+    return f"{LANG[lang]} {KIND[kind]}" + (" (compressed)" if server.endswith(COMPRESSED) else "")
 
 
 def sort_key(server):
     _, lang, kind = server.split("-")[:3]
-    return list(LANG).index(lang), ORDER.index(kind)
+    return list(LANG).index(lang), ORDER.index(kind), server.endswith(COMPRESSED)
 
 
 def style():
@@ -250,13 +253,17 @@ def fig4(r, deploy, width, path, dpi):
 
 def ws_runs(folders):
     """{(server, deploy, 'on'|'off', test): [server energy of each run]} of the WebSocket streams. A later folder
-    replaces an earlier one's runs of the same server: the mist re-run without compression replaces the first run."""
+    replaces an earlier one's runs of the same server, and those earlier runs are kept as '<server>+compressed':
+    the mist re-run without compression replaces the first run, in which only mist accepted compression."""
     out = {}
     for folder in folders:
         found = {}
         for r in data.rows(folder):
             found.setdefault((data.server(r), r["Deploy"], data.busy_wait(r), data.load(r)), []).append(
                 data.num(r, "Container Energy (J)"))
+        for key in found:
+            if key in out:
+                out[(key[0] + COMPRESSED,) + key[1:]] = out[key]
         out.update(found)
     return out
 
