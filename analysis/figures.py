@@ -3,6 +3,7 @@ Both come from the same numbers (busy_wait_http.py, stats.py), so the page and t
 
     ./srv/bin/python3 analysis/figures.py [--width one|two] [--format png|jpg|svg] [--dpi 300] [--out graphs/paper]
                                           results/<static folder> results/<dynamic folder>
+                                          [results/<websocket folder> results/<mist re-run folder>]
 
 --width one = one IEEE column (8.8 cm), two = the full page width (18.1 cm). One image per workload and deploy,
 e.g. graphs/paper/fig1_static_container.png, and graphs/paper/figures.json.
@@ -26,8 +27,9 @@ WIDTH_IN = {"one": 3.46, "two": 7.13}            # IEEE column and page width (8
 ON, OFF, JAVA, INK, MUTED, GRID = "#d95926", "#2a78d6", "#1b9e72", "#1f2328", "#5b636b", "#e3e6e8"
 LANG = {"erlang": "Erlang", "elixir": "Elixir", "gleam": "Gleam", "java": "Java"}
 KIND = {"pure": "pure", "index": "index", "cowboy": "Cowboy", "yaws": "Yaws", "phoenix": "Phoenix", "mist": "mist",
-        "netty": "Netty"}
-ORDER = ["pure", "index", "cowboy", "yaws", "phoenix", "mist", "netty"]
+        "bandit": "Bandit", "netty": "Netty"}
+ORDER = ["pure", "index", "cowboy", "yaws", "phoenix", "bandit", "mist", "netty"]
+WS_TESTS = (("stream 8 KB", "(a) 8 KB: server waits"), ("stream 1024 KB", "(b) 1 MB: server busy"))
 
 
 def label(server):
@@ -246,6 +248,57 @@ def fig4(r, deploy, width, path, dpi):
     return out
 
 
+def ws_runs(folders):
+    """{(server, deploy, 'on'|'off', test): [server energy of each run]} of the WebSocket streams. A later folder
+    replaces an earlier one's runs of the same server: the mist re-run without compression replaces the first run."""
+    out = {}
+    for folder in folders:
+        found = {}
+        for r in data.rows(folder):
+            found.setdefault((data.server(r), r["Deploy"], data.busy_wait(r), data.load(r)), []).append(
+                data.num(r, "Container Energy (J)"))
+        out.update(found)
+    return out
+
+
+def fig5(r, deploy, width, path, dpi):
+    """WebSocket streams: busy-waiting on vs off for small (8 KB) and large (1 MB) messages, server energy."""
+    names = sorted({k[0] for k in r}, key=sort_key)
+    names = [s for s in names if "-java-" not in s] + [s for s in names if "-java-" in s]
+    fig, axes = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], 0.19 * len(names) + 0.95),
+                             gridspec_kw={"wspace": 0.08})
+    y = rows_axis(axes[0], names)
+    out = []
+    for s in names:
+        row = {"server": s, "label": label(s)}
+        for ax, (test, _) in zip(axes, WS_TESTS):
+            if "-java-" in s:
+                v = data.median(r[(s, deploy, "on", test)])
+                row[test] = v
+                ax.scatter(v, y[s], s=16, color=JAVA, zorder=3, edgecolors="white", linewidths=0.6)
+                continue
+            on, off = data.median(r[(s, deploy, "on", test)]), data.median(r[(s, deploy, "off", test)])
+            row[test + " on"], row[test + " off"] = on, off
+            ax.plot([off, on], [y[s], y[s]], color=GRID, lw=2.2, zorder=1, solid_capstyle="round")
+            ax.scatter(off, y[s], s=16, color=OFF, zorder=3, edgecolors="white", linewidths=0.6)
+            ax.scatter(on, y[s], s=16, color=ON, zorder=3, edgecolors="white", linewidths=0.6)
+            ax.text(max(on, off) * 1.12, y[s], f"{on / off:.1f}\u00d7", va="center", fontsize=6.5, color=MUTED)
+        out.append(row)
+    for ax, (_, title) in zip(axes, WS_TESTS):
+        ax.set_xscale("log")                      # equal steps = equal ratios, so 2x looks the same everywhere
+        lo, hi = ax.get_xlim()
+        ax.set_xlim(lo, hi * 1.6)
+        ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1, 2, 5)))
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
+        ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+        ax.set_xlabel("Server energy (J, log scale)")
+        ax.set_title(title, loc="left")
+    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
+    fig.savefig(path, dpi=dpi)
+    plt.close(fig)
+    return out
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("folders", nargs="+")
@@ -258,13 +311,21 @@ def main():
     args = p.parse_args()
     os.makedirs(args.out, exist_ok=True)
     style()
-    figures = {"fig1": {}, "fig2": {}, "fig3": {}, "fig4": {}}
+    figures = {"fig1": {}, "fig2": {}, "fig3": {}, "fig4": {}, "fig5": {}}
 
     def out(name):
         path = os.path.join(args.out, f"{name}.{args.format}")
         print(path)
         return path
-    for folder in args.folders:
+    websocket = [f for f in args.folders if data.is_websocket(data.rows(f)[0])]
+    if websocket:
+        r = ws_runs(websocket)
+        for deploy in ("container", "native"):
+            CONTEXT["text"] = "" if args.no_context else (
+                f"WebSocket streams \u00b7 {'Docker (container)' if deploy == 'container' else 'native (no Docker)'} "
+                "\u00b7 100 clients \u00b7 median of 5 runs")
+            figures["fig5"][deploy] = fig5(r, deploy, args.width, out(f"fig5_websocket_{deploy}"), args.dpi)
+    for folder in (f for f in args.folders if f not in websocket):
         wl, r = workload(folder), runs(folder)
         setting = lambda deploy: "" if args.no_context else \
             f"{wl.capitalize()} HTTP \u00b7 {deploy} \u00b7 80,000 requests \u00b7 median of 5 runs"
