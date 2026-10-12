@@ -982,7 +982,7 @@ exec "$@"
             os.makedirs(os.path.join(bench, fam))
         cfg = os.path.join(d, "c.config")
         with open(cfg, "w") as fh:
-            fh.write("SETTLE_SECONDS=60\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\nENV_STOP_CONTAINERS=1\n"
+            fh.write("SETTLE_SECONDS=60\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\nENV_PAUSE_SERVICES=\nENV_STOP_CONTAINERS=1\n"
                      "ENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\nENV_WIFI=unchanged\n"
                      "ENV_BLUETOOTH=unchanged\n")
         before = set(os.listdir(os.path.join(ROOT, "results"))) if os.path.isdir(os.path.join(ROOT, "results")) else set()
@@ -1431,7 +1431,7 @@ class FixesFromTheRealCheck(LaptopSettings):
             os.makedirs(os.path.join(bench, fam))
         cfg = os.path.join(d, "c.config")
         with open(cfg, "w") as fh:
-            fh.write("ENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\nENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\n"
+            fh.write("ENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\nENV_PAUSE_SERVICES=\nENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\n"
                      "ENV_KEYBOARD_LIGHT=unchanged\nENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n")
         before = set(os.listdir(os.path.join(ROOT, "results")))
         env = dict(os.environ, PATH=os.path.join(ROOT, "tests", "fakes") + os.pathsep + os.environ["PATH"],
@@ -1484,7 +1484,7 @@ class WhatToMeasure(unittest.TestCase):
     @staticmethod
     def config_text(config, config_cpu_speed="unchanged"):
         return ("SETTLE_SECONDS=0\nRESTING_MEASURE_SECONDS=1\nENV_GOVERNOR=unchanged\nENV_TURBO=unchanged\n"
-                f"ENV_CPU_SPEED={config_cpu_speed}\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\n"
+                f"ENV_CPU_SPEED={config_cpu_speed}\nENV_POWER_PROFILE=unchanged\nENV_PAUSE_TIMERS=none\nENV_PAUSE_SERVICES=\n"
                 "ENV_STOP_CONTAINERS=0\nENV_SCREEN_BRIGHTNESS=unchanged\nENV_KEYBOARD_LIGHT=unchanged\n"
                 "ENV_WIFI=unchanged\nENV_BLUETOOTH=unchanged\n" + config)
 
@@ -2017,9 +2017,11 @@ class QuietMachine(unittest.TestCase):
         with self.assertRaises(bench_config.ConfigError):
             bench_config.parse("ENV_PAUSE_TIMERS=apt-daily")                      # must end in .timer
         cfg = bench_config.parse("")
-        self.assertEqual((cfg["ENV_PAUSE_TIMERS"], cfg["ENV_PAUSE_SERVICES"]), ("maintenance", ""))
+        self.assertEqual((cfg["ENV_PAUSE_TIMERS"], cfg["ENV_PAUSE_SERVICES"]), ("maintenance", "user:claude-remote-control"))
         with open(os.path.join(ROOT, "configs", "machine", "untouched.config")) as fh:
-            self.assertIn("ENV_PAUSE_TIMERS=none\n", fh.read())
+            text = fh.read()
+        self.assertIn("ENV_PAUSE_TIMERS=none\n", text)
+        self.assertIn("ENV_PAUSE_SERVICES=\n", text)
 
 
 class MeasuringCore(unittest.TestCase):
@@ -3544,3 +3546,66 @@ class AnalysisStats(unittest.TestCase):
         self.assertEqual(a, b)
         self.assertLessEqual(a[0], self.s.ratio(on, off))
         self.assertGreaterEqual(a[1], self.s.ratio(on, off))
+
+
+class PauseUserServices(unittest.TestCase):
+    """ENV_PAUSE_SERVICES user:<name>: a service of the person measuring (e.g. Claude Code Remote Control) is
+    stopped while measuring and started again after, unless the measurement was started from it."""
+
+    def setUp(self):
+        import prepare_environment
+        self.pe = prepare_environment
+
+    def test_user_and_system_names_are_kept_apart(self):
+        value = "cups user:claude-remote-control user:foo.service"
+        self.assertEqual(self.pe.user_services(value), ["claude-remote-control.service", "foo.service"])
+        self.assertEqual(self.pe.service_names(value), ["cups.service"])
+
+    def test_config_accepts_user_services_and_still_refuses_protected_ones(self):
+        import bench_config
+        check = bench_config.SCHEMA["ENV_PAUSE_SERVICES"]["check"]
+        self.assertEqual(check("user:claude-remote-control"), "user:claude-remote-control")
+        with self.assertRaises(ValueError):
+            check("user:bad/name")
+        with self.assertRaises(ValueError):
+            check("docker")
+
+    def test_measuring_profiles_pause_remote_control(self):
+        for profile in ("minimal", "tolerable", "remote", "cloud"):
+            with open(os.path.join(ROOT, "configs", "machine", f"{profile}.config")) as fh:
+                self.assertIn("ENV_PAUSE_SERVICES=user:claude-remote-control\n", fh.read(), profile)
+
+    def test_runs_inside_reads_the_cgroups_of_this_process_and_its_parents(self):
+        with open("/proc/self/cgroup") as fh:
+            unit = fh.read().strip().split("/")[-1]                  # the unit or scope this test runs in
+        self.assertTrue(self.pe.runs_inside(unit))
+        self.assertFalse(self.pe.runs_inside("no-such-unit-wseb.service"))
+
+    def test_under_sudo_it_talks_to_the_users_own_systemd(self):
+        from unittest import mock
+        with mock.patch.object(self.pe.os, "geteuid", return_value=0), \
+                mock.patch.dict(self.pe.os.environ, {"SUDO_USER": "root"}), \
+                mock.patch.object(self.pe.subprocess, "run") as run:
+            self.pe._user_systemctl("stop", "x.service")
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[:4], ["runuser", "-u", "root", "--"])
+        self.assertIn("XDG_RUNTIME_DIR=/run/user/0", cmd)
+        self.assertEqual(cmd[-4:], ["systemctl", "--user", "stop", "x.service"])
+
+    def test_pause_saves_for_the_restore_and_leaves_the_one_it_runs_in(self):
+        from unittest import mock
+        active = {"a.service", "b.service"}
+
+        def fake(*args):
+            if args[0] == "is-active":
+                return mock.Mock(stdout="\n".join("active" if n in active else "inactive" for n in args[1:]))
+            if args[0] == "stop":
+                active.difference_update(args[1:])
+            return mock.Mock(returncode=0, stderr="")
+        state = {}
+        with mock.patch.object(self.pe, "_user_systemctl", fake), \
+                mock.patch.object(self.pe, "runs_inside", lambda unit: unit == "b.service"), \
+                mock.patch("builtins.print"):
+            self.pe.pause_user_units(["a.service", "b.service", "c.service"], state)
+        self.assertEqual(state["paused_user_units"], ["a.service"])     # b left running, c was not active
+        self.assertEqual(active, {"b.service"})

@@ -151,9 +151,9 @@ Scheduled maintenance that could start in the middle of a measurement (updates, 
 
 ### `ENV_PAUSE_SERVICES`
 
-Default: `(empty)`
+Default: `user:claude-remote-control`
 
-Background services to stop for the measurement and start again afterwards (empty = none). Only the ones named here. Services the machine or the measurement needs (dbus, systemd-*, the network, ssh, Docker, power-profiles-daemon, the desktop, ...) are refused. Which programs keep the machine busy is shown at the start of every measurement (resting state) and kept in metadata.json.
+Background services to stop for the measurement and start again afterwards (empty = none). Only the ones named here. Services the machine or the measurement needs (dbus, systemd-*, the network, ssh, Docker, power-profiles-daemon, the desktop, ...) are refused. Which programs keep the machine busy is shown at the start of every measurement (resting state) and kept in metadata.json. user:<name> = a service of the person running the measurement (systemctl --user), e.g. user:claude-remote-control (Claude Code Remote Control: a session reachable from the phone). It is left running when the measurement was started from it, since stopping it would stop the measurement.
 
 Unit: service names, or empty
 

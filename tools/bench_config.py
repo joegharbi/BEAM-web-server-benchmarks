@@ -167,12 +167,13 @@ def _pause_timers(v):
 
 def _pause_services(v):
     names = v.replace(",", " ").split()
-    bad = [n for n in names if not re.fullmatch(r"[A-Za-z0-9_.@-]+", n)]
+    bad = [n for n in names if not re.fullmatch(r"(user:)?[A-Za-z0-9_.@-]+", n)]
     if bad:
-        raise ValueError(f"must be service names, e.g. cups packagekit ({', '.join(bad)} is not one)")
+        raise ValueError(f"must be service names, e.g. cups packagekit user:claude-remote-control "
+                         f"({', '.join(bad)} is not one)")
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import run_metadata
-    refused = [n for n in names if run_metadata.protected_service(n)]
+    refused = [n for n in names if not n.startswith("user:") and run_metadata.protected_service(n)]
     if refused:
         raise ValueError(f"never paused, the machine or the measurement needs them: {', '.join(refused)}")
     return v
@@ -316,11 +317,14 @@ SCHEMA = {
                                 "#            man-db, logrotate, fwupd-refresh, ...; tools/run_metadata.py) (recommended)",
                  "none": "leave them alone",
                  "<names>": "exactly these timers, e.g. apt-daily.timer fstrim.timer"}),
-    "ENV_PAUSE_SERVICES": dict(default="", check=_pause_services, unit="service names, or empty",
+    "ENV_PAUSE_SERVICES": dict(default="user:claude-remote-control", check=_pause_services, unit="service names, or empty",
         help="Background services to stop for the measurement and start again afterwards (empty = none). Only\n"
              "the ones named here. Services the machine or the measurement needs (dbus, systemd-*, the network,\n"
              "ssh, Docker, power-profiles-daemon, the desktop, ...) are refused. Which programs keep the machine\n"
-             "busy is shown at the start of every measurement (resting state) and kept in metadata.json."),
+             "busy is shown at the start of every measurement (resting state) and kept in metadata.json.\n"
+             "user:<name> = a service of the person running the measurement (systemctl --user), e.g.\n"
+             "user:claude-remote-control (Claude Code Remote Control: a session reachable from the phone). It is\n"
+             "left running when the measurement was started from it, since stopping it would stop the measurement."),
     "ENV_STOP_CONTAINERS": dict(default="1", check=_choice("0", "1"),
         help="Other Docker containers running during the measurement.",
         options={"1": "stop them before, restart them after (recommended)", "0": "leave them running"}),
@@ -593,7 +597,7 @@ SHORT = {
     "ENV_TURBO": "turbo boost: off | on | unchanged",
     "ENV_POWER_PROFILE": "firmware power profile: performance | balanced | low-power | unchanged",
     "ENV_PAUSE_TIMERS": "maintenance timers stopped while measuring: maintenance | none | names",
-    "ENV_PAUSE_SERVICES": "background services stopped while measuring (names; protected ones refused)",
+    "ENV_PAUSE_SERVICES": "background services stopped while measuring (names; protected ones refused; user:<name> = systemctl --user)",
     "ENV_CPU_SPEED": "fix every core at one speed: max | MHz | unchanged",
     "ENV_STOP_CONTAINERS": "1 = stop other Docker containers (restarted after), 0 = leave them",
     "ENV_KEEP_CONTAINERS": "containers to keep running anyway, comma-separated",

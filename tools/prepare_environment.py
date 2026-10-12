@@ -26,6 +26,7 @@ import argparse
 import glob
 import json
 import os
+import pwd
 import signal
 import subprocess
 import sys
@@ -212,6 +213,9 @@ def do_apply(args):
         pause_units("Maintenance timers", timers, state)
     if services:
         pause_units("Services", services, state)
+    user_units = user_services(_text(args, "pause_services", ""))
+    if user_units:
+        pause_user_units(user_units, state)
 
     keep = {n.strip() for n in (args.keep or "").split(",") if n.strip()}
     to_stop = [n for n in docker_running() if n not in keep] if args.stop_containers else []
@@ -329,11 +333,75 @@ def units_from(value, default):
 
 
 def service_names(value):
-    names = [n if n.endswith(".service") else n + ".service" for n in units_from(value, ())]
+    names = [n if n.endswith(".service") else n + ".service" for n in units_from(value, ()) if not n.startswith("user:")]
     refused = [n for n in names if _profiles().protected_service(n)]
     if refused:
         sys.exit(f"ENV_PAUSE_SERVICES: never paused, the machine or the measurement needs them: {', '.join(refused)}")
     return names
+
+
+def user_services(value):
+    """The 'user:<name>' entries of ENV_PAUSE_SERVICES: services of the person who started the measurement
+    (systemd --user), e.g. user:claude-remote-control (a Claude Code session reachable from the phone)."""
+    return [n[5:] if n.endswith(".service") else n[5:] + ".service"
+            for n in units_from(value, ()) if n.startswith("user:")]
+
+
+def _user_systemctl(*args):
+    """systemctl --user of the person who started the measurement, also when this runs under sudo."""
+    cmd = ["systemctl", "--user", *args]
+    user = os.environ.get("SUDO_USER") if os.geteuid() == 0 else None
+    if user:
+        uid = pwd.getpwnam(user).pw_uid
+        cmd = ["runuser", "-u", user, "--", "env", f"XDG_RUNTIME_DIR=/run/user/{uid}",
+               f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus", *cmd]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+
+def user_active(names):
+    """The given user units that are active now."""
+    names = list(names)
+    if not names:
+        return []
+    try:
+        out = _user_systemctl("is-active", *names).stdout
+    except (OSError, subprocess.SubprocessError, KeyError):
+        return []
+    return [n for n, s in zip(names, out.split()) if s == "active"]
+
+
+def runs_inside(unit, pid=None):
+    """True when this process or one of its parents runs in `unit`'s cgroup: the measurement was started
+    from that service (e.g. from the phone through Remote Control), so stopping it would stop the measurement."""
+    pid = pid or os.getpid()
+    while pid > 1:
+        try:
+            with open(f"/proc/{pid}/cgroup", encoding="utf-8") as fh:
+                if any(f"/{unit}/" in line.rstrip("\n") + "/" for line in fh):
+                    return True
+            with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
+                pid = int(fh.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return False
+    return False
+
+
+def pause_user_units(names, state):
+    """Stop the active ones of these user services for the measurement and save them for the restore; a service
+    this measurement was started from is left running (stopping it would stop the measurement too)."""
+    active = user_active(names)
+    inside = [n for n in active if runs_inside(n)]
+    for n in inside:
+        print(f"User service {n}: left running (this measurement was started from it)")
+    to_stop = [n for n in active if n not in inside]
+    if not to_stop:
+        if not inside:
+            print("User services: none active to pause")
+        return
+    r = _user_systemctl("stop", *to_stop)
+    paused = [n for n in to_stop if n not in user_active(to_stop)]
+    state.setdefault("paused_user_units", []).extend(paused)
+    print(f"User services paused: {', '.join(paused) or 'none'}" + ("" if r.returncode == 0 else f" (systemctl: {r.stderr.strip()})"))
 
 
 def cpu_speed_arg(v):
@@ -401,6 +469,15 @@ def _restore(args):
         if down_units:
             print(f"NOT started again: {', '.join(down_units)} (sudo systemctl start {' '.join(down_units)})")
             not_restored += down_units
+    user_paused = state.get("paused_user_units") or []
+    if user_paused:
+        _user_systemctl("start", *user_paused)
+        back = user_active(user_paused)
+        down_units = [n for n in user_paused if n not in back]
+        print(f"User services started again: {', '.join(back) or 'none'}")
+        if down_units:
+            print(f"NOT started again: {', '.join(down_units)} (systemctl --user start {' '.join(down_units)})")
+            not_restored += down_units
     if stopped:
         up, down, error = restart_containers(stopped)
         if up:
@@ -457,10 +534,14 @@ def do_verify(args):
             problems.append(f"power profile is '{now}', expected '{args.power_profile}'")
     for kind, names in (("maintenance timer", units_from(_text(args, "pause_timers", "none"), run_metadata.MAINTENANCE_TIMERS)),
                         ("service", [n if n.endswith(".service") else n + ".service"
-                                     for n in units_from(_text(args, "pause_services", ""), ())])):
+                                                     for n in units_from(_text(args, "pause_services", ""), ())
+                                     if not n.startswith("user:")])):
         still = run_metadata.active_units(names)
         if still:
             problems.append(f"{kind}s still active: {', '.join(still)}")
+    still = [n for n in user_active(user_services(_text(args, "pause_services", ""))) if not runs_inside(n)]
+    if still:
+        problems.append(f"user services still active: {', '.join(still)}")
     if args.screen_brightness != "unchanged":
         now = brightness_percent(BACKLIGHT_GLOB)
         # The steps of a backlight are coarse, so a difference of 2% is still the requested level
@@ -497,7 +578,8 @@ def main():
     ap.add_argument("--pause-timers", default="none",
                     help="maintenance timers to stop during the measurement: maintenance (the known list), none, or names")
     ap.add_argument("--pause-services", default="",
-                    help="services to stop during the measurement (names; protected ones are refused)")
+                    help="services to stop during the measurement (names; protected ones are refused); "
+                         "user:<name> = a service of the person running it (systemctl --user), e.g. user:claude-remote-control")
     ap.add_argument("--no-stop-containers", dest="stop_containers", action="store_false",
                     help="Leave other running containers alone on apply")
     ap.add_argument("--keep", default="",
