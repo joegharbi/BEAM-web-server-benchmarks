@@ -130,12 +130,19 @@ def rows_axis(ax, names):
     return dict(zip(names, y))
 
 
+# The line on top of every figure that says what it shows (workload, Docker or native, load); set by main()
+CONTEXT = {"text": ""}
+
+
 def legend(fig, items, ncol=3, titles=True):
-    """One legend row above the panels, close to their titles."""
+    """The context line, then one legend row, above the panels and close to their titles."""
     height = fig.get_size_inches()[1]
-    fig.subplots_adjust(top=1 - (0.42 if titles else 0.2) / height)
-    fig.legend(handles=items, loc="upper center", bbox_to_anchor=(0.5, 1.0), ncol=ncol, frameon=False,
-               handletextpad=0.2, columnspacing=1.0)
+    context = 0.17 if CONTEXT["text"] else 0.0
+    fig.subplots_adjust(top=1 - ((0.42 if titles else 0.2) + context) / height)
+    if context:
+        fig.text(0.5, 1.0, CONTEXT["text"], ha="center", va="top", fontsize=7.5, color=INK, fontweight="bold")
+    fig.legend(handles=items, loc="upper center", bbox_to_anchor=(0.5, 1.0 - context / height), ncol=ncol,
+               frameon=False, handletextpad=0.2, columnspacing=1.0)
 
 
 def dot(color, text, marker="o", hollow=False):
@@ -246,6 +253,8 @@ def main():
     p.add_argument("--format", choices=["png", "jpg", "svg"], default="png")
     p.add_argument("--dpi", type=int, default=300)
     p.add_argument("--out", default="graphs/paper")
+    p.add_argument("--no-context", action="store_true",
+                   help="leave out the line on top (workload, Docker or native, load) when the caption says it")
     args = p.parse_args()
     os.makedirs(args.out, exist_ok=True)
     style()
@@ -257,8 +266,12 @@ def main():
         return path
     for folder in args.folders:
         wl, r = workload(folder), runs(folder)
+        setting = lambda deploy: "" if args.no_context else \
+            f"{wl.capitalize()} HTTP \u00b7 {deploy} \u00b7 80,000 requests \u00b7 median of 5 runs"
+        CONTEXT["text"] = setting("Docker vs native")
         figures["fig2"][wl] = fig2(r, args.width, out(f"fig2_{wl}"), args.dpi)
         for deploy in ("container", "native"):
+            CONTEXT["text"] = setting({"container": "Docker (container)", "native": "native (no Docker)"}[deploy])
             rows = fig1_data(folder, deploy)
             fig1(rows, "", args.width, out(f"fig1_{wl}_{deploy}"), args.dpi)
             figures["fig1"][f"{wl}_{deploy}"] = rows
