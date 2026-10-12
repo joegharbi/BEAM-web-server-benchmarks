@@ -3130,6 +3130,23 @@ class SetCpuSpeed(unittest.TestCase):
         self.assertEqual(sorted(set(saved.values())), ["400000", "800000"])
         shutil.rmtree(d)
 
+    def test_message_names_a_firmware_hold(self):
+        # As on 2026-10-12: the speed was set to 1800 MHz but read back as 800 MHz for a moment (the firmware's
+        # hold); the old message said "fixed ... 800 MHz", although every run then ran at 1800 MHz
+        import prepare_environment as pe
+        from unittest import mock
+        d, pattern = self.cores()
+        with mock.patch("builtins.print") as out:
+            pe.set_cpu_speed(1800, {}, pattern)
+        self.assertEqual(out.call_args[0][0], "CPU speed: fixed on 2/2 cores (lowest = highest = 1800 MHz)")
+        real_read = pe.read
+        with mock.patch.object(pe, "read", lambda p: "800000" if p.endswith("scaling_max_freq") else real_read(p)), \
+                mock.patch.object(pe, "write", lambda p, v: True), mock.patch("builtins.print") as out:
+            pe.set_cpu_speed(1800, {}, pattern)
+        self.assertEqual(out.call_args[0][0], "CPU speed: set to 1800 MHz on 2/2 cores; the firmware holds it at "
+                                              "800 MHz for now (each run waits until 1800 MHz is reached)")
+        shutil.rmtree(d)
+
     def test_lower_speed_and_restore_in_any_order(self):
         import prepare_environment as pe
         from unittest import mock

@@ -256,7 +256,14 @@ def set_cpu_speed(mhz, saved, glob_pattern=CPUFREQ_GLOB, before=None):
         speeds.add(read(max_path))
     if total:
         now = "/".join(str(int(v) // 1000) for v in sorted(speeds - {None}, key=int))
-        print(f"CPU speed: fixed on {fixed}/{total} cores (lowest = highest = {now} MHz)")
+        wanted = str(mhz) if mhz else now
+        if now == wanted:
+            print(f"CPU speed: fixed on {fixed}/{total} cores (lowest = highest = {now} MHz)")
+        else:
+            # The kernel keeps the requested limit but reports what the firmware allows right now
+            # (lap sensor, a power profile still switching); every run waits until the speed is reached.
+            print(f"CPU speed: set to {wanted} MHz on {fixed}/{total} cores; the firmware holds it at {now} MHz "
+                  f"for now (each run waits until {wanted} MHz is reached)")
 
 
 def _profiles():
