@@ -3511,3 +3511,36 @@ class LoadCpu(unittest.TestCase):
         self.assertLess(src.index("end_time = time.time()"), end)
         self.assertLess(end, src.index("watch.stop()"))
         self.assertIn("cpu = load_cpu(cpu, cpu_start, cpu_end, runtime, name)", src)
+
+
+class AnalysisStats(unittest.TestCase):
+    """analysis/stats.py: the exact tests behind the paper's numbers."""
+
+    def setUp(self):
+        sys.path.insert(0, os.path.join(ROOT, "analysis"))
+        import stats
+        self.s = stats
+
+    def test_mann_whitney_exact(self):
+        self.assertAlmostEqual(self.s.mann_whitney_p([6, 7, 8, 9, 10], [1, 2, 3, 4, 5]), 2 / 252)  # complete separation
+        self.assertAlmostEqual(self.s.mann_whitney_p([1, 2, 3], [1, 2, 3]), 1.0)                    # the same values
+        self.assertAlmostEqual(self.s.mann_whitney_p([3, 4], [1, 2]), 2 / 6)                        # 2 of 6 splits as extreme
+
+    def test_cliffs_delta(self):
+        self.assertEqual(self.s.cliffs_delta([5, 6], [1, 2]), 1.0)
+        self.assertEqual(self.s.cliffs_delta([1, 2], [5, 6]), -1.0)
+        self.assertEqual(self.s.cliffs_delta([1, 3], [2, 2]), 0.0)
+
+    def test_sign_test(self):
+        self.assertAlmostEqual(self.s.sign_test_p(11, 11), 2 / 2048)
+        self.assertAlmostEqual(self.s.sign_test_p(0, 11), 2 / 2048)
+        self.assertEqual(self.s.sign_test_p(5, 10), 1.0)
+
+    def test_bootstrap_is_reproducible_and_brackets_the_estimate(self):
+        import random
+        on, off = [10, 11, 12, 13, 14], [2, 2.1, 2.2, 2.3, 2.4]
+        a = self.s.bootstrap(on, off, self.s.ratio, random.Random(1))
+        b = self.s.bootstrap(on, off, self.s.ratio, random.Random(1))
+        self.assertEqual(a, b)
+        self.assertLessEqual(a[0], self.s.ratio(on, off))
+        self.assertGreaterEqual(a[1], self.s.ratio(on, off))

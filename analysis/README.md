@@ -5,11 +5,13 @@ They only read `results/<folder>` (the per-container CSVs and `manifest.jsonl`);
 
     ./srv/bin/python3 analysis/check.py results/<folder> ...
     ./srv/bin/python3 analysis/busy_wait_http.py results/<static folder> results/<dynamic folder>
+    ./srv/bin/python3 analysis/stats.py results/<static folder> results/<dynamic folder>
 
 | Script | Step | Answers |
 |---|---|---|
 | `check.py` | 1 | Is the folder complete? Same conditions in every run? Odd runs? Enough meter readings per run? |
 | `busy_wait_http.py` | 2 | BEAM busy-waiting on vs off per server, deploy and load: server and machine energy, spread between repeats, CPU ratio, throughput |
+| `stats.py` | 3 | Exact Mann-Whitney p, Cliff's delta and bootstrap 95% intervals per server; sign test across servers |
 | `data.py` | | Shared: reading rows, server name, on/off, load level |
 
 Busy-wait paper (MIPRO, v1.6.0/v1.6.1): static `results/2026-10-08_231638`, dynamic `results/2026-10-10_044609`,
