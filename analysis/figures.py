@@ -82,7 +82,7 @@ def fig1_data(folder, deploy, load=80000):
 
 
 def fig1(rows, title, width, path, dpi):
-    """(a) server energy, busy-waiting on vs off; (b) whole-machine energy saved with it off, 95% CI."""
+    """(a) server energy, busy-waiting on vs off; (b) platform energy (RAPL psys) saved with it off, 95% CI."""
     n = len(rows)
     fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], 0.19 * n + 0.75),
                                gridspec_kw={"width_ratios": [1.35, 1], "wspace": 0.08})
@@ -101,7 +101,7 @@ def fig1(rows, title, width, path, dpi):
     a.set_title("(a) Server, attributed", loc="left")
     b.axvline(0, color=MUTED, lw=0.6)
     b.set_xlabel("Saved with off (%)")
-    b.set_title("(b) Machine, measured", loc="left")
+    b.set_title("(b) Platform, measured", loc="left")
     b.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(5))
     a.scatter([], [], s=16, color=ON, label="busy-waiting on (default)")
     a.scatter([], [], s=16, color=OFF, label="off (+sbwt none)")
@@ -143,14 +143,15 @@ DESCRIBED = []          # (file, setting, caption) of every image written, for F
 
 CAPTIONS = {
     "fig1": "Busy-waiting on (default) vs off (+sbwt none) for 11 BEAM servers. (a) Energy attributed to the server "
-            "process; (b) energy saved by the whole machine with busy-waiting off, with bootstrap 95% confidence intervals.",
-    "fig2": "Docker vs native deployment. (a) Additional whole-machine energy in Docker relative to native, for BEAM "
+            "process (CPU-time share); (b) platform energy (RAPL psys, measured) saved with busy-waiting off, with bootstrap "
+            "95% confidence intervals.",
+    "fig2": "Docker vs native deployment. (a) Additional platform energy (RAPL psys) in Docker relative to native, for BEAM "
             "(busy-waiting on and off) and Java; (b) busy-wait on/off ratio of the attributed server energy in Docker "
             "(filled) and native (hollow).",
     "fig3": "Run-to-run variation of the attributed server energy: the 5 runs of every server as deviation from that "
             "server's median, busy-waiting on vs off. Right: coefficient of variation on / off.",
     "fig4": "Java reference servers (no busy-waiting) vs BEAM servers with busy-waiting on and off. (a) Attributed "
-            "server energy; (b) whole-machine energy.",
+            "server energy (CPU-time share); (b) platform energy (RAPL psys, measured).",
     "fig5": "WebSocket streams (100 clients, 10 messages/s each, 5 s): attributed server energy with busy-waiting on "
             "vs off, log scale. (a) 8 KB messages; (b) 1 MB messages. Java Netty as reference. Gleam mist without "
             "per-message compression (re-run) and with it (first run; the only server that accepted the client's offer).",
@@ -214,8 +215,8 @@ def fig2(r, width, path, dpi):
                           color=ON, facecolors="white" if hollow else ON, linewidths=0.8)
         out.append(row)
     a.axvline(0, color=MUTED, lw=0.6)
-    a.set_xlabel("Docker vs native, machine (%)")
-    a.set_title("(a) Docker's extra, machine", loc="left")
+    a.set_xlabel("Docker vs native, platform (%)")
+    a.set_title("(a) Docker's extra, platform", loc="left")
     b.set_xlim(0, None)
     b.set_xlabel("Busy-wait on/off, server (×)")
     b.set_title("(b) Busy-wait effect", loc="left")
@@ -275,8 +276,8 @@ def fig4(r, deploy, width, path, dpi):
     a.set_xlim(0, None)
     a.set_xlabel("Server energy (J)")
     a.set_title("(a) Server, attributed", loc="left")
-    b.set_xlabel("Machine energy (J)")
-    b.set_title("(b) Machine, measured", loc="left")
+    b.set_xlabel("Platform energy (J)")
+    b.set_title("(b) Platform, measured", loc="left")
     legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
     save(fig, path, dpi)
     return out

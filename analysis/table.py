@@ -1,7 +1,7 @@
 """Table I of the busy-wait paper: the busy-wait effect for every workload and deploy, in LaTeX.
 One row per workload x deploy (80,000 requests, 11 BEAM servers, median of 5 runs each):
   - server energy on/off: median over servers (range), attributed
-  - machine energy saved with busy-waiting off: median over servers (range), measured; servers whose 95% CI is above 0
+  - platform energy (RAPL psys) saved with busy-waiting off: median over servers (range), measured; servers whose 95% CI is above 0
   - spread between the 5 repeats (CV): median over servers (max), busy-waiting on and off
   - sign test across the 11 servers (servers with on > off for server and machine energy)
 
@@ -33,13 +33,13 @@ def main(folders):
     print("% Table I, made by analysis/table.py from: " + ", ".join(folders))
     print(r"\begin{table}[t]")
     print(r"\caption{Busy-waiting on vs off, 80,000 requests, 11 BEAM servers, median of 5 runs per server. "
-          r"Server energy is attributed by CPU time; machine energy is measured. "
+          r"Server energy is attributed by CPU-time share; platform energy (RAPL psys) is measured. "
           r"Values: median over servers (range); spread: median (max).}")
     print(r"\label{tab:busywait}")
     print(r"\centering\small\setlength{\tabcolsep}{3pt}")
     print(r"\begin{tabular}{llccccc}")
     print(r"\hline")
-    print(r" & & Server & Machine & CI$>$0 & CV on & CV off \\")
+    print(r" & & Server & Platform & CI$>$0 & CV on & CV off \\")
     print(r" & & on/off & saved (\%) & & (\%) & (\%) \\")
     print(r"\hline")
     for folder in folders:
@@ -56,8 +56,8 @@ def main(folders):
                   f"{ci}/{n} & {data.median(col('cv_on')):.1f} ({max(col('cv_on')):.0f}) & "
                   f"{data.median(col('cv_off')):.1f} ({max(col('cv_off')):.0f}) \\\\")
     print(r"\hline")
-    print(r"\multicolumn{7}{l}{\footnotesize All 11 servers: on $>$ off for server and machine energy in every row (sign test $p=0.001$).} \\")
-    print(r"\multicolumn{7}{l}{\footnotesize CI$>$0: servers whose bootstrap 95\% CI of the machine saving excludes 0.} \\")
+    print(r"\multicolumn{7}{l}{\footnotesize All 11 servers: on $>$ off for server and platform energy in every row (sign test $p=0.001$).} \\")
+    print(r"\multicolumn{7}{l}{\footnotesize CI$>$0: servers whose bootstrap 95\% CI of the platform saving excludes 0.} \\")
     print(r"\end{tabular}")
     print(r"\end{table}")
 
