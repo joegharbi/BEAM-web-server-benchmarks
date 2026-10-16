@@ -1,0 +1,11 @@
+{application, echo,
+ [{description, "Plain Erlang TCP echo server for energy benchmarking"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {echo_app, []}},
+  {applications, [kernel, stdlib]},
+  {env, []},
+  {modules, []},
+  {licenses, ["Apache-2.0"]},
+  {links, []}
+ ]}.

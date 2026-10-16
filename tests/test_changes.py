@@ -1013,7 +1013,9 @@ exec "$@"
         self.assertIn("Restoring machine settings", text)
         with open(calls) as fh:
             self.assertIn("restore", fh.read())
-        self.assertIn("make resume RESUME=results/", text)
+        # Ctrl-C came while the machine settled, before any measurement: nothing to resume, the empty folder is
+        # removed (this used to match the hint about an older unfinished run, which is gone since 2026-10-13)
+        self.assertIn("Nothing was measured yet; removed the empty results/", text)
         self.assertIn("Sleep and lid-close suspend are blocked", text)
         r = subprocess.run(["systemd-inhibit", "--list", "--no-pager"], capture_output=True, text=True)
         self.assertNotIn("web-server benchmarks", r.stdout)             # released again after the stop
@@ -1923,12 +1925,13 @@ class ServerLabels(unittest.TestCase):
             for key in ("language", "language_version", "runtime", "runtime_version", "kind", "framework", "framework_version"):
                 self.assertIn(key, labels, f"{name}: LABEL wseb.{key} missing")
             self.assertIn(labels["kind"], ("pure", "index", "framework"), name)
-            self.assertIn(labels["runtime"], ("beam", "jvm"), name)
+            self.assertIn(labels["runtime"], ("beam", "jvm", "native"), name)      # native: C, no VM
             self.assertEqual(labels["framework"] == "none", labels["kind"] != "framework", name)
             self.assertIn(f"-{labels['language']}-", name)
             locks = [f for f in ("rebar.lock", "mix.lock", "manifest.toml", "pom.xml") if os.path.exists(os.path.join(folder, f))]
             mix = os.path.join(folder, "mix.exs")
             no_deps = os.path.exists(mix) and re.search(r"deps(: |, do: )\[\]", open(mix).read())
+            no_deps = no_deps or labels["language"] == "c"     # C servers use only the C library (compiler pinned by image)
             self.assertTrue(locks or no_deps, f"{name}: no lock file (and it has dependencies)")
             if "rebar.lock" in locks:
                 self.assertIn("COPY rebar.config rebar.lock ./", text, f"{name}: the lock is not used by the build")
