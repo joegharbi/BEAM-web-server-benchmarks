@@ -18,7 +18,7 @@ MIN_READINGS = 5     # fewer meter readings than this: the energy of a run is to
 def check(folder):
     rows = data.rows(folder)
     manifest = [json.loads(line) for line in open(f"{folder}/manifest.jsonl")]
-    ws = data.is_websocket(rows[0])
+    ws = data.is_websocket(rows[0]) or data.is_echo(rows[0])     # messages, not requests
     print(f"== {folder}: {len(rows)} rows, manifest {len(manifest)} entries, "
           f"{sum(not m['valid'] for m in manifest)} invalid")
 

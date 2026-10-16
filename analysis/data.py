@@ -33,12 +33,21 @@ def busy_wait(row):
     return "off" if row["Variant"] == "nobw" else "on"
 
 
+def is_echo(row):
+    return "Message Size (B)" in row
+
+
 def is_websocket(row):
-    return "Pattern" in row
+    return "Pattern" in row and not is_echo(row)
 
 
 def load(row):
-    """The load level of a row: the request count (HTTP) or pattern and message size (WebSocket)."""
+    """The load level of a row: the request count (HTTP), pattern and message size (WebSocket), or pattern,
+    clients and the pattern's own setting (echo)."""
+    if is_echo(row):
+        extra = {"connect": f'spacing {row["Spacing (s)"]} s', "burst": f'{row["Messages per Client"]} msg',
+                 "stream": f'{row["Rate (msg/s)"]}/s'}[row["Pattern"]]
+        return f'{row["Pattern"]} {row["Num Clients"]} clients {extra}'
     if is_websocket(row):
         return f'{row["Pattern"]} {row["Message Size (KB)"]} KB'
     return int(row["Total Requests"])
