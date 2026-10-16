@@ -29,7 +29,7 @@ TOOLS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TOOLS)
 import scaphandre_energy as se  # noqa: E402
 
-FAMILIES = ("static", "dynamic", "websocket")
+FAMILIES = ("static", "dynamic", "websocket", "echo")
 CHANGED = ("Container Energy (J)", "Container Avg Power (W)")
 
 

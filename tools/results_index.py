@@ -29,7 +29,7 @@ import sys
 SCHEMA = 1
 MANIFEST = "manifest.jsonl"
 CATALOG = "index.json"
-FAMILIES = ("static", "dynamic", "websocket")
+FAMILIES = ("static", "dynamic", "websocket", "echo")
 INVALID_FILE = "invalid_runs.csv"
 
 
@@ -123,6 +123,16 @@ def websocket_workload(test, pattern, clients, size_kb, rate=None, bursts=None, 
     extra = {"rate_per_s": rate, "duration_s": duration} if pattern == "stream" else \
             {"bursts": bursts, "interval_s": interval} if pattern == "burst" else {}
     w.update({k: v for k, v in extra.items() if v is not None})
+    return w
+
+
+def echo_workload(test, pattern, clients, size_bytes, spacing=None, messages=None, rate=None, duration=None):
+    w = {"kind": "echo", "family": "echo", "test": test, "pattern": pattern, "clients": clients,
+         "size_bytes": size_bytes}
+    extra = {"spacing_s": spacing} if pattern == "connect" else \
+            {"messages": messages} if pattern == "burst" else \
+            {"rate_per_s": rate, "duration_s": duration} if pattern == "stream" else {}
+    w.update({k: v for k, v in extra.items() if v not in (None, "")})
     return w
 
 
@@ -286,7 +296,12 @@ def from_csvs(folder, with_facts=True):
                     if image not in facts:
                         facts[image] = server_facts(image) if with_facts else {}
                     variant = r.get("Variant", "") or ""
-                    if family == "websocket":
+                    if family == "echo":
+                        workload = echo_workload(r.get("Test Type", ""), r.get("Pattern", ""), r.get("Num Clients", ""),
+                                                 r.get("Message Size (B)", ""), r.get("Spacing (s)") or None,
+                                                 r.get("Messages per Client") or None, r.get("Rate (msg/s)") or None,
+                                                 r.get("Duration (s)") or None)
+                    elif family == "websocket":
                         workload = websocket_workload(r.get("Test Type", ""), r.get("Pattern", ""), r.get("Num Clients", ""),
                                                       r.get("Message Size (KB)", ""), r.get("Rate (msg/s)") or None,
                                                       r.get("Bursts") or None, r.get("Interval (s)") or None,

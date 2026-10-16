@@ -73,8 +73,8 @@ def _list(item_check, what):
     return check
 
 
-MEASUREMENT_KINDS = ("static", "dynamic", "websocket", "concurrency", "payload")
-SERVER_TYPES = ("static", "dynamic", "websocket")
+MEASUREMENT_KINDS = ("static", "dynamic", "websocket", "concurrency", "payload", "echo")
+SERVER_TYPES = ("static", "dynamic", "websocket", "echo")
 
 
 def _kind(v):
@@ -237,10 +237,11 @@ SCHEMA = {
 
     # --- What to measure ---
     "MEASURE": dict(default=" ".join(MEASUREMENT_KINDS), check=_list(_kind, "measurement kind"),
-        unit="kinds, separated by spaces: static dynamic websocket concurrency payload",
+        unit="kinds, separated by spaces: static dynamic websocket concurrency payload echo",
         help="Which kinds of measurement to run. static/dynamic: HTTP load levels (HTTP_REQUESTS) on the\n"
              "static and dynamic HTTP servers; websocket: burst and stream tests; concurrency and payload:\n"
-             "the WebSocket client-count and message-size sweeps. A type on the command line\n"
+             "the WebSocket client-count and message-size sweeps; echo: the TCP echo tests (ECHO_*) on the\n"
+             "echo servers. A type on the command line\n"
              "(make run-static ...) takes precedence over this setting."),
     "SERVERS": dict(default="", check=_servers, unit="names separated by spaces, or empty = all servers found",
         help="Which servers to measure. Empty = every server found in BENCHMARKS_DIR (a folder with a\n"
@@ -462,6 +463,29 @@ SCHEMA = {
         help="WebSocket payload test: number of clients."),
     "WS_PAYLOAD_SIZES_KB": dict(default="8 1024 65536", check=_list(_int(1), "size"),
         unit="KB per message, separated by spaces", help="WebSocket payload test: message sizes."),
+    "ECHO_CONNECT_CLIENTS": dict(default="10 100 1000", check=_list(_int(1), "client count"),
+        unit="client counts, separated by spaces",
+        help="Echo connect test (the MIPRO 2024 echo paper): this many clients each connect, send one message,\n"
+             "wait for its echo and disconnect."),
+    "ECHO_CONNECT_SPACING_SECONDS": dict(default="0.1 0", check=_list(_number(0), "spacing"),
+        unit="seconds, separated by spaces",
+        help="Echo connect test: seconds between client starts. 0.1 = the paper's 'sleep' runs, 0 = 'nosleep'\n"
+             "(all clients at once). Each spacing is its own measurement."),
+    "ECHO_BURST_CLIENTS": dict(default="100", check=_list(_int(1), "client count"),
+        unit="client counts, separated by spaces",
+        help="Echo burst test: clients that keep one connection and send their messages back to back."),
+    "ECHO_BURST_MESSAGES": dict(default="1000", check=_list(_int(1), "count"),
+        unit="messages per client, separated by spaces", help="Echo burst test: messages each client sends."),
+    "ECHO_STREAM_CLIENTS": dict(default="100", check=_list(_int(1), "client count"),
+        unit="client counts, separated by spaces",
+        help="Echo stream test: clients that keep one connection and send at a fixed rate."),
+    "ECHO_STREAM_RATE_PER_SECOND": dict(default="10", check=_list(_int(1), "rate"),
+        unit="messages per second per client, separated by spaces", help="Echo stream test: sending rate."),
+    "ECHO_STREAM_DURATION_SECONDS": dict(default="10", check=_list(_int(1), "duration"),
+        unit="seconds, separated by spaces", help="Echo stream test: how long each client sends."),
+    "ECHO_SIZES_BYTES": dict(default="15", check=_list(_int(1), "size"),
+        unit="bytes per message, separated by spaces",
+        help="Echo tests: message sizes. 15 = the paper's message \"Hello, Servers!\"."),
 
     # --- Load and energy measurement ---
     "HTTP_MAX_WORKERS": dict(default="100", check=_workers, unit="threads, 1 or more, or 'system'",
@@ -584,7 +608,7 @@ def load(path):
 # One line per setting, for the example files (the full text is in docs/CONFIG.md)
 SHORT = {
     "MACHINE": "machine profile: minimal | tolerable | remote | cloud | untouched (configs/machine/), a .config file, or none",
-    "MEASURE": "kinds: static dynamic websocket concurrency payload",
+    "MEASURE": "kinds: static dynamic websocket concurrency payload echo",
     "SERVERS": "server folder names, or TYPE:IMAGE; empty = every server found",
     "VARIANTS": "also measure each server with these container settings, e.g. nobw:ERL_FLAGS=+sbwt none",
     "DEPLOY": "container | native | container native (each server both ways; native = no Docker)",
@@ -636,6 +660,14 @@ SHORT = {
     "WS_CONCURRENCY_SIZE_KB": "concurrency test: message size (KB)",
     "WS_PAYLOAD_CLIENTS": "payload test: client count",
     "WS_PAYLOAD_SIZES_KB": "payload test: message sizes (KB)",
+    "ECHO_CONNECT_CLIENTS": "echo connect test (one message per connection): client counts",
+    "ECHO_CONNECT_SPACING_SECONDS": "echo connect test: seconds between client starts (0.1 = sleep, 0 = nosleep)",
+    "ECHO_BURST_CLIENTS": "echo burst test: client counts",
+    "ECHO_BURST_MESSAGES": "echo burst test: messages per client",
+    "ECHO_STREAM_CLIENTS": "echo stream test: client counts",
+    "ECHO_STREAM_RATE_PER_SECOND": "echo stream test: messages per second per client",
+    "ECHO_STREAM_DURATION_SECONDS": "echo stream test: seconds each client sends",
+    "ECHO_SIZES_BYTES": "echo tests: message sizes (bytes)",
     "HTTP_MAX_WORKERS": "parallel HTTP requests (threads), or system",
     "HTTP_CONNECTION": "reuse = one kept-alive connection per worker, per-request = a new one each time",
     "SCAPH_STEP_MS": "Scaphandre sampling step (ms)",
@@ -655,6 +687,9 @@ EXAMPLE_LAYOUT = [
      ["WS_BURST_CLIENTS", "WS_BURST_SIZES_KB", "WS_BURST_BURSTS", "WS_BURST_INTERVAL_SECONDS",
       "WS_STREAM_CLIENTS", "WS_STREAM_SIZES_KB", "WS_STREAM_RATE_PER_SECOND", "WS_STREAM_DURATION_SECONDS",
       "WS_CONCURRENCY_CLIENTS", "WS_CONCURRENCY_SIZE_KB", "WS_PAYLOAD_CLIENTS", "WS_PAYLOAD_SIZES_KB"]),
+    ("Echo workloads (TCP echo servers; --super-quick keeps one short test each)",
+     ["ECHO_CONNECT_CLIENTS", "ECHO_CONNECT_SPACING_SECONDS", "ECHO_BURST_CLIENTS", "ECHO_BURST_MESSAGES",
+      "ECHO_STREAM_CLIENTS", "ECHO_STREAM_RATE_PER_SECOND", "ECHO_STREAM_DURATION_SECONDS", "ECHO_SIZES_BYTES"]),
 ]
 
 # docs/CONFIG.md: every setting, the machine ones grouped as in the profiles

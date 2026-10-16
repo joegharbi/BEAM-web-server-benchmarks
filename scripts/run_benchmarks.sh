@@ -38,6 +38,7 @@ case "${1:-}" in
         echo "  static      Run static container benchmarks"
         echo "  dynamic     Run dynamic container benchmarks"
         echo "  websocket   Run WebSocket benchmarks"
+        echo "  echo        Run TCP echo benchmarks (connect, burst, stream)"
         echo ""
         echo "Options:"
         echo "  --quick     Run quick benchmarks with reduced parameters"
@@ -137,6 +138,16 @@ quick_payload_sizes=(8)
 # Pause between WebSocket bursts (also concurrency and payload tests); WS_BURST_INTERVAL_SECONDS in a config
 WS_BURST_INTERVAL=0.5
 
+# Echo tests (TCP echo servers, benchmarks/echo/); ECHO_* in a config
+full_echo_connect_clients=(10 100 1000)
+full_echo_connect_spacings=(0.1 0)
+full_echo_burst_clients=(100)
+full_echo_burst_messages=(1000)
+full_echo_stream_clients=(100)
+full_echo_stream_rates=(10)
+full_echo_stream_durations=(10)
+full_echo_sizes=(15)
+
 # Concurrency parameters (balanced)
 concurrency_clients=(100 1000 5000)
 concurrency_size=8
@@ -162,6 +173,7 @@ BENCH_PHASE=""
 BENCH_PLAN_STATIC=()
 BENCH_PLAN_DYNAMIC=()
 BENCH_PLAN_WEBSOCKET=()
+BENCH_PLAN_ECHO=()
 
 print_status() {
     local status=$1
@@ -193,6 +205,16 @@ bench_ws_burst_stream_steps_per_container() {
         b=$((${#full_ws_burst_clients[@]} * ${#full_ws_burst_sizes[@]} * ${#full_ws_burst_bursts[@]} * ${#full_ws_burst_intervals[@]}))
         s=$((${#full_ws_stream_clients[@]} * ${#full_ws_stream_sizes[@]} * ${#full_ws_stream_rates[@]} * ${#full_ws_stream_durations[@]}))
         echo $((b + s))
+    fi
+}
+
+bench_echo_steps_per_container() {
+    if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then echo 3          # one connect, one burst, one stream
+    else
+        local n=${#full_echo_sizes[@]}
+        echo $(( n * (${#full_echo_connect_clients[@]} * ${#full_echo_connect_spacings[@]}
+                      + ${#full_echo_burst_clients[@]} * ${#full_echo_burst_messages[@]}
+                      + ${#full_echo_stream_clients[@]} * ${#full_echo_stream_rates[@]} * ${#full_echo_stream_durations[@]}) ))
     fi
 }
 
@@ -269,8 +291,11 @@ bench_init_run_plan() {
     BENCH_PLAN_STATIC=()
     BENCH_PLAN_DYNAMIC=()
     BENCH_PLAN_WEBSOCKET=()
-    local H bs c p ns nd nw
+    BENCH_PLAN_ECHO=()
+    local H bs c p e ns nd nw ne
     H=$(bench_http_steps_per_container)
+    e=$(bench_echo_steps_per_container)
+    ne=0
     bs=$(bench_ws_burst_stream_steps_per_container)
     c=$(bench_ws_concurrency_steps_per_container)
     p=$(bench_ws_payload_steps_per_container)
@@ -279,22 +304,25 @@ bench_init_run_plan() {
     nw=0
 
     if [[ $RUN_ALL -eq 1 ]]; then
-        local sa da wa
+        local sa da wa ea
         if [ "$BENCH_SELECTED" = 1 ]; then
-            sa=("${SELECT_STATIC[@]}"); da=("${SELECT_DYNAMIC[@]}"); wa=("${SELECT_WEBSOCKET[@]}")
+            sa=("${SELECT_STATIC[@]}"); da=("${SELECT_DYNAMIC[@]}"); wa=("${SELECT_WEBSOCKET[@]}"); ea=("${SELECT_ECHO[@]}")
         else
             sa=($(discover_containers static))
             da=($(discover_containers dynamic))
             wa=($(discover_containers websocket))
+            ea=($(discover_containers echo))
         fi
+        BENCH_PLAN_ECHO=("${ea[@]}")
+        ne=${#ea[@]}
         BENCH_PLAN_STATIC=("${sa[@]}")
         BENCH_PLAN_DYNAMIC=("${da[@]}")
         BENCH_PLAN_WEBSOCKET=("${wa[@]}")
         ns=${#sa[@]}
         nd=${#da[@]}
         nw=${#wa[@]}
-        bs=$(( bs * BENCH_DO_WS )); c=$(( c * BENCH_DO_CONC )); p=$(( p * BENCH_DO_PAYLOAD ))
-        BENCH_TOTAL_STEPS=$(( ns * H + nd * H + nw * bs + nw * c + nw * p ))
+        bs=$(( bs * BENCH_DO_WS )); c=$(( c * BENCH_DO_CONC )); p=$(( p * BENCH_DO_PAYLOAD )); e=$(( e * BENCH_DO_ECHO ))
+        BENCH_TOTAL_STEPS=$(( ns * H + nd * H + nw * bs + nw * c + nw * p + ne * e ))
     else
         case $TARGET_TYPE in
             "static"|"--static")
@@ -329,6 +357,14 @@ bench_init_run_plan() {
                 nw=${#ta[@]}
                 BENCH_TOTAL_STEPS=$(( nw * c ))
                 ;;
+            "echo"|"--echo")
+                local ta=("${TARGET_IMAGES[@]}")
+                [ ${#ta[@]} -eq 0 ] && ta=($(discover_containers echo))
+                TARGET_IMAGES=("${ta[@]}")
+                BENCH_PLAN_ECHO=("${ta[@]}")
+                ne=${#ta[@]}
+                BENCH_TOTAL_STEPS=$(( ne * e ))
+                ;;
             "payload")
                 local ta=("${TARGET_IMAGES[@]}")
                 [ ${#ta[@]} -eq 0 ] && ta=($(discover_containers websocket))
@@ -346,7 +382,7 @@ bench_init_run_plan() {
     printf "\n${BLUE}──────────────── Run plan ─────────────────${NC}\n"
     print_status "INFO" "Log file (full output): $LOG_FILE"
     print_status "INFO" "Results directory: $RESULTS_DIR"
-    printf "${BLUE}[INFO]${NC} Total measurement steps (each step = one HTTP or WebSocket measurement): ${GREEN}%s${NC}\n" "$BENCH_TOTAL_STEPS"
+    printf "${BLUE}[INFO]${NC} Total measurement steps (each step = one HTTP, WebSocket or echo measurement): ${GREEN}%s${NC}\n" "$BENCH_TOTAL_STEPS"
     if [[ $RUN_ALL -eq 1 ]]; then
         sa=("${BENCH_PLAN_STATIC[@]}")
         da=("${BENCH_PLAN_DYNAMIC[@]}")
@@ -359,6 +395,8 @@ bench_init_run_plan() {
         printf "${BLUE}[INFO]${NC}   · WebSocket grid:  %s × %s (burst+stream invocations) = %s\n" "$nw" "$bs" "$((nw * bs))"
         printf "${BLUE}[INFO]${NC}   · WS concurrency:  %s × %s = %s\n" "$nw" "$c" "$((nw * c))"
         printf "${BLUE}[INFO]${NC}   · WS payload:      %s × %s = %s\n" "$nw" "$p" "$((nw * p))"
+        ne=${#BENCH_PLAN_ECHO[@]}
+        printf "${BLUE}[INFO]${NC}   · Echo:            %s × %s (connect+burst+stream) = %s\n" "$ne" "$e" "$((ne * e))"
         if [[ $QUICK_BENCH -eq 1 ]] || [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
             print_status "INFO" "Note: --quick / --super-quick only reduce HTTP request levels; WebSocket burst/stream grid uses full matrix unless --super-quick (then 1 burst + 1 stream per server)."
         fi
@@ -440,6 +478,7 @@ function discover_containers() {
         "static")  base="$BENCHMARKS_DIR/static" ;;
         "dynamic") base="$BENCHMARKS_DIR/dynamic" ;;
         "websocket") base="$BENCHMARKS_DIR/websocket" ;;
+        "echo") base="$BENCHMARKS_DIR/echo" ;;
     esac
     if [ -n "$base" ]; then
         while IFS= read -r d; do
@@ -561,7 +600,7 @@ fi
 RESULTS_PARENT_DIR="results"
 TIMESTAMP=$(date +"%Y-%m-%d_%H%M%S")
 RESULTS_DIR="${RESUME_DIR:-$RESULTS_PARENT_DIR/$TIMESTAMP}"
-mkdir -p "$RESULTS_DIR/static" "$RESULTS_DIR/dynamic" "$RESULTS_DIR/websocket" logs
+mkdir -p "$RESULTS_DIR/static" "$RESULTS_DIR/dynamic" "$RESULTS_DIR/websocket" "$RESULTS_DIR/echo" logs
 
 LOG_FILE="logs/run_${TIMESTAMP}.log"
 echo "Logging to $LOG_FILE"
@@ -647,6 +686,14 @@ if [ -n "${CONFIG_FILE:-}" ]; then
     concurrency_size="$CFG_WS_CONCURRENCY_SIZE_KB"
     payload_clients="$CFG_WS_PAYLOAD_CLIENTS"
     read -r -a payload_sizes <<< "$CFG_WS_PAYLOAD_SIZES_KB"
+    read -r -a full_echo_connect_clients <<< "$CFG_ECHO_CONNECT_CLIENTS"
+    read -r -a full_echo_connect_spacings <<< "$CFG_ECHO_CONNECT_SPACING_SECONDS"
+    read -r -a full_echo_burst_clients <<< "$CFG_ECHO_BURST_CLIENTS"
+    read -r -a full_echo_burst_messages <<< "$CFG_ECHO_BURST_MESSAGES"
+    read -r -a full_echo_stream_clients <<< "$CFG_ECHO_STREAM_CLIENTS"
+    read -r -a full_echo_stream_rates <<< "$CFG_ECHO_STREAM_RATE_PER_SECOND"
+    read -r -a full_echo_stream_durations <<< "$CFG_ECHO_STREAM_DURATION_SECONDS"
+    read -r -a full_echo_sizes <<< "$CFG_ECHO_SIZES_BYTES"
     # Raw Scaphandre logs go into this measurement's own folder; keep or delete after parsing
     export MEASURE_RAW_DIR="$RESULTS_DIR/raw"
     export MEASURE_RAW_DATA="$CFG_RAW_DATA"
@@ -668,6 +715,7 @@ case "${1:-}" in
         echo "  static      Run static container benchmarks"
         echo "  dynamic     Run dynamic container benchmarks"
         echo "  websocket   Run WebSocket benchmarks"
+        echo "  echo        Run TCP echo benchmarks (connect, burst, stream)"
         echo ""
         echo "Options:"
         echo "  --quick     Run quick benchmarks with reduced parameters"
@@ -731,7 +779,9 @@ if [[ $# -gt 0 ]]; then
             echo "Use the Docker image name (e.g. ws-erlang-yaws-27, dy-erlang-pure-27, st-erlang-cowboy-27)"
             exit 1
         fi
-        if [[ "$SINGLE_DIR" == *"/websocket/"* ]]; then
+        if [[ "$SINGLE_DIR" == *"/echo/"* ]]; then
+            TARGET_TYPE="echo"
+        elif [[ "$SINGLE_DIR" == *"/websocket/"* ]]; then
             TARGET_TYPE="websocket"
         elif [[ "$SINGLE_DIR" == *"/dynamic/"* ]]; then
             TARGET_TYPE="dynamic"
@@ -751,15 +801,16 @@ fi
 
 # What to measure, from the config (MEASURE, SERVERS) when the command line does not choose.
 # Resolved and checked here, before anything starts: every name must exist, every image be built.
-BENCH_DO_STATIC=1; BENCH_DO_DYNAMIC=1; BENCH_DO_WS=1; BENCH_DO_CONC=1; BENCH_DO_PAYLOAD=1
+BENCH_DO_STATIC=1; BENCH_DO_DYNAMIC=1; BENCH_DO_WS=1; BENCH_DO_CONC=1; BENCH_DO_PAYLOAD=1; BENCH_DO_ECHO=1
 declare -A BENCH_VARIANT_OF=()     # variant image -> variant name (the "Variant" column)
 declare -A BENCH_NATIVE_OF=()      # native item <image>-native -> the image it runs (DEPLOY)
 BENCH_SELECTED=0
-SELECT_STATIC=(); SELECT_DYNAMIC=(); SELECT_WEBSOCKET=()
+SELECT_STATIC=(); SELECT_DYNAMIC=(); SELECT_WEBSOCKET=(); SELECT_ECHO=()
 
 bench_type_of_dir() {
     case "$1" in
         */websocket/*) echo websocket ;;
+        */echo/*) echo echo ;;
         */dynamic/*) echo dynamic ;;
         */static/*) echo static ;;
     esac
@@ -841,10 +892,12 @@ bench_select_from_config() {
     [[ "$kinds" == *" websocket "* ]] || BENCH_DO_WS=0
     [[ "$kinds" == *" concurrency "* ]] || BENCH_DO_CONC=0
     [[ "$kinds" == *" payload "* ]] || BENCH_DO_PAYLOAD=0
+    [[ "$kinds" == *" echo "* ]] || BENCH_DO_ECHO=0
     if [ -z "$CFG_SERVERS" ]; then
         read -r -a SELECT_STATIC <<< "$(discover_containers static)"
         read -r -a SELECT_DYNAMIC <<< "$(discover_containers dynamic)"
         read -r -a SELECT_WEBSOCKET <<< "$(discover_containers websocket)"
+        read -r -a SELECT_ECHO <<< "$(discover_containers echo)"
     else
         for s in $CFG_SERVERS; do
             if [[ "$s" == *:* ]]; then
@@ -853,7 +906,7 @@ bench_select_from_config() {
                 img="$s"; dir=$(find_container_dir "$img")
                 if [ -z "$dir" ]; then
                     echo -e "${RED}[ERROR]${NC} SERVERS: '$s' is not a server folder under $BENCHMARKS_DIR."
-                    echo "For an image built on this machine without a folder, give its type: static:$s, dynamic:$s or websocket:$s"
+                    echo "For an image built on this machine without a folder, give its type: static:$s, dynamic:$s, websocket:$s or echo:$s"
                     bench_stop_early
                 fi
                 t=$(bench_type_of_dir "$dir")
@@ -862,17 +915,19 @@ bench_select_from_config() {
                 static) SELECT_STATIC+=("$img") ;;
                 dynamic) SELECT_DYNAMIC+=("$img") ;;
                 websocket) SELECT_WEBSOCKET+=("$img") ;;
+                echo) SELECT_ECHO+=("$img") ;;
             esac
         done
     fi
     [ "$BENCH_DO_STATIC" = 1 ] || SELECT_STATIC=()
     [ "$BENCH_DO_DYNAMIC" = 1 ] || SELECT_DYNAMIC=()
     [ "$BENCH_DO_WS$BENCH_DO_CONC$BENCH_DO_PAYLOAD" != "000" ] || SELECT_WEBSOCKET=()
-    if [ $(( ${#SELECT_STATIC[@]} + ${#SELECT_DYNAMIC[@]} + ${#SELECT_WEBSOCKET[@]} )) -eq 0 ]; then
+    [ "$BENCH_DO_ECHO" = 1 ] || SELECT_ECHO=()
+    if [ $(( ${#SELECT_STATIC[@]} + ${#SELECT_DYNAMIC[@]} + ${#SELECT_WEBSOCKET[@]} + ${#SELECT_ECHO[@]} )) -eq 0 ]; then
         echo -e "${RED}[ERROR]${NC} Nothing to measure: no server of the kinds in MEASURE ($CFG_MEASURE) among SERVERS (${CFG_SERVERS:-all found in $BENCHMARKS_DIR})."
         bench_stop_early
     fi
-    for img in "${SELECT_STATIC[@]}" "${SELECT_DYNAMIC[@]}" "${SELECT_WEBSOCKET[@]}"; do
+    for img in "${SELECT_STATIC[@]}" "${SELECT_DYNAMIC[@]}" "${SELECT_WEBSOCKET[@]}" "${SELECT_ECHO[@]}"; do
         docker image inspect "$img" >/dev/null 2>&1 || missing+=("$img")
     done
     if [ ${#missing[@]} -gt 0 ]; then
@@ -883,7 +938,7 @@ bench_select_from_config() {
     local stale
     stale=$("$PYTHON_PATH" -c 'import sys; sys.path.insert(0, "tools"); import run_metadata as m
 for name, why in m.stale_images(sys.argv[1], sys.argv[2:]): print(f"  {name}: {why}")' \
-        "$BENCHMARKS_DIR" "${SELECT_STATIC[@]}" "${SELECT_DYNAMIC[@]}" "${SELECT_WEBSOCKET[@]}")
+        "$BENCHMARKS_DIR" "${SELECT_STATIC[@]}" "${SELECT_DYNAMIC[@]}" "${SELECT_WEBSOCKET[@]}" "${SELECT_ECHO[@]}")
     if [ -n "$stale" ]; then
         echo -e "${RED}[ERROR]${NC} These images are older than their recipe. Rebuild them first (make build):"
         echo "$stale"
@@ -893,11 +948,13 @@ for name, why in m.stale_images(sys.argv[1], sys.argv[2:]): print(f"  {name}: {w
         bench_add_variants SELECT_STATIC
         bench_add_variants SELECT_DYNAMIC
         bench_add_variants SELECT_WEBSOCKET
+        bench_add_variants SELECT_ECHO
     fi
     if [[ " ${CFG_DEPLOY:-container} " == *" native "* ]]; then
         bench_add_native SELECT_STATIC
         bench_add_native SELECT_DYNAMIC
         bench_add_native SELECT_WEBSOCKET
+        bench_add_native SELECT_ECHO
         local problems
         problems=$("$PYTHON_PATH" ./tools/native_server.py check "${BENCH_NATIVE_OF[@]}")
         if [ -n "$problems" ]; then
@@ -1034,6 +1091,76 @@ run_websocket_tests() {
             done
         done
     fi
+}
+
+# Echo tests of one server (TCP echo, tools/measure_echo.py): connect (the MIPRO 2024 echo paper: one message
+# per connection, clients started SPACING s apart), then burst and stream on long-lived connections
+run_echo_tests() {
+    local image=$1 host_port=$2
+    local port_mapping
+    port_mapping=$(get_container_port_mapping "$image" "$host_port")
+    local -a sizes=("${full_echo_sizes[@]}") cc=("${full_echo_connect_clients[@]}") cs=("${full_echo_connect_spacings[@]}")
+    local -a bc=("${full_echo_burst_clients[@]}") bm=("${full_echo_burst_messages[@]}")
+    local -a sc=("${full_echo_stream_clients[@]}") sr=("${full_echo_stream_rates[@]}") sd=("${full_echo_stream_durations[@]}")
+    if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
+        sizes=(15); cc=(10); cs=(0); bc=(5); bm=(10); sc=(5); sr=(1); sd=(1)
+    fi
+    local size clients spacing messages rate duration
+    for size in "${sizes[@]}"; do
+        for clients in "${cc[@]}"; do
+            for spacing in "${cs[@]}"; do
+                print_bench_progress "${image} | CONNECT | clients=$clients size=${size}B spacing=${spacing}s"
+                bench_measure ./tools/measure_echo.py --server_image "$image" --port_mapping "$port_mapping" \
+                    --pattern connect --clients "$clients" --size_bytes "$size" --spacing "$spacing" \
+                    --output_csv "$RESULTS_DIR/echo/${image}_connect.csv" \
+                    --measurement_type "connect_${clients}_${size}_${spacing}"
+            done
+        done
+        for clients in "${bc[@]}"; do
+            for messages in "${bm[@]}"; do
+                print_bench_progress "${image} | BURST | clients=$clients size=${size}B messages=$messages"
+                bench_measure ./tools/measure_echo.py --server_image "$image" --port_mapping "$port_mapping" \
+                    --pattern burst --clients "$clients" --size_bytes "$size" --messages "$messages" \
+                    --output_csv "$RESULTS_DIR/echo/${image}_burst.csv" \
+                    --measurement_type "burst_${clients}_${size}_${messages}"
+            done
+        done
+        for clients in "${sc[@]}"; do
+            for rate in "${sr[@]}"; do
+                for duration in "${sd[@]}"; do
+                    print_bench_progress "${image} | STREAM | clients=$clients size=${size}B rate=$rate duration=${duration}s"
+                    bench_measure ./tools/measure_echo.py --server_image "$image" --port_mapping "$port_mapping" \
+                        --pattern stream --clients "$clients" --size_bytes "$size" --rate "$rate" --duration "$duration" \
+                        --output_csv "$RESULTS_DIR/echo/${image}_stream.csv" \
+                        --measurement_type "stream_${clients}_${size}_${rate}_${duration}"
+                done
+            done
+        done
+    done
+}
+
+# Every echo server of the plan, one after the other (the same steps as the other kinds)
+bench_run_echo_servers() {
+    BENCH_PHASE="echo"
+    BENCH_CTOTAL=${#BENCH_PLAN_ECHO[@]}
+    if [ ${#BENCH_PLAN_ECHO[@]} -gt 0 ]; then print_section "Echo Tests"; fi
+    local _si=0 container
+    for container in "${BENCH_PLAN_ECHO[@]}"; do
+        _si=$((_si + 1))
+        BENCH_CIDX=$_si
+        if ! check_port_free "$HOST_PORT"; then
+            echo -e "${RED}[ERROR]${NC} Port $HOST_PORT is already in use. Please free the port and rerun the benchmark."
+            exit 1
+        fi
+        if docker ps -a --format '{{.Names}}' | grep -q "^$container$"; then
+            echo -e "${BLUE}[INFO]${NC} Stopping and removing dangling container: $container"
+            docker stop "$container" > /dev/null 2>&1 || true
+            docker rm "$container" > /dev/null 2>&1 || true
+            sleep 1
+        fi
+        run_echo_tests "$container" "$HOST_PORT"
+        sleep 1
+    done
 }
 
 # Helper to print a short summary from the last line of a CSV file
@@ -1333,8 +1460,9 @@ bench_write_plan() {
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then levels=("${super_quick_http_requests[@]}")
     elif [[ $QUICK_BENCH -eq 1 ]]; then levels=("${quick_http_requests[@]}")
     else levels=("${full_http_requests[@]}"); fi
-    local ws=0 conc=0 pay=0
+    local ws=0 conc=0 pay=0 echo_steps=0
     case "$TARGET_TYPE" in
+        echo|--echo) echo_steps=$(bench_echo_steps_per_container) ;;
         websocket|--websocket) ws=$(bench_ws_burst_stream_steps_per_container) ;;
         concurrency) conc=$(bench_ws_concurrency_steps_per_container) ;;
         payload) pay=$(bench_ws_payload_steps_per_container) ;;
@@ -1342,15 +1470,16 @@ bench_write_plan() {
                ws=$(( $(bench_ws_burst_stream_steps_per_container) * BENCH_DO_WS ))
                conc=$(( $(bench_ws_concurrency_steps_per_container) * BENCH_DO_CONC ))
                pay=$(( $(bench_ws_payload_steps_per_container) * BENCH_DO_PAYLOAD ))
+               echo_steps=$(( $(bench_echo_steps_per_container) * BENCH_DO_ECHO ))
            fi ;;
     esac
     "$PYTHON_PATH" - "$RESULTS_DIR/plan.json" <<PLAN || print_status "WARNING" "Could not write plan.json"
 import json, sys
 json.dump({"name": "$(basename "${CONFIG_FILE%.config}")", "total": $BENCH_TOTAL_STEPS, "repeats": $CFG_REPEATS,
            "servers": {"static": ${#BENCH_PLAN_STATIC[@]}, "dynamic": ${#BENCH_PLAN_DYNAMIC[@]},
-                       "websocket": ${#BENCH_PLAN_WEBSOCKET[@]}},
+                       "websocket": ${#BENCH_PLAN_WEBSOCKET[@]}, "echo": ${#BENCH_PLAN_ECHO[@]}},
            "http_levels": [$(IFS=,; echo "${levels[*]}")],
-           "ws_steps": {"websocket": $ws, "concurrency": $conc, "payload": $pay}}, open(sys.argv[1], "w"), indent=1)
+           "ws_steps": {"websocket": $ws, "concurrency": $conc, "payload": $pay, "echo": $echo_steps}}, open(sys.argv[1], "w"), indent=1)
 PLAN
 }
 
@@ -1362,6 +1491,7 @@ bench_family() {
         "WebSocket burst/stream") echo websocket ;;
         "WebSocket concurrency") echo concurrency ;;
         "WebSocket payload") echo payload ;;
+        "echo") echo echo ;;
         *) echo other ;;
     esac
 }
@@ -1887,7 +2017,7 @@ except (OSError, ValueError):
     # The ID of every image before the first run, so a resume can tell whether one was rebuilt since
     if [ -z "$RESUME_DIR" ]; then
         "$PYTHON_PATH" ./tools/run_metadata.py images "$RESULTS_DIR" \
-            "${BENCH_PLAN_STATIC[@]}" "${BENCH_PLAN_DYNAMIC[@]}" "${BENCH_PLAN_WEBSOCKET[@]}" \
+            "${BENCH_PLAN_STATIC[@]}" "${BENCH_PLAN_DYNAMIC[@]}" "${BENCH_PLAN_WEBSOCKET[@]}" "${BENCH_PLAN_ECHO[@]}" \
             || print_status "WARNING" "Could not record the image IDs in metadata.json"
     fi
     BENCH_TOTAL_STEPS=$(( BENCH_TOTAL_STEPS * CFG_REPEATS ))
@@ -1900,6 +2030,7 @@ except (OSError, ValueError):
     local base_static=("${BENCH_PLAN_STATIC[@]}")
     local base_dynamic=("${BENCH_PLAN_DYNAMIC[@]}")
     local base_websocket=("${BENCH_PLAN_WEBSOCKET[@]}")
+    local base_echo=("${BENCH_PLAN_ECHO[@]}")
     local base_target_type="$TARGET_TYPE"
     local pass
     for ((pass = 1; pass <= CFG_REPEATS; pass++)); do
@@ -1909,17 +2040,19 @@ except (OSError, ValueError):
             mapfile -t BENCH_PLAN_STATIC < <(bench_shuffle "$pass" "${base_static[@]}")
             mapfile -t BENCH_PLAN_DYNAMIC < <(bench_shuffle "$pass" "${base_dynamic[@]}")
             mapfile -t BENCH_PLAN_WEBSOCKET < <(bench_shuffle "$pass" "${base_websocket[@]}")
+            mapfile -t BENCH_PLAN_ECHO < <(bench_shuffle "$pass" "${base_echo[@]}")
         fi
         if [ -n "${CFG_VARIANTS:-}" ] && [ "${CFG_VARIANT_ORDER:-separate}" = "separate" ]; then
             mapfile -t BENCH_PLAN_STATIC < <(bench_group_variants "$pass" "${BENCH_PLAN_STATIC[@]}")
             mapfile -t BENCH_PLAN_DYNAMIC < <(bench_group_variants "$pass" "${BENCH_PLAN_DYNAMIC[@]}")
             mapfile -t BENCH_PLAN_WEBSOCKET < <(bench_group_variants "$pass" "${BENCH_PLAN_WEBSOCKET[@]}")
+            mapfile -t BENCH_PLAN_ECHO < <(bench_group_variants "$pass" "${BENCH_PLAN_ECHO[@]}")
         fi
         # The order of every pass, so a drift over time can be checked afterwards.
         if [ -n "${CONFIG_FILE:-}" ]; then
             local sched="$RESULTS_DIR/schedule.txt"
             grep -q "^seed: " "$sched" 2>/dev/null || echo "seed: $CFG_SHUFFLE_SEED (shuffle=$CFG_SHUFFLE)" >> "$sched"
-            local order=("${BENCH_PLAN_STATIC[@]}" "${BENCH_PLAN_DYNAMIC[@]}" "${BENCH_PLAN_WEBSOCKET[@]}")
+            local order=("${BENCH_PLAN_STATIC[@]}" "${BENCH_PLAN_DYNAMIC[@]}" "${BENCH_PLAN_WEBSOCKET[@]}" "${BENCH_PLAN_ECHO[@]}")
             # Written once per pass, also when a resumed measurement reaches a pass for the first time
             grep -q "^pass $pass: " "$sched" 2>/dev/null || echo "pass $pass: ${order[*]}" >> "$sched"
         fi
@@ -2030,6 +2163,9 @@ bench_run_pass() {
             fi
             sleep 1
         done
+        if [ "$BENCH_DO_ECHO" = 1 ]; then
+            bench_run_echo_servers
+        fi
     else
         case $TARGET_TYPE in
             "static"|"--static")
@@ -2146,9 +2282,12 @@ bench_run_pass() {
                 done
                 BENCH_SUCCESS_TAIL="Payload completed"
                 ;;
+            "echo"|"--echo")
+                bench_run_echo_servers
+                ;;
             *)
                 echo "Unknown target type: $TARGET_TYPE"
-                echo "Valid types: static, dynamic, websocket"
+                echo "Valid types: static, dynamic, websocket, echo"
                 exit 1
                 ;;
         esac

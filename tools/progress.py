@@ -32,7 +32,8 @@ PRIOR_OVERHEAD_S = 67.0
 PRIOR_REQUESTS_PER_S = 800.0
 PRIOR_WS_S = 85.0
 HTTP = ("static", "dynamic")
-WS = ("websocket", "concurrency", "payload")
+WS = ("websocket", "concurrency", "payload", "echo")
+SERVER_GROUP = {"websocket": "websocket", "concurrency": "websocket", "payload": "websocket", "echo": "echo"}
 COLS = ("end", "duration", "pass", "family", "server", "level", "outcome", "csv")
 
 
@@ -66,8 +67,8 @@ def planned(plan):
     for fam in HTTP:
         n = plan["servers"].get(fam, 0)
         out += [(fam, str(lv), n * rep) for lv in plan["http_levels"]] if n else []
-    n = plan["servers"].get("websocket", 0)
     for fam in WS:
+        n = plan["servers"].get(SERVER_GROUP[fam], 0)
         steps = plan["ws_steps"].get(fam, 0)
         if n and steps:
             out.append((fam, "*", n * rep * steps))

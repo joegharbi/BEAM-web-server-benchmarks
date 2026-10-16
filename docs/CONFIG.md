@@ -34,11 +34,11 @@ Unit: profile name, .config file, or none
 
 ### `MEASURE`
 
-Default: `static dynamic websocket concurrency payload`
+Default: `static dynamic websocket concurrency payload echo`
 
-Which kinds of measurement to run. static/dynamic: HTTP load levels (HTTP_REQUESTS) on the static and dynamic HTTP servers; websocket: burst and stream tests; concurrency and payload: the WebSocket client-count and message-size sweeps. A type on the command line (make run-static ...) takes precedence over this setting.
+Which kinds of measurement to run. static/dynamic: HTTP load levels (HTTP_REQUESTS) on the static and dynamic HTTP servers; websocket: burst and stream tests; concurrency and payload: the WebSocket client-count and message-size sweeps; echo: the TCP echo tests (ECHO_*) on the echo servers. A type on the command line (make run-static ...) takes precedence over this setting.
 
-Unit: kinds, separated by spaces: static dynamic websocket concurrency payload
+Unit: kinds, separated by spaces: static dynamic websocket concurrency payload echo
 
 ### `SERVERS`
 
@@ -572,3 +572,69 @@ Default: `8 1024 65536`
 WebSocket payload test: message sizes.
 
 Unit: KB per message, separated by spaces
+
+## Echo workloads (TCP echo servers; --super-quick keeps one short test each)
+
+### `ECHO_CONNECT_CLIENTS`
+
+Default: `10 100 1000`
+
+Echo connect test (the MIPRO 2024 echo paper): this many clients each connect, send one message, wait for its echo and disconnect.
+
+Unit: client counts, separated by spaces
+
+### `ECHO_CONNECT_SPACING_SECONDS`
+
+Default: `0.1 0`
+
+Echo connect test: seconds between client starts. 0.1 = the paper's 'sleep' runs, 0 = 'nosleep' (all clients at once). Each spacing is its own measurement.
+
+Unit: seconds, separated by spaces
+
+### `ECHO_BURST_CLIENTS`
+
+Default: `100`
+
+Echo burst test: clients that keep one connection and send their messages back to back.
+
+Unit: client counts, separated by spaces
+
+### `ECHO_BURST_MESSAGES`
+
+Default: `1000`
+
+Echo burst test: messages each client sends.
+
+Unit: messages per client, separated by spaces
+
+### `ECHO_STREAM_CLIENTS`
+
+Default: `100`
+
+Echo stream test: clients that keep one connection and send at a fixed rate.
+
+Unit: client counts, separated by spaces
+
+### `ECHO_STREAM_RATE_PER_SECOND`
+
+Default: `10`
+
+Echo stream test: sending rate.
+
+Unit: messages per second per client, separated by spaces
+
+### `ECHO_STREAM_DURATION_SECONDS`
+
+Default: `10`
+
+Echo stream test: how long each client sends.
+
+Unit: seconds, separated by spaces
+
+### `ECHO_SIZES_BYTES`
+
+Default: `15`
+
+Echo tests: message sizes. 15 = the paper's message "Hello, Servers!".
+
+Unit: bytes per message, separated by spaces

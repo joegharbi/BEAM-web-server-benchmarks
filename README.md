@@ -12,7 +12,8 @@ We are investigating whether this reflects the servers or the measurement setup.
 
 ## Overview
 
-- **Auto-discovery**: Finds all containers under `benchmarks/static/`, `benchmarks/dynamic/`, `benchmarks/websocket/`. No hardcoded lists.
+- **Auto-discovery**: Finds all containers under `benchmarks/static/`, `benchmarks/dynamic/`, `benchmarks/websocket/`, `benchmarks/echo/`. No hardcoded lists.
+- **Echo**: TCP echo servers (C, Java, Erlang; `benchmarks/echo/`) with three tests: *connect* (the MIPRO 2024 echo paper: one message per connection, clients started 0.1 s apart or all at once), *burst* and *stream* on long-lived connections (`MEASURE=echo`, settings `ECHO_*`).
 - **Health checks**: Validates startup, HTTP/WebSocket response, large payloads, and ulimit before benchmarking.
 - **Measurement**: Runs containers under load with Scaphandre for energy and performance metrics.
 - **Visualization**: GUI for plotting results from CSV output.
@@ -38,7 +39,7 @@ Verify: `make check-tools`
 make init              # venv + deps + build + health check
 make run-super-quick   # Fast validation (1 request count per container)
 make run-quick         # 3 request counts per container
-make run-all           # Full suite (static, dynamic, websocket)
+make run-all           # Full suite (static, dynamic, websocket, echo)
 make graph             # Interactive result visualization
 ```
 

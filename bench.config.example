@@ -8,8 +8,8 @@
 MACHINE=minimal
 
 # ===== What to measure =====
-# kinds: static dynamic websocket concurrency payload
-MEASURE=static dynamic websocket concurrency payload
+# kinds: static dynamic websocket concurrency payload echo
+MEASURE=static dynamic websocket concurrency payload echo
 # server folder names, or TYPE:IMAGE; empty = every server found
 SERVERS=
 # also measure each server with these container settings, e.g. nobw:ERL_FLAGS=+sbwt none
@@ -78,3 +78,21 @@ WS_CONCURRENCY_SIZE_KB=8
 WS_PAYLOAD_CLIENTS=5
 # payload test: message sizes (KB)
 WS_PAYLOAD_SIZES_KB=8 1024 65536
+
+# ===== Echo workloads (TCP echo servers; --super-quick keeps one short test each) =====
+# echo connect test (one message per connection): client counts
+ECHO_CONNECT_CLIENTS=10 100 1000
+# echo connect test: seconds between client starts (0.1 = sleep, 0 = nosleep)
+ECHO_CONNECT_SPACING_SECONDS=0.1 0
+# echo burst test: client counts
+ECHO_BURST_CLIENTS=100
+# echo burst test: messages per client
+ECHO_BURST_MESSAGES=1000
+# echo stream test: client counts
+ECHO_STREAM_CLIENTS=100
+# echo stream test: messages per second per client
+ECHO_STREAM_RATE_PER_SECOND=10
+# echo stream test: seconds each client sends
+ECHO_STREAM_DURATION_SECONDS=10
+# echo tests: message sizes (bytes)
+ECHO_SIZES_BYTES=15

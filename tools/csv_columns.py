@@ -21,9 +21,13 @@ RUN = ["Container Name", "Variant", "Deploy", "Repeat", "Session", "Measured At 
 HTTP_WORKLOAD = ["Type", "Total Requests", "HTTP Max Workers", "HTTP Connection Mode"]
 WS_WORKLOAD = ["Test Type", "Pattern", "Num Clients", "Message Size (KB)", "Rate (msg/s)", "Bursts",
                "Interval (s)", "Duration (s)"]
+ECHO_WORKLOAD = ["Test Type", "Pattern", "Num Clients", "Message Size (B)", "Spacing (s)", "Messages per Client",
+                 "Rate (msg/s)", "Duration (s)"]
 HTTP_PERFORMANCE = ["Successful Requests", "Failed Requests", "Execution Time (s)", "Requests/s"]
 WS_PERFORMANCE = ["Total Messages", "Successful Messages", "Failed Messages", "Execution Time (s)", "Messages/s",
                   "Throughput (MB/s)", "Avg Latency (ms)", "Min Latency (ms)", "Max Latency (ms)"]
+ECHO_PERFORMANCE = ["Total Messages", "Successful Messages", "Failed Messages", "Execution Time (s)", "Messages/s",
+                    "Avg Latency (ms)", "Min Latency (ms)", "Max Latency (ms)"]
 CONTAINER = ["Container CPU Limit", "Container Energy (J)", "Container Avg Power (W)", "Container Avg CPU (%)",
              "Container Peak CPU (%)", "Container Total CPU (%*s)", "Container Avg Mem (MB)",
              "Container Peak Mem (MB)", "Container Total Mem (MB*s)"]
@@ -35,6 +39,7 @@ RUN_QUALITY = ["Warm-up (s)", "Waited Before Start (s)", "Waited Before Load (s)
 
 HTTP_COLUMNS = RUN + HTTP_WORKLOAD + HTTP_PERFORMANCE + CONTAINER + HOST + IDLE + RUN_QUALITY
 WS_COLUMNS = RUN + WS_WORKLOAD + WS_PERFORMANCE + CONTAINER + HOST + IDLE + RUN_QUALITY
+ECHO_COLUMNS = RUN + ECHO_WORKLOAD + ECHO_PERFORMANCE + CONTAINER + HOST + IDLE + RUN_QUALITY
 
 # Names of earlier releases -> current names
 RENAMED = {

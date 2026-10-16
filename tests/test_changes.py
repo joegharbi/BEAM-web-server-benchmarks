@@ -1067,7 +1067,7 @@ class IdleAndWarmup(unittest.TestCase):
             self.assertIn(key, bench_config.SHORT)
             in_example = example.count(f"\n{key}=")
             self.assertEqual(in_example, 0 if key in bench_config.MACHINE_KEYS else 1, key)   # machine keys: profiles
-        self.assertLess(len(example.splitlines()), 85)                       # short: one line per setting
+        self.assertLess(len(example.splitlines()), 100)                      # short: one line per setting
 
     def test_generated_files_are_up_to_date(self):
         import bench_config
@@ -2033,7 +2033,7 @@ class MeasuringCore(unittest.TestCase):
     def test_plugins_are_found_by_file_name(self):
         import plugins
         self.assertEqual(plugins.names("deploy"), ["container", "native"])
-        self.assertEqual(plugins.names("workload"), ["http", "websocket"])
+        self.assertEqual(plugins.names("workload"), ["echo", "http", "websocket"])
         self.assertEqual(plugins.names("meter"), ["scaphandre"])
         with self.assertRaises(ValueError):
             plugins.load("deploy", "kubernetes")                               # not there (yet): a clear error
@@ -3624,3 +3624,113 @@ class PauseUserServices(unittest.TestCase):
             self.pe.pause_user_units(["a.service", "b.service", "c.service"], state)
         self.assertEqual(state["paused_user_units"], ["a.service"])     # b left running, c was not active
         self.assertEqual(active, {"b.service"})
+
+
+class EchoWorkload(unittest.TestCase):
+    """The TCP echo workload (tools/plugins/workload/echo.py): the MIPRO 2024 echo paper's connect test,
+    and burst and stream on long-lived connections."""
+
+    @classmethod
+    def setUpClass(cls):
+        import asyncio
+        import socket
+        import threading
+        cls.loop = asyncio.new_event_loop()
+
+        async def echo(reader, writer):
+            while data := await reader.read(65536):
+                writer.write(data)
+                await writer.drain()
+            writer.close()
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        cls.port = s.getsockname()[1]
+        s.close()
+        started = threading.Event()
+
+        def serve():
+            asyncio.set_event_loop(cls.loop)
+            cls.server = cls.loop.run_until_complete(asyncio.start_server(echo, "127.0.0.1", cls.port))
+            started.set()
+            cls.loop.run_forever()
+        cls.thread = threading.Thread(target=serve, daemon=True)
+        cls.thread.start()
+        started.wait(5)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.loop.call_soon_threadsafe(cls.loop.stop)
+        cls.thread.join(5)
+
+    def args(self, **kw):
+        import argparse
+        d = dict(pattern="connect", clients=20, size_bytes=15, spacing=0.0, messages=10, rate=20, duration=1,
+                 measurement_type="t", url=None, port_mapping=f"{self.port}:8001")
+        d.update(kw)
+        return argparse.Namespace(**d)
+
+    def workload(self):
+        import plugins
+        return plugins.load("workload", "echo")()
+
+    def test_patterns_count_every_message(self):
+        w = self.workload()
+        url = f"tcp://127.0.0.1:{self.port}"
+        self.assertTrue(w.probe(url))
+        for kw, expected in ((dict(pattern="connect", clients=20), 20),
+                             (dict(pattern="connect", clients=5, spacing=0.05), 5),
+                             (dict(pattern="burst", clients=4, messages=25), 100),
+                             (dict(pattern="burst", clients=2, messages=3, size_bytes=70000), 6)):
+            w.run(self.args(**kw), url)
+            self.assertEqual(w.counts(), (expected, expected), kw)
+        w.run(self.args(pattern="stream", clients=3, rate=20, duration=1), url)
+        ok, total = w.counts()
+        self.assertEqual(ok, total)
+        self.assertGreater(total, 30)                                    # about 3 x 20 per second
+
+    def test_paper_message_and_csv_values(self):
+        import csv_columns
+        from plugins.workload import echo
+        self.assertEqual(echo.message(15), b"Hello, Servers!")
+        w = self.workload()
+        a = self.args(pattern="connect", clients=4, spacing=0.1)
+        w.run(a, f"tcp://127.0.0.1:{self.port}")
+        v = w.values(a, 2.0)
+        self.assertEqual((v["Total Messages"], v["Successful Messages"], v["Failed Messages"]), (4, 4, 0))
+        self.assertEqual((v["Spacing (s)"], v["Messages per Client"], v["Rate (msg/s)"]), (0.1, "", ""))
+        self.assertTrue(set(v) <= set(csv_columns.ECHO_COLUMNS))
+
+    def test_no_server_counts_failures(self):
+        import socket
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        free = s.getsockname()[1]
+        s.close()
+        w = self.workload()
+        url = f"tcp://127.0.0.1:{free}"
+        self.assertFalse(w.probe(url))
+        w.run(self.args(pattern="connect", clients=3), url)
+        self.assertEqual(w.counts(), (0, 3))
+        w.run(self.args(pattern="burst", clients=2, messages=5), url)
+        self.assertEqual(w.counts(), (0, 10))
+
+    def test_index_entry_and_kind(self):
+        import bench_config
+        import results_index
+        self.assertEqual(results_index.echo_workload("t", "connect", 10, 15, 0.1, 100, 10, 5),
+                         {"kind": "echo", "family": "echo", "test": "t", "pattern": "connect", "clients": 10,
+                          "size_bytes": 15, "spacing_s": 0.1})
+        self.assertIn("echo", results_index.FAMILIES)
+        self.assertIn("echo", bench_config.MEASUREMENT_KINDS)
+        cfg = bench_config.parse("MEASURE=echo\nECHO_CONNECT_SPACING_SECONDS=0.1 0\n")
+        self.assertEqual((cfg["MEASURE"], cfg["ECHO_CONNECT_SPACING_SECONDS"], cfg["ECHO_SIZES_BYTES"]),
+                         ("echo", "0.1 0", "15"))
+        with self.assertRaises(bench_config.ConfigError):
+            bench_config.parse("ECHO_CONNECT_SPACING_SECONDS=-1\n")
+
+    def test_run_script_knows_the_echo_kind(self):
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            src = fh.read()
+        for needle in ('"echo") base="$BENCHMARKS_DIR/echo"', "*/echo/*) echo echo ;;", "bench_add_variants SELECT_ECHO",
+                       "bench_add_native SELECT_ECHO", "./tools/measure_echo.py", '"$RESULTS_DIR/echo"'):
+            self.assertIn(needle, src)
