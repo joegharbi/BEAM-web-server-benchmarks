@@ -126,10 +126,10 @@ def websocket_workload(test, pattern, clients, size_kb, rate=None, bursts=None, 
     return w
 
 
-def echo_workload(test, pattern, clients, size_bytes, spacing=None, messages=None, rate=None, duration=None):
+def echo_workload(test, pattern, clients, size_bytes, spacing=None, messages=None, rate=None, duration=None, rounds=None):
     w = {"kind": "echo", "family": "echo", "test": test, "pattern": pattern, "clients": clients,
          "size_bytes": size_bytes}
-    extra = {"spacing_s": spacing} if pattern == "connect" else \
+    extra = {"spacing_s": spacing, "rounds": rounds} if pattern == "connect" else \
             {"messages": messages} if pattern == "burst" else \
             {"rate_per_s": rate, "duration_s": duration} if pattern == "stream" else {}
     w.update({k: v for k, v in extra.items() if v not in (None, "")})
@@ -300,7 +300,7 @@ def from_csvs(folder, with_facts=True):
                         workload = echo_workload(r.get("Test Type", ""), r.get("Pattern", ""), r.get("Num Clients", ""),
                                                  r.get("Message Size (B)", ""), r.get("Spacing (s)") or None,
                                                  r.get("Messages per Client") or None, r.get("Rate (msg/s)") or None,
-                                                 r.get("Duration (s)") or None)
+                                                 r.get("Duration (s)") or None, r.get("Rounds") or None)
                     elif family == "websocket":
                         workload = websocket_workload(r.get("Test Type", ""), r.get("Pattern", ""), r.get("Num Clients", ""),
                                                       r.get("Message Size (KB)", ""), r.get("Rate (msg/s)") or None,

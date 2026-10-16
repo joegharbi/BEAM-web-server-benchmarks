@@ -3,7 +3,8 @@
 Three patterns:
   connect  the earlier MIPRO 2024 echo paper: every client connects, sends ONE message, waits for its echo
            and disconnects; the clients start --spacing seconds apart (0.1 = "sleep" in that paper,
-           0 = "nosleep": all at once)
+           0 = "nosleep": all at once). --rounds repeats the whole set of clients that many times, one round
+           after the other, so a short test (all at once) lasts long enough for the meter
   burst    long-lived connections: every client connects once and sends --messages messages back to back
   stream   long-lived connections: every client connects once and sends --rate messages per second for
            --duration seconds
@@ -142,6 +143,8 @@ class Plugin(Workload):
                             help='Message size in bytes (15 = the paper\'s "Hello, Servers!")')
         parser.add_argument('--spacing', type=float, default=0.0,
                             help='connect: seconds between client starts (0.1 = the paper\'s "sleep", 0 = all at once)')
+        parser.add_argument('--rounds', type=int, default=1,
+                            help='connect: how many times the whole set of clients runs, one round after the other')
         parser.add_argument('--messages', type=int, default=100, help='burst: messages per client')
         parser.add_argument('--rate', type=int, default=10, help='stream: messages per second per client')
         parser.add_argument('--duration', type=int, default=5, help='stream: seconds each client sends')
@@ -177,7 +180,7 @@ class Plugin(Workload):
     def describe(self, args, url):
         desc = f"{args.pattern} | clients={args.clients} size={args.size_bytes} B"
         if args.pattern == "connect":
-            return desc + f" spacing={args.spacing}s"
+            return desc + f" spacing={args.spacing}s" + (f" rounds={args.rounds}" if args.rounds > 1 else "")
         if args.pattern == "burst":
             return desc + f" messages={args.messages}"
         return desc + f" rate={args.rate}/s duration={args.duration}s"
@@ -189,9 +192,11 @@ class Plugin(Workload):
 
         async def run_all():
             if args.pattern == "connect":
-                tasks = [connect_client(host, port, args.size_bytes, i * args.spacing, self.clients[i])
-                         for i in range(args.clients)]
-            elif args.pattern == "burst":
+                for _ in range(max(1, getattr(args, "rounds", 1))):      # rounds one after the other
+                    await asyncio.gather(*[connect_client(host, port, args.size_bytes, i * args.spacing, self.clients[i])
+                                           for i in range(args.clients)])
+                return
+            if args.pattern == "burst":
                 tasks = [session_client(host, port, args.size_bytes, args.messages, 0, 0, self.clients[i])
                          for i in range(args.clients)]
             else:
@@ -213,6 +218,7 @@ class Plugin(Workload):
             "Test Type": args.measurement_type, "Pattern": args.pattern, "Num Clients": args.clients,
             "Message Size (B)": args.size_bytes,
             "Spacing (s)": args.spacing if args.pattern == 'connect' else '',
+            "Rounds": getattr(args, "rounds", 1) if args.pattern == 'connect' else '',
             "Messages per Client": args.messages if args.pattern == 'burst' else '',
             "Rate (msg/s)": args.rate if args.pattern == 'stream' else '',
             "Duration (s)": args.duration if args.pattern == 'stream' else '',
@@ -225,13 +231,15 @@ class Plugin(Workload):
 
     def index(self, args):
         return results_index.echo_workload(args.measurement_type, args.pattern, args.clients, args.size_bytes,
-                                           args.spacing, args.messages, args.rate, args.duration)
+                                           args.spacing, args.messages, args.rate, args.duration,
+                                           getattr(args, "rounds", 1))
 
     def measurement(self, args):
         return f"{args.measurement_type} {args.pattern} clients={args.clients} size_bytes={args.size_bytes}"
 
     def repeat_args(self, args):
         return ["--pattern", args.pattern, "--clients", str(args.clients), "--size_bytes", str(args.size_bytes),
-                "--spacing", str(args.spacing), "--messages", str(args.messages), "--rate", str(args.rate),
+                "--spacing", str(args.spacing), "--rounds", str(getattr(args, "rounds", 1)),
+                "--messages", str(args.messages), "--rate", str(args.rate),
                 "--duration", str(args.duration), "--measurement_type", args.measurement_type] + \
                (["--url", args.url] if args.url else [])

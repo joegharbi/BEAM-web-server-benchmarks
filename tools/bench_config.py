@@ -60,10 +60,12 @@ def _optional_int(v):
     return "" if v == "" else _int(0)(v)
 
 
-def _list(item_check, what):
-    """Space-separated list of values, each checked by `item_check`."""
+def _list(item_check, what, empty_ok=False):
+    """Space-separated list of values, each checked by `item_check`; empty only when `empty_ok`."""
     def check(v):
         items = v.split()
+        if not items and empty_ok:
+            return ""
         if not items:
             raise ValueError(f"must list at least one {what}")
         try:
@@ -463,21 +465,28 @@ SCHEMA = {
         help="WebSocket payload test: number of clients."),
     "WS_PAYLOAD_SIZES_KB": dict(default="8 1024 65536", check=_list(_int(1), "size"),
         unit="KB per message, separated by spaces", help="WebSocket payload test: message sizes."),
-    "ECHO_CONNECT_CLIENTS": dict(default="10 100 1000", check=_list(_int(1), "client count"),
-        unit="client counts, separated by spaces",
-        help="Echo connect test (the MIPRO 2024 echo paper): this many clients each connect, send one message,\n"
-             "wait for its echo and disconnect."),
-    "ECHO_CONNECT_SPACING_SECONDS": dict(default="0.1 0", check=_list(_number(0), "spacing"),
+    "ECHO_CONNECT_CLIENTS": dict(default="10 100 1000", check=_list(_int(1), "client count", empty_ok=True),
+        unit="client counts, separated by spaces; empty = no spaced connect test",
+        help="Echo connect test (the MIPRO 2024 echo paper, 'sleep' runs): this many clients each connect, send one\n"
+             "message, wait for its echo and disconnect, starting ECHO_CONNECT_SPACING_SECONDS apart."),
+    "ECHO_CONNECT_SPACING_SECONDS": dict(default="0.1", check=_list(_number(0), "spacing"),
         unit="seconds, separated by spaces",
-        help="Echo connect test: seconds between client starts. 0.1 = the paper's 'sleep' runs, 0 = 'nosleep'\n"
-             "(all clients at once). Each spacing is its own measurement."),
-    "ECHO_BURST_CLIENTS": dict(default="100", check=_list(_int(1), "client count"),
-        unit="client counts, separated by spaces",
+        help="Echo connect test: seconds between client starts. 0.1 = the paper's 'sleep' runs. Each client count\n"
+             "is measured with each spacing."),
+    "ECHO_NOSLEEP_CLIENTS": dict(default="1000", check=_list(_int(1), "client count", empty_ok=True),
+        unit="client counts, separated by spaces; empty = no nosleep test",
+        help="Echo nosleep test (the paper's 'nosleep' runs): the connect test with all clients at once\n"
+             "(spacing 0)."),
+    "ECHO_NOSLEEP_ROUNDS": dict(default="1", check=_int(1), unit="rounds",
+        help="Echo nosleep test: the whole set of clients runs this many times, one round after the other, in one\n"
+             "measurement. All at once is over in a few seconds; more rounds give the meter more samples."),
+    "ECHO_BURST_CLIENTS": dict(default="100", check=_list(_int(1), "client count", empty_ok=True),
+        unit="client counts, separated by spaces; empty = no burst test",
         help="Echo burst test: clients that keep one connection and send their messages back to back."),
     "ECHO_BURST_MESSAGES": dict(default="1000", check=_list(_int(1), "count"),
         unit="messages per client, separated by spaces", help="Echo burst test: messages each client sends."),
-    "ECHO_STREAM_CLIENTS": dict(default="100", check=_list(_int(1), "client count"),
-        unit="client counts, separated by spaces",
+    "ECHO_STREAM_CLIENTS": dict(default="100", check=_list(_int(1), "client count", empty_ok=True),
+        unit="client counts, separated by spaces; empty = no stream test",
         help="Echo stream test: clients that keep one connection and send at a fixed rate."),
     "ECHO_STREAM_RATE_PER_SECOND": dict(default="10", check=_list(_int(1), "rate"),
         unit="messages per second per client, separated by spaces", help="Echo stream test: sending rate."),
@@ -660,11 +669,13 @@ SHORT = {
     "WS_CONCURRENCY_SIZE_KB": "concurrency test: message size (KB)",
     "WS_PAYLOAD_CLIENTS": "payload test: client count",
     "WS_PAYLOAD_SIZES_KB": "payload test: message sizes (KB)",
-    "ECHO_CONNECT_CLIENTS": "echo connect test (one message per connection): client counts",
-    "ECHO_CONNECT_SPACING_SECONDS": "echo connect test: seconds between client starts (0.1 = sleep, 0 = nosleep)",
-    "ECHO_BURST_CLIENTS": "echo burst test: client counts",
+    "ECHO_CONNECT_CLIENTS": "echo connect test (one message per connection, spaced): client counts; empty = none",
+    "ECHO_CONNECT_SPACING_SECONDS": "echo connect test: seconds between client starts (0.1 = the paper's sleep)",
+    "ECHO_NOSLEEP_CLIENTS": "echo nosleep test (connect, all clients at once): client counts; empty = none",
+    "ECHO_NOSLEEP_ROUNDS": "echo nosleep test: rounds of all clients, one after the other, per measurement",
+    "ECHO_BURST_CLIENTS": "echo burst test: client counts; empty = none",
     "ECHO_BURST_MESSAGES": "echo burst test: messages per client",
-    "ECHO_STREAM_CLIENTS": "echo stream test: client counts",
+    "ECHO_STREAM_CLIENTS": "echo stream test: client counts; empty = none",
     "ECHO_STREAM_RATE_PER_SECOND": "echo stream test: messages per second per client",
     "ECHO_STREAM_DURATION_SECONDS": "echo stream test: seconds each client sends",
     "ECHO_SIZES_BYTES": "echo tests: message sizes (bytes)",
@@ -688,7 +699,8 @@ EXAMPLE_LAYOUT = [
       "WS_STREAM_CLIENTS", "WS_STREAM_SIZES_KB", "WS_STREAM_RATE_PER_SECOND", "WS_STREAM_DURATION_SECONDS",
       "WS_CONCURRENCY_CLIENTS", "WS_CONCURRENCY_SIZE_KB", "WS_PAYLOAD_CLIENTS", "WS_PAYLOAD_SIZES_KB"]),
     ("Echo workloads (TCP echo servers; --super-quick keeps one short test each)",
-     ["ECHO_CONNECT_CLIENTS", "ECHO_CONNECT_SPACING_SECONDS", "ECHO_BURST_CLIENTS", "ECHO_BURST_MESSAGES",
+     ["ECHO_CONNECT_CLIENTS", "ECHO_CONNECT_SPACING_SECONDS", "ECHO_NOSLEEP_CLIENTS", "ECHO_NOSLEEP_ROUNDS",
+      "ECHO_BURST_CLIENTS", "ECHO_BURST_MESSAGES",
       "ECHO_STREAM_CLIENTS", "ECHO_STREAM_RATE_PER_SECOND", "ECHO_STREAM_DURATION_SECONDS", "ECHO_SIZES_BYTES"]),
 ]
 

@@ -1067,7 +1067,7 @@ class IdleAndWarmup(unittest.TestCase):
             self.assertIn(key, bench_config.SHORT)
             in_example = example.count(f"\n{key}=")
             self.assertEqual(in_example, 0 if key in bench_config.MACHINE_KEYS else 1, key)   # machine keys: profiles
-        self.assertLess(len(example.splitlines()), 100)                      # short: one line per setting
+        self.assertLess(len(example.splitlines()), 110)                      # short: one line per setting
 
     def test_generated_files_are_up_to_date(self):
         import bench_config
@@ -3727,6 +3727,27 @@ class EchoWorkload(unittest.TestCase):
                          ("echo", "0.1 0", "15"))
         with self.assertRaises(bench_config.ConfigError):
             bench_config.parse("ECHO_CONNECT_SPACING_SECONDS=-1\n")
+
+    def test_rounds_repeat_the_clients_and_empty_lists_skip_a_test(self):
+        import bench_config
+        import results_index
+        w = self.workload()
+        w.run(self.args(pattern="connect", clients=5, rounds=3), f"tcp://127.0.0.1:{self.port}")
+        self.assertEqual(w.counts(), (15, 15))                       # 5 clients x 3 rounds, all echoed
+        v = w.values(self.args(pattern="connect", clients=5, rounds=3), 1.0)
+        self.assertEqual((v["Rounds"], v["Total Messages"], v["Num Clients"]), (3, 15, 5))
+        self.assertEqual(results_index.echo_workload("t", "connect", 5, 15, 0, rounds=3)["rounds"], 3)
+        cfg = bench_config.parse("ECHO_CONNECT_CLIENTS=\nECHO_BURST_CLIENTS=\nECHO_NOSLEEP_CLIENTS=4000\n"
+                                 "ECHO_NOSLEEP_ROUNDS=5\n")
+        self.assertEqual((cfg["ECHO_CONNECT_CLIENTS"], cfg["ECHO_BURST_CLIENTS"], cfg["ECHO_NOSLEEP_CLIENTS"],
+                          cfg["ECHO_NOSLEEP_ROUNDS"]), ("", "", "4000", "5"))
+        for bad in ("ECHO_NOSLEEP_ROUNDS=0\n", "ECHO_SIZES_BYTES=\n", "ECHO_CONNECT_SPACING_SECONDS=\n"):
+            with self.assertRaises(bench_config.ConfigError, msg=bad):
+                bench_config.parse(bad)
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            src = fh.read()
+        self.assertIn('--spacing 0 --rounds "$rounds"', src)
+        self.assertIn('read -r -a full_echo_nosleep_clients <<< "$CFG_ECHO_NOSLEEP_CLIENTS"', src)
 
     def test_run_script_knows_the_echo_kind(self):
         with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:

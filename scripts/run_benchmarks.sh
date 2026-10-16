@@ -140,7 +140,9 @@ WS_BURST_INTERVAL=0.5
 
 # Echo tests (TCP echo servers, benchmarks/echo/); ECHO_* in a config
 full_echo_connect_clients=(10 100 1000)
-full_echo_connect_spacings=(0.1 0)
+full_echo_connect_spacings=(0.1)
+full_echo_nosleep_clients=(1000)
+full_echo_nosleep_rounds=1
 full_echo_burst_clients=(100)
 full_echo_burst_messages=(1000)
 full_echo_stream_clients=(100)
@@ -212,7 +214,7 @@ bench_echo_steps_per_container() {
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then echo 3          # one connect, one burst, one stream
     else
         local n=${#full_echo_sizes[@]}
-        echo $(( n * (${#full_echo_connect_clients[@]} * ${#full_echo_connect_spacings[@]}
+        echo $(( n * (${#full_echo_connect_clients[@]} * ${#full_echo_connect_spacings[@]} + ${#full_echo_nosleep_clients[@]}
                       + ${#full_echo_burst_clients[@]} * ${#full_echo_burst_messages[@]}
                       + ${#full_echo_stream_clients[@]} * ${#full_echo_stream_rates[@]} * ${#full_echo_stream_durations[@]}) ))
     fi
@@ -688,6 +690,8 @@ if [ -n "${CONFIG_FILE:-}" ]; then
     read -r -a payload_sizes <<< "$CFG_WS_PAYLOAD_SIZES_KB"
     read -r -a full_echo_connect_clients <<< "$CFG_ECHO_CONNECT_CLIENTS"
     read -r -a full_echo_connect_spacings <<< "$CFG_ECHO_CONNECT_SPACING_SECONDS"
+    read -r -a full_echo_nosleep_clients <<< "$CFG_ECHO_NOSLEEP_CLIENTS"
+    full_echo_nosleep_rounds="$CFG_ECHO_NOSLEEP_ROUNDS"
     read -r -a full_echo_burst_clients <<< "$CFG_ECHO_BURST_CLIENTS"
     read -r -a full_echo_burst_messages <<< "$CFG_ECHO_BURST_MESSAGES"
     read -r -a full_echo_stream_clients <<< "$CFG_ECHO_STREAM_CLIENTS"
@@ -1100,10 +1104,12 @@ run_echo_tests() {
     local port_mapping
     port_mapping=$(get_container_port_mapping "$image" "$host_port")
     local -a sizes=("${full_echo_sizes[@]}") cc=("${full_echo_connect_clients[@]}") cs=("${full_echo_connect_spacings[@]}")
+    local -a nc=("${full_echo_nosleep_clients[@]}")
+    local rounds=$full_echo_nosleep_rounds
     local -a bc=("${full_echo_burst_clients[@]}") bm=("${full_echo_burst_messages[@]}")
     local -a sc=("${full_echo_stream_clients[@]}") sr=("${full_echo_stream_rates[@]}") sd=("${full_echo_stream_durations[@]}")
     if [[ $SUPER_QUICK_BENCH -eq 1 ]]; then
-        sizes=(15); cc=(10); cs=(0); bc=(5); bm=(10); sc=(5); sr=(1); sd=(1)
+        sizes=(15); cc=(10); cs=(0.01); nc=(10); rounds=1; bc=(5); bm=(10); sc=(5); sr=(1); sd=(1)
     fi
     local size clients spacing messages rate duration
     for size in "${sizes[@]}"; do
@@ -1115,6 +1121,13 @@ run_echo_tests() {
                     --output_csv "$RESULTS_DIR/echo/${image}_connect.csv" \
                     --measurement_type "connect_${clients}_${size}_${spacing}"
             done
+        done
+        for clients in "${nc[@]}"; do
+            print_bench_progress "${image} | NOSLEEP | clients=$clients size=${size}B rounds=$rounds"
+            bench_measure ./tools/measure_echo.py --server_image "$image" --port_mapping "$port_mapping" \
+                --pattern connect --clients "$clients" --size_bytes "$size" --spacing 0 --rounds "$rounds" \
+                --output_csv "$RESULTS_DIR/echo/${image}_connect.csv" \
+                --measurement_type "nosleep_${clients}_${size}_x${rounds}"
         done
         for clients in "${bc[@]}"; do
             for messages in "${bm[@]}"; do

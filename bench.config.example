@@ -80,15 +80,19 @@ WS_PAYLOAD_CLIENTS=5
 WS_PAYLOAD_SIZES_KB=8 1024 65536
 
 # ===== Echo workloads (TCP echo servers; --super-quick keeps one short test each) =====
-# echo connect test (one message per connection): client counts
+# echo connect test (one message per connection, spaced): client counts; empty = none
 ECHO_CONNECT_CLIENTS=10 100 1000
-# echo connect test: seconds between client starts (0.1 = sleep, 0 = nosleep)
-ECHO_CONNECT_SPACING_SECONDS=0.1 0
-# echo burst test: client counts
+# echo connect test: seconds between client starts (0.1 = the paper's sleep)
+ECHO_CONNECT_SPACING_SECONDS=0.1
+# echo nosleep test (connect, all clients at once): client counts; empty = none
+ECHO_NOSLEEP_CLIENTS=1000
+# echo nosleep test: rounds of all clients, one after the other, per measurement
+ECHO_NOSLEEP_ROUNDS=1
+# echo burst test: client counts; empty = none
 ECHO_BURST_CLIENTS=100
 # echo burst test: messages per client
 ECHO_BURST_MESSAGES=1000
-# echo stream test: client counts
+# echo stream test: client counts; empty = none
 ECHO_STREAM_CLIENTS=100
 # echo stream test: messages per second per client
 ECHO_STREAM_RATE_PER_SECOND=10

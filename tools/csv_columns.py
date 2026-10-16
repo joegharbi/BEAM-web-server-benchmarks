@@ -21,7 +21,7 @@ RUN = ["Container Name", "Variant", "Deploy", "Repeat", "Session", "Measured At 
 HTTP_WORKLOAD = ["Type", "Total Requests", "HTTP Max Workers", "HTTP Connection Mode"]
 WS_WORKLOAD = ["Test Type", "Pattern", "Num Clients", "Message Size (KB)", "Rate (msg/s)", "Bursts",
                "Interval (s)", "Duration (s)"]
-ECHO_WORKLOAD = ["Test Type", "Pattern", "Num Clients", "Message Size (B)", "Spacing (s)", "Messages per Client",
+ECHO_WORKLOAD = ["Test Type", "Pattern", "Num Clients", "Message Size (B)", "Spacing (s)", "Rounds", "Messages per Client",
                  "Rate (msg/s)", "Duration (s)"]
 HTTP_PERFORMANCE = ["Successful Requests", "Failed Requests", "Execution Time (s)", "Requests/s"]
 WS_PERFORMANCE = ["Total Messages", "Successful Messages", "Failed Messages", "Execution Time (s)", "Messages/s",

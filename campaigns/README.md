@@ -30,6 +30,20 @@ Time, from the pilot (one measurement, overhead included): HTTP 5k / 20k / 40k /
 unchanged; NATIVE_COPIES=prune removes only copies whose image is gone or rebuilt. A part stops (resumable) when
 less than 2 GB is free.
 
+## Echo (the MIPRO 2024 echo servers, C, Java and Erlang, with busy-waiting on and off; CPU at 1800 MHz)
+
+Every echo server as built and Erlang also as `-nobw` (C and Java have no such setting), each in Docker and
+natively, 5 repeats. Message: "Hello, Servers!" (15 B). A: the old paper's connect test as it was. B: tests chosen
+for the meter (longer loads, open connections).
+
+| Part | Command | Tests | Measurements | Time (estimate) |
+|---|---|---|---|---|
+| A, old setup | `make run CONFIG=campaigns/paper/echo-old.config` | sleep (0.1 s apart) 100 / 1000 / 10000 clients; nosleep 4000 | 160 | ~15 h |
+| B, new setup | `make run CONFIG=campaigns/paper/echo-new.config` | sleep 100 / 1000; nosleep 10000 x 5 rounds; burst 100 x 2000; stream 100 at 10/s for 30 s | 200 | ~5 h |
+
+Time: about 60 s per measurement besides the load (from the echo check, 2026-10-16), plus the load: sleep
+clients x 0.1 s (10000 clients = 1000 s, ~11 h of A), nosleep a few seconds per round, burst ~15 s, stream 30 s.
+
 ## Short (5 HTTP load levels: 5k, 10k, 20k, 40k, 80k)
 
 | Part | Command | Measurements | Time (estimate) | Raw data (estimate) |

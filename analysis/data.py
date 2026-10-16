@@ -45,6 +45,9 @@ def load(row):
     """The load level of a row: the request count (HTTP), pattern and message size (WebSocket), or pattern,
     clients and the pattern's own setting (echo)."""
     if is_echo(row):
+        if row["Pattern"] == "connect" and float(row["Spacing (s)"] or 0) == 0:     # all at once: the paper's nosleep
+            rounds = int(row.get("Rounds") or 1)
+            return f'nosleep {row["Num Clients"]} clients' + (f' x{rounds} rounds' if rounds > 1 else '')
         extra = {"connect": f'spacing {row["Spacing (s)"]} s', "burst": f'{row["Messages per Client"]} msg',
                  "stream": f'{row["Rate (msg/s)"]}/s'}[row["Pattern"]]
         return f'{row["Pattern"]} {row["Num Clients"]} clients {extra}'

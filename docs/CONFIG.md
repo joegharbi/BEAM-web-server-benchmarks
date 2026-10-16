@@ -579,17 +579,33 @@ Unit: KB per message, separated by spaces
 
 Default: `10 100 1000`
 
-Echo connect test (the MIPRO 2024 echo paper): this many clients each connect, send one message, wait for its echo and disconnect.
+Echo connect test (the MIPRO 2024 echo paper, 'sleep' runs): this many clients each connect, send one message, wait for its echo and disconnect, starting ECHO_CONNECT_SPACING_SECONDS apart.
 
-Unit: client counts, separated by spaces
+Unit: client counts, separated by spaces; empty = no spaced connect test
 
 ### `ECHO_CONNECT_SPACING_SECONDS`
 
-Default: `0.1 0`
+Default: `0.1`
 
-Echo connect test: seconds between client starts. 0.1 = the paper's 'sleep' runs, 0 = 'nosleep' (all clients at once). Each spacing is its own measurement.
+Echo connect test: seconds between client starts. 0.1 = the paper's 'sleep' runs. Each client count is measured with each spacing.
 
 Unit: seconds, separated by spaces
+
+### `ECHO_NOSLEEP_CLIENTS`
+
+Default: `1000`
+
+Echo nosleep test (the paper's 'nosleep' runs): the connect test with all clients at once (spacing 0).
+
+Unit: client counts, separated by spaces; empty = no nosleep test
+
+### `ECHO_NOSLEEP_ROUNDS`
+
+Default: `1`
+
+Echo nosleep test: the whole set of clients runs this many times, one round after the other, in one measurement. All at once is over in a few seconds; more rounds give the meter more samples.
+
+Unit: rounds
 
 ### `ECHO_BURST_CLIENTS`
 
@@ -597,7 +613,7 @@ Default: `100`
 
 Echo burst test: clients that keep one connection and send their messages back to back.
 
-Unit: client counts, separated by spaces
+Unit: client counts, separated by spaces; empty = no burst test
 
 ### `ECHO_BURST_MESSAGES`
 
@@ -613,7 +629,7 @@ Default: `100`
 
 Echo stream test: clients that keep one connection and send at a fixed rate.
 
-Unit: client counts, separated by spaces
+Unit: client counts, separated by spaces; empty = no stream test
 
 ### `ECHO_STREAM_RATE_PER_SECOND`
 
