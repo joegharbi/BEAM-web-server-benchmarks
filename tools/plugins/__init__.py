@@ -1,7 +1,7 @@
 """Plugins of the measuring core (tools/measure_core.py), one module per plugin, found by its file name.
 
   deploy/    where the server runs:      container (Docker), native (systemd user scope)
-  workload/  what load it gets:          http, websocket
+  workload/  what load it gets:          http, websocket, echo (TCP)
   meter/     how its energy is measured: scaphandre
 
 Every measurement takes the same steps in the same order (measure_core.measure); only these three

@@ -1387,13 +1387,18 @@ EOF
         fi
     done
     if [ ${#failed_containers[@]} -eq 0 ]; then
-        printf "\n[RUN SUMMARY] All containers ran successfully (no 100%% failed requests).\n"
+        printf "\n[RUN SUMMARY] No container failed completely (100%% failed requests or messages).\n"
     else
         printf "\n[RUN SUMMARY] Containers with 100%% failures:\n"
         for c in "${failed_containers[@]}"; do
             echo "  - $c"
         done
     fi
+    # Runs that only partly failed, and runs where the meter fell behind (tools/progress.py)
+    local line
+    while IFS= read -r line; do
+        [ -n "$line" ] && printf "[RUN SUMMARY] WARNING: %s\n" "$line"
+    done < <("$PYTHON_PATH" ./tools/progress.py quality "$results_dir" 2>/dev/null)
 }
 
 # ---- Repeats, rest and machine settings (from --config) ----

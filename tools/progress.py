@@ -15,6 +15,7 @@ the mean duration of each test family. Before enough runs are done, priors from 
 Commands:
   panel  RESULTS_DIR [--now TEXT] [--pass N]   the progress panel
   status [RESULTS_DIR]                         the panel of the newest (or given) measurement
+  quality RESULTS_DIR                          runs with some failed requests/messages, runs where the meter fell behind
 """
 import argparse
 import csv
@@ -35,6 +36,61 @@ HTTP = ("static", "dynamic")
 WS = ("websocket", "concurrency", "payload", "echo")
 SERVER_GROUP = {"websocket": "websocket", "concurrency": "websocket", "payload": "websocket", "echo": "echo"}
 COLS = ("end", "duration", "pass", "family", "server", "level", "outcome", "csv")
+METER_BEHIND = 0.5   # fewer than half the meter readings its step allows: the meter fell behind (coarse energy)
+
+
+def failed_ops(row):
+    """Failed requests or messages of one CSV row, and the word for them."""
+    word = "messages" if "Failed Messages" in row else "requests"
+    try:
+        return int(float(row.get("Failed Requests") or row.get("Failed Messages") or 0)), word
+    except ValueError:
+        return 0, word
+
+
+def meter_behind(row):
+    """True when the meter took fewer than half the readings its step allows over the load (e.g. it
+    stalled reading /proc while the server had thousands of threads): the energy of that run is coarse."""
+    try:
+        step = float(row.get("Energy Sampling Step (ms)") or 0)
+        expected = float(row.get("Execution Time (s)") or 0) * 1000 / step if step else 0
+        return expected >= 4 and float(row.get("Energy Samples") or 0) < METER_BEHIND * expected
+    except ValueError:
+        return False
+
+
+def quality(folder):
+    """Over every measurement CSV of a results folder: (runs with some failed operations, failed
+    operations, their word, runs where the meter fell behind)."""
+    import csv_columns
+    runs = ops = behind = 0
+    word = "requests"
+    for path in sorted(glob.glob(os.path.join(folder, "*", "*.csv"))):
+        name = os.path.basename(path)
+        if name.endswith("_summary.csv") or name in ("summary.csv", "failures.csv"):
+            continue
+        try:
+            rows = csv_columns.read(path)[1]
+        except (OSError, csv.Error, ValueError):
+            continue
+        for r in rows:
+            n, word = failed_ops(r)
+            runs += n > 0
+            ops += n
+            behind += meter_behind(r)
+    return runs, ops, word, behind
+
+
+def quality_lines(folder):
+    runs, ops, word, behind = quality(folder)
+    lines = []
+    if runs:
+        lines.append(f"{runs} run(s) with failed {word} ({ops:,} in all): check the servers or the client limits "
+                     f"(many short connections into Docker run out of ports: ENV_TCP_TW_REUSE=1, docs/CONFIG.md)")
+    if behind:
+        lines.append(f"{behind} run(s) where the meter fell behind (fewer than half its readings): their server "
+                     f"energy is coarse")
+    return lines
 
 
 def read_plan(folder):
@@ -154,8 +210,10 @@ def last_result(row):
         parts.append(f"container {float(r['Container Energy (J)']):.1f} J")
     if r.get("Host Energy (J)"):
         parts.append(f"machine {float(r['Host Energy (J)']):.0f} J")
-    failed = r.get("Failed Requests") or r.get("Failed Messages")
-    parts.append("ok" if failed in ("0", "", None) else f"{failed} failed requests")
+    n, word = failed_ops(r)
+    parts.append("ok" if not n else f"{n:,} failed {word}")
+    if meter_behind(r):
+        parts.append(f"meter behind ({r.get('Energy Samples')} readings)")
     return " · ".join(parts)
 
 
@@ -192,7 +250,16 @@ def panel(folder, now="", current_pass=None, running=True):
     last = last_result(rows[-1] if rows else None)
     if last:
         lines.append(f" Last    {last}")
-    health = [f"{failed} failed" if failed else "no failures"]
+    health = [f"{failed} failed" if failed else ""]
+    try:
+        runs, ops, word, behind = quality(folder)
+        if runs:
+            health.append(f"{runs} run(s) with failed {word} ({ops:,})")
+        if behind:
+            health.append(f"meter behind in {behind} run(s)")
+    except Exception:  # noqa: BLE001 - the panel must never stop a measurement
+        pass
+    health = [h for h in health if h] or ["no failures"]
     try:
         import run_metadata
         t = run_metadata.cpu_package_temp_c()
@@ -249,9 +316,14 @@ def main():
     p.add_argument("--pass", dest="current_pass", default=None)
     s = sub.add_parser("status")
     s.add_argument("folder", nargs="?")
+    q = sub.add_parser("quality")
+    q.add_argument("folder")
     args = ap.parse_args()
     if args.cmd == "panel":
         print(panel(args.folder, args.now, args.current_pass))
+    elif args.cmd == "quality":
+        for line in quality_lines(args.folder):
+            print(line)
     else:
         print(status(args.folder))
 

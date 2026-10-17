@@ -3663,6 +3663,43 @@ class PauseUserServices(unittest.TestCase):
         self.assertEqual(active, {"b.service"})
 
 
+class RunQuality(unittest.TestCase):
+    """Partly failed runs and runs where the meter fell behind are reported, not only runs that failed completely."""
+
+    def test_meter_behind(self):
+        import progress
+        row = {"Energy Sampling Step (ms)": "500", "Execution Time (s)": "24", "Energy Samples": "36"}
+        self.assertFalse(progress.meter_behind(row))                          # 36 of 48: normal
+        self.assertTrue(progress.meter_behind(dict(row, **{"Energy Samples": "6"})))   # the C nosleep runs
+        self.assertFalse(progress.meter_behind(dict(row, **{"Execution Time (s)": "1", "Energy Samples": "1"})))
+        self.assertFalse(progress.meter_behind({}))
+
+    def test_quality_counts_partial_failures_and_meter_behind(self):
+        import progress
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "echo"))
+        head = ["Container Name", "Total Messages", "Failed Messages", "Execution Time (s)",
+                "Energy Sampling Step (ms)", "Energy Samples"]
+        with open(os.path.join(d, "echo", "c_connect.csv"), "w", newline="") as fh:
+            csv.writer(fh).writerows([head, ["c", "50000", "10000", "72", "500", "100"],
+                                      ["c", "50000", "0", "24", "500", "6"], ["c", "50000", "0", "24", "500", "40"]])
+        with open(os.path.join(d, "echo", "c_connect_summary.csv"), "w", newline="") as fh:
+            csv.writer(fh).writerows([head, ["c", "1", "1", "1", "500", "0"]])          # summaries are not runs
+        self.assertEqual(progress.quality(d), (1, 10000, "messages", 1))
+        lines = progress.quality_lines(d)
+        self.assertIn("1 run(s) with failed messages (10,000 in all)", lines[0])
+        self.assertIn("meter fell behind", lines[1])
+        self.assertEqual(progress.quality_lines(tempfile.mkdtemp()), [])
+
+    def test_run_summary_and_measure_core_use_it(self):
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            self.assertIn("./tools/progress.py quality", fh.read())
+        with open(os.path.join(ROOT, "tools", "measure_core.py")) as fh:
+            src = fh.read()
+        self.assertIn("progress.meter_behind(values)", src)
+        self.assertIn("if success < total:", src)
+
+
 class EchoWorkload(unittest.TestCase):
     """The TCP echo workload (tools/plugins/workload/echo.py): the MIPRO 2024 echo paper's connect test,
     and burst and stream on long-lived connections."""

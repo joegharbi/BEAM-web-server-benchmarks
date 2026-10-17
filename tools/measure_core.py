@@ -31,6 +31,7 @@ import load_conditions
 import load_phases
 import measure_failure
 import plugins
+import progress
 import readiness
 import results_index
 import run_metadata
@@ -394,6 +395,11 @@ def measure(args, workload):
     if quiet:
         cnt = f"{_M_GREEN}{success}/{total} ok{_M_NC}" if success == total else f"{success}/{total}"
         measure_quiet_msg(f"{name} | {cnt} | {runtime:.1f}s | {rate:.0f} {workload.rate_unit} | {output_csv}")
+    if success < total:
+        logger.warning("%s | %d of %d %s failed", name, total - success, total, workload.rate_unit.split("/")[0])
+    if progress.meter_behind(values):
+        logger.warning("%s | the meter fell behind: %d readings in %.1f s (step %s ms); the server energy of this "
+                       "run is coarse", name, values["Energy Samples"], runtime, values["Energy Sampling Step (ms)"])
     else:
         logger.info("=== Measurement Summary ===")
         logger.info(f"Container: {name}")

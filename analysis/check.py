@@ -5,10 +5,14 @@
 import collections
 import datetime
 import json
+import os
 import statistics
 import sys
 
 import data
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
+import progress  # noqa: E402 - meter_behind: the same rule as the run's own warning
 
 # A run is "odd" when it is this far from the median of its 5 repeats (same container and load).
 ODD = {"Execution Time (s)": 0.15, "Host Avg Power (W)": 0.10}
@@ -63,7 +67,10 @@ def check(folder):
         group = [r for r in rows if data.load(r) == load]
         secs = statistics.median(data.num(r, "Execution Time (s)") for r in group)
         samples = [data.num(r, "Energy Samples") for r in group]
+        behind = sum(progress.meter_behind(r) for r in group)
         flag = "  <- too few readings to trust" if min(samples) < MIN_READINGS else ""
+        if behind:
+            flag += f"  <- meter fell behind in {behind} run(s): {', '.join(sorted({r['Container Name'] for r in group if progress.meter_behind(r)}))}"
         print(f"      {str(load):>14}: {secs:6.1f} s, {statistics.median(samples):.0f} readings (fewest {min(samples):.0f}){flag}")
 
 if __name__ == "__main__":
