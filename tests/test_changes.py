@@ -909,6 +909,20 @@ class Statistics(AggregatorKeys):
         rows = {r["Container Name"]: r for r in csv.DictReader(open(out))}
         self.assertEqual((rows["a"]["Container Energy (J) mean"], rows["b"]["Container Energy (J) mean"]), ("11.0", "21.0"))
 
+    def test_echo_settings_split_and_zero_energy_does_not_crash(self):
+        d = tempfile.mkdtemp()
+        src = os.path.join(d, "c_connect.csv")
+        with open(src, "w", newline="") as fh:                  # same clients, spaced vs all at once; C at 0 J
+            csv.writer(fh).writerows([["Container Name", "Pattern", "Num Clients", "Spacing (s)", "Rounds",
+                                       "Container Energy (J)"],
+                                      ["c", "connect", "100", "0.1", "1", "0.0"], ["c", "connect", "100", "0.1", "1", "0.0"],
+                                      ["c", "connect", "100", "0", "5", "1.0"], ["c", "connect", "100", "0", "5", "3.0"]])
+        subprocess.run([sys.executable, os.path.join(ROOT, "tools", "aggregate_repeats.py"), src],
+                       check=True, capture_output=True)
+        rows = list(csv.DictReader(open(os.path.join(d, "c_connect_summary.csv"))))
+        self.assertEqual(sorted((r["Spacing (s)"], r["Container Energy (J) mean"]) for r in rows),
+                         [("0", "2.0"), ("0.1", "0.0")])
+
 
 class WorkloadConfig(unittest.TestCase):
     def test_defaults_equal_the_built_in_lists(self):

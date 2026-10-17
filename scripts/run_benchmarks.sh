@@ -1858,7 +1858,7 @@ bench_on_exit() {
 }
 
 # Statistics per configuration: <csv>_summary.csv per server, and one summary.csv per family
-# folder (static, dynamic, websocket) with all servers in one table.
+# folder (static, dynamic, websocket, echo) with all servers in one table.
 bench_write_summaries() {
     [ "$CFG_REPEATS" -gt 1 ] || return 0
     local csv family files
@@ -1866,7 +1866,7 @@ bench_write_summaries() {
         "$PYTHON_PATH" ./tools/aggregate_repeats.py "$csv" >/dev/null \
             || print_status "WARNING" "Could not summarise $csv"
     done < <(bench_measurement_csvs "$RESULTS_DIR")
-    for family in "$RESULTS_DIR"/static "$RESULTS_DIR"/dynamic "$RESULTS_DIR"/websocket; do
+    for family in "$RESULTS_DIR"/static "$RESULTS_DIR"/dynamic "$RESULTS_DIR"/websocket "$RESULTS_DIR"/echo; do
         mapfile -t files < <(bench_measurement_csvs "$family")
         [ ${#files[@]} -gt 0 ] || continue
         "$PYTHON_PATH" ./tools/aggregate_repeats.py "${files[@]}" --output "$family/summary.csv" >/dev/null \

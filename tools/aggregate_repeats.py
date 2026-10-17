@@ -54,7 +54,8 @@ def t95(df):
 # Everything else that looks numeric is averaged.
 KEY_COLS = ["Container Name", "Variant", "Deploy", "Type", "Test Type", "Total Requests", "HTTP Max Workers",
             "HTTP Connection Mode", "Pattern", "Num Clients", "Message Size (KB)",
-            "Rate (msg/s)", "Bursts", "Interval (s)", "Duration (s)", "Energy Sampling Step (ms)"]
+            "Rate (msg/s)", "Bursts", "Interval (s)", "Duration (s)", "Message Size (B)", "Spacing (s)", "Rounds",
+            "Messages per Client", "Energy Sampling Step (ms)"]
 
 
 def is_number(s):
@@ -203,7 +204,7 @@ def main():
             w.writerow(row)
 
     print(f"Wrote {out}  ({len(groups)} configuration(s))\n")
-    label_cols = [c for c in ("Container Name", "Total Requests", "Pattern", "Num Clients")
+    label_cols = [c for c in ("Container Name", "Total Requests", "Pattern", "Num Clients", "Spacing (s)")
                   if c in key_cols]
     if energy_col:
         print("Energy (J): median [Q1-Q3], mean +/- 95%, and the mean after each outlier rule:")
@@ -218,7 +219,8 @@ def main():
                 print(f"  {label:<30} {st['mean']:8.3f} (only 1 run)")
                 continue
             line = (f"  {label:<30} median {st['median']:8.3f} [{st['Q1']:.3f}-{st['Q3']:.3f}]"
-                    f" mean {st['mean']:8.3f} +/- {st['+/-95%']:.3f} (n={len(ev)}, CV {st['CV%']:.1f}%)")
+                    f" mean {st['mean']:8.3f} +/- {st['+/-95%']:.3f} (n={len(ev)}, CV "
+                    + (f"{st['CV%']:.1f}%)" if st['CV%'] != "" else "- , mean 0)"))
             for name, keep_fn in (("IQR", iqr_keep), ("Hampel", hampel_keep)):
                 kept = filtered(ev, keep_fn(ev))
                 line += f" | {name} {statistics.mean(kept):8.3f} (dropped {len(ev) - len(kept)})"
