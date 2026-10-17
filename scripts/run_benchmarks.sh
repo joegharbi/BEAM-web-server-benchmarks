@@ -705,7 +705,7 @@ if [ -n "${CONFIG_FILE:-}" ]; then
 else
     CFG_REPEATS=1; CFG_SHUFFLE=0; CFG_SHUFFLE_SEED=""; CFG_SETTLE_SECONDS=0; CFG_FAILURES_STOP_AFTER=0
     CFG_ENV_GOVERNOR=unchanged; CFG_ENV_TURBO=unchanged; CFG_ENV_CPU_SPEED=unchanged; CFG_ENV_POWER_PROFILE=unchanged; CFG_ENV_PAUSE_TIMERS=none; CFG_ENV_PAUSE_SERVICES=""; CFG_ENV_STOP_CONTAINERS=0; CFG_ENV_KEEP_CONTAINERS=""
-    CFG_ENV_SCREEN_BRIGHTNESS=unchanged; CFG_ENV_KEYBOARD_LIGHT=unchanged; CFG_ENV_WIFI=unchanged; CFG_ENV_BLUETOOTH=unchanged
+    CFG_ENV_SCREEN_BRIGHTNESS=unchanged; CFG_ENV_KEYBOARD_LIGHT=unchanged; CFG_ENV_WIFI=unchanged; CFG_ENV_BLUETOOTH=unchanged; CFG_ENV_TCP_TW_REUSE=unchanged
     CFG_ON_BATTERY=ignore
     CFG_HTTP_CONNECTION=reuse
 fi
@@ -1667,7 +1667,8 @@ bench_apply_environment() {
             && [ "${CFG_ENV_CPU_SPEED:-unchanged}" = "unchanged" ] && [ "${CFG_ENV_POWER_PROFILE:-unchanged}" = "unchanged" ] \
             && [ "${CFG_ENV_PAUSE_TIMERS:-none}" = "none" ] && [ -z "${CFG_ENV_PAUSE_SERVICES:-}" ] \
             && [ "$CFG_ENV_SCREEN_BRIGHTNESS" = "unchanged" ] && [ "$CFG_ENV_KEYBOARD_LIGHT" = "unchanged" ] \
-            && [ "$CFG_ENV_WIFI" = "unchanged" ] && [ "$CFG_ENV_BLUETOOTH" = "unchanged" ]; then
+            && [ "$CFG_ENV_WIFI" = "unchanged" ] && [ "$CFG_ENV_BLUETOOTH" = "unchanged" ] \
+            && [ "${CFG_ENV_TCP_TW_REUSE:-unchanged}" = "unchanged" ]; then
         print_status "INFO" "Machine settings: left unchanged"
         return 0
     fi
@@ -1685,7 +1686,7 @@ bench_apply_environment() {
         --pause-services "${CFG_ENV_PAUSE_SERVICES:-}"
         --keep "$CFG_ENV_KEEP_CONTAINERS"
         --screen-brightness "$CFG_ENV_SCREEN_BRIGHTNESS" --keyboard-light "$CFG_ENV_KEYBOARD_LIGHT"
-        --wifi "$CFG_ENV_WIFI" --bluetooth "$CFG_ENV_BLUETOOTH")
+        --wifi "$CFG_ENV_WIFI" --bluetooth "$CFG_ENV_BLUETOOTH" --tcp-tw-reuse "${CFG_ENV_TCP_TW_REUSE:-unchanged}")
     [ "$CFG_ENV_STOP_CONTAINERS" = "0" ] && env_args+=(--no-stop-containers)
     # Checked here, not under sudo: sudo drops SSH_CONNECTION
     if [ "$CFG_ENV_WIFI" = "off" ] && ! "$PYTHON_PATH" -c 'import sys; sys.path.insert(0, "tools"); import prepare_environment as p; sys.exit(1 if p.remote_over_wifi() else 0)'; then
@@ -1693,7 +1694,7 @@ bench_apply_environment() {
         exit 1
     fi
     BENCH_ENV_STATE="$RESULTS_DIR/.environment_state.json"
-    print_status "INFO" "Machine settings: governor=$CFG_ENV_GOVERNOR turbo=$CFG_ENV_TURBO cpu_speed=${CFG_ENV_CPU_SPEED:-unchanged} power_profile=${CFG_ENV_POWER_PROFILE:-unchanged} pause_timers=${CFG_ENV_PAUSE_TIMERS:-none} pause_services=${CFG_ENV_PAUSE_SERVICES:-none} stop_containers=$CFG_ENV_STOP_CONTAINERS screen=$CFG_ENV_SCREEN_BRIGHTNESS keyboard_light=$CFG_ENV_KEYBOARD_LIGHT wifi=$CFG_ENV_WIFI bluetooth=$CFG_ENV_BLUETOOTH"
+    print_status "INFO" "Machine settings: governor=$CFG_ENV_GOVERNOR turbo=$CFG_ENV_TURBO cpu_speed=${CFG_ENV_CPU_SPEED:-unchanged} power_profile=${CFG_ENV_POWER_PROFILE:-unchanged} pause_timers=${CFG_ENV_PAUSE_TIMERS:-none} pause_services=${CFG_ENV_PAUSE_SERVICES:-none} stop_containers=$CFG_ENV_STOP_CONTAINERS screen=$CFG_ENV_SCREEN_BRIGHTNESS keyboard_light=$CFG_ENV_KEYBOARD_LIGHT wifi=$CFG_ENV_WIFI bluetooth=$CFG_ENV_BLUETOOTH tcp_tw_reuse=${CFG_ENV_TCP_TW_REUSE:-unchanged}"
     sudo "$PYTHON_PATH" ./tools/prepare_environment.py apply "${env_args[@]}" --state "$BENCH_ENV_STATE"
     BENCH_ENV_APPLIED=1
     if ! "$PYTHON_PATH" ./tools/prepare_environment.py verify "${env_args[@]}"; then
@@ -2011,7 +2012,7 @@ main() {
         --set variant_order="${CFG_VARIANT_ORDER:-}" \
         --set machine="${CFG_MACHINE:-}" --set machine_file="${BENCH_MACHINE_FILE:-}" \
         --set env_screen_brightness="${CFG_ENV_SCREEN_BRIGHTNESS:-}" --set env_keyboard_light="${CFG_ENV_KEYBOARD_LIGHT:-}" \
-        --set env_wifi="${CFG_ENV_WIFI:-}" --set env_bluetooth="${CFG_ENV_BLUETOOTH:-}" --set on_battery="${CFG_ON_BATTERY:-}" \
+        --set env_wifi="${CFG_ENV_WIFI:-}" --set env_bluetooth="${CFG_ENV_BLUETOOTH:-}" --set env_tcp_tw_reuse="${CFG_ENV_TCP_TW_REUSE:-}" --set on_battery="${CFG_ON_BATTERY:-}" \
         || print_status "WARNING" "Could not write $RESULTS_DIR/metadata.json"
     print_status "INFO" "Starting benchmarks at $(date)"
     print_status "INFO" "Results will be saved to: $RESULTS_DIR"

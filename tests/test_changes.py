@@ -1160,8 +1160,10 @@ class LaptopSettings(unittest.TestCase):
         node(f"{self.root}/rfkill/rfkill0", type="wlan", soft="0", hard="0")
         node(f"{self.root}/rfkill/rfkill1", type="bluetooth", soft="0", hard="0")
         node(f"{self.root}/rfkill/rfkill2", type="bluetooth", soft="0", hard="0")
+        node(f"{self.root}/net", tcp_tw_reuse="2")
         self.saved = (pe.BACKLIGHT_GLOB, pe.KBD_LIGHT_GLOB, pe.RFKILL_GLOB, pe.require_root, pe.docker_running,
-                      pe.user_active)
+                      pe.user_active, pe.TCP_TW_REUSE)
+        pe.TCP_TW_REUSE = f"{self.root}/net/tcp_tw_reuse"
         pe.BACKLIGHT_GLOB, pe.KBD_LIGHT_GLOB = f"{self.root}/backlight/*", f"{self.root}/leds/*kbd_backlight*"
         pe.RFKILL_GLOB = f"{self.root}/rfkill/rfkill*"
         pe.require_root, pe.docker_running = (lambda: None), (lambda: [])
@@ -1169,7 +1171,7 @@ class LaptopSettings(unittest.TestCase):
 
     def tearDown(self):
         (self.pe.BACKLIGHT_GLOB, self.pe.KBD_LIGHT_GLOB, self.pe.RFKILL_GLOB,
-         self.pe.require_root, self.pe.docker_running, self.pe.user_active) = self.saved
+         self.pe.require_root, self.pe.docker_running, self.pe.user_active, self.pe.TCP_TW_REUSE) = self.saved
 
     def read(self, rel):
         with open(os.path.join(self.root, rel)) as fh:
@@ -1195,6 +1197,27 @@ class LaptopSettings(unittest.TestCase):
         self.assertEqual(self.read("backlight/intel/brightness"), "300")
         self.assertEqual(self.read("leds/tpacpi::kbd_backlight/brightness"), "2")
         self.assertEqual([self.read(f"rfkill/rfkill{i}/soft") for i in range(3)], ["0", "0", "0"])
+
+    def test_tcp_port_reuse_set_checked_and_restored(self):
+        import bench_config
+        args = self.args(screen_brightness="unchanged", keyboard_light="unchanged", wifi="unchanged",
+                         bluetooth="unchanged", tcp_tw_reuse="1")
+        with self.assertRaises(SystemExit) as e:
+            self.pe.do_verify(args)
+        self.assertEqual(e.exception.code, 1)                                     # still 2
+        self.pe.do_apply(args)
+        self.assertEqual(self.read("net/tcp_tw_reuse"), "1")
+        with self.assertRaises(SystemExit) as e:
+            self.pe.do_verify(args)
+        self.assertEqual(e.exception.code, 0)
+        self.pe.do_restore(args)
+        self.assertEqual(self.read("net/tcp_tw_reuse"), "2")
+        self.assertEqual(bench_config.parse("ENV_TCP_TW_REUSE=1\n")["ENV_TCP_TW_REUSE"], "1")
+        self.assertEqual(bench_config.parse("")["ENV_TCP_TW_REUSE"], "unchanged")
+        with self.assertRaises(bench_config.ConfigError):
+            bench_config.parse("ENV_TCP_TW_REUSE=3\n")
+        with open(os.path.join(ROOT, "scripts", "run_benchmarks.sh")) as fh:
+            self.assertIn('--tcp-tw-reuse "${CFG_ENV_TCP_TW_REUSE:-unchanged}"', fh.read())
 
     def test_verify_notices_a_radio_still_on(self):
         with self.assertRaises(SystemExit) as e:

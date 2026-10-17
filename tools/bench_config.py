@@ -350,6 +350,16 @@ SCHEMA = {
     "ENV_BLUETOOTH": dict(default="off", check=_choice("off", "unchanged"),
         help="Bluetooth radio during the measurement.",
         options={"off": "switch it off, restored after (recommended)", "unchanged": "leave it as it is"}),
+    "ENV_TCP_TW_REUSE": dict(default="unchanged", check=_choice("unchanged", "0", "1", "2"),
+        help="Linux net.ipv4.tcp_tw_reuse during the measurement. A closed TCP connection keeps its port blocked\n"
+             "for 60 s (TIME_WAIT); the machine has ~28,000 such ports. Many short connections into a Docker\n"
+             "container use two ports each (client to Docker's port relay, relay to the container), and Linux\n"
+             "reuses them early only for pure localhost traffic (2, its default): the echo nosleep test with\n"
+             "10,000 clients x 5 rounds ran out of ports in Docker (~20% of connections reset). 1 lets Linux\n"
+             "reuse them early for every connection. Restored after.",
+        options={"unchanged": "leave it as it is (Linux default 2: early reuse for localhost only)",
+                 "1": "early reuse for every connection (many short connections into Docker)",
+                 "2": "early reuse for localhost only", "0": "never early"}),
     "ON_BATTERY": dict(default="wait", check=_choice("wait", "stop", "ignore"),
         help="A laptop not on its charger: the CPU can run under other power limits on battery. Checked at\n"
              "the start and before every run; a run during which the charger was unplugged is invalid and\n"
@@ -636,6 +646,7 @@ SHORT = {
     "ENV_KEEP_CONTAINERS": "containers to keep running anyway, comma-separated",
     "ENV_SCREEN_BRIGHTNESS": "screen brightness in % (1 = dimmest still on), or unchanged",
     "ENV_KEYBOARD_LIGHT": "keyboard light: off | unchanged",
+    "ENV_TCP_TW_REUSE": "Linux tcp_tw_reuse: unchanged | 1 (many short connections into Docker) | 2 | 0",
     "ENV_WIFI": "Wi-Fi: off | unchanged (off cuts a remote SSH-over-Wi-Fi session, so it refuses then)",
     "ENV_BLUETOOTH": "Bluetooth: off | unchanged",
     "ON_BATTERY": "laptop on battery: wait | stop | ignore",
@@ -709,7 +720,7 @@ DOCS_LAYOUT = EXAMPLE_LAYOUT[:2] + [
     ("Machine settings (configs/machine/ profiles)",
      ["ENV_GOVERNOR", "ENV_TURBO", "ENV_CPU_SPEED", "ENV_POWER_PROFILE", "ENV_PAUSE_TIMERS", "ENV_PAUSE_SERVICES",
       "ENV_STOP_CONTAINERS", "ENV_KEEP_CONTAINERS", "ENV_SCREEN_BRIGHTNESS",
-      "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH", "ON_BATTERY", "SETTLE_SECONDS", "RESTING_MEASURE_SECONDS"]),
+      "ENV_KEYBOARD_LIGHT", "ENV_WIFI", "ENV_BLUETOOTH", "ENV_TCP_TW_REUSE", "ON_BATTERY", "SETTLE_SECONDS", "RESTING_MEASURE_SECONDS"]),
     ("Readiness check before every run, and the conditions during its load (configs/machine/ profiles)",
      ["READY_CHECK_EVERY_SECONDS", "READY_TEMP_REFERENCE_C", "READY_TEMP_MARGIN_C",
       "READY_CPU_BUSY_REFERENCE_PERCENT", "READY_CPU_BUSY_MARGIN_PERCENT", "READY_NO_THROTTLING", "READY_CPU_SPEED",

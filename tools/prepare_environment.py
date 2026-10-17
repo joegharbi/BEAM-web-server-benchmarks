@@ -40,6 +40,7 @@ BOOST = "/sys/devices/system/cpu/cpufreq/boost"
 BACKLIGHT_GLOB = "/sys/class/backlight/*"
 KBD_LIGHT_GLOB = "/sys/class/leds/*kbd_backlight*"
 RFKILL_GLOB = "/sys/class/rfkill/rfkill*"
+TCP_TW_REUSE = "/proc/sys/net/ipv4/tcp_tw_reuse"
 
 
 def read(path):
@@ -206,6 +207,13 @@ def do_apply(args):
         radio_off("wlan", "Wi-Fi", state["radios"])
     if args.bluetooth == "off":
         radio_off("bluetooth", "Bluetooth", state["radios"])
+    if _text(args, "tcp_tw_reuse", "unchanged") != "unchanged":
+        prev = read(TCP_TW_REUSE)
+        if prev is not None and write(TCP_TW_REUSE, args.tcp_tw_reuse):
+            state["files"][TCP_TW_REUSE] = prev                # restored with the other files
+            print(f"TCP port reuse (tcp_tw_reuse): {prev} -> {args.tcp_tw_reuse}")
+        else:
+            print("TCP port reuse: not available, skipped")
 
     timers = units_from(_text(args, "pause_timers", "none"), _profiles().MAINTENANCE_TIMERS)
     services = service_names(_text(args, "pause_services", ""))
@@ -448,7 +456,7 @@ def _restore(args):
     failed = [(path, prev) for path, prev in failed if not write(path, prev)]
     restored = sum(1 for prev in files.values() if prev is not None) - len(failed)
     if files:
-        print(f"Screen, keyboard light, CPU speed: restored {restored} setting(s)")
+        print(f"Screen, keyboard light, CPU speed, TCP port reuse: restored {restored} setting(s)")
     radios = state.get("radios") or {}
     if radios:
         radios_restore(radios)
@@ -553,6 +561,9 @@ def do_verify(args):
         if wanted == "off" and any(read(os.path.join(r, "type")) == kind and read(os.path.join(r, "soft")) == "0"
                                    for r in glob.glob(RFKILL_GLOB)):
             problems.append(f"{label} is on, expected off")
+    now = read(TCP_TW_REUSE)
+    if _text(args, "tcp_tw_reuse", "unchanged") != "unchanged" and now is not None and now != args.tcp_tw_reuse:
+        problems.append(f"tcp_tw_reuse is {now}, expected {args.tcp_tw_reuse}")
     if args.stop_containers:
         keep = {n.strip() for n in (args.keep or "").split(",") if n.strip()}
         others = [n for n in docker_running() if n not in keep]
@@ -592,6 +603,8 @@ def main():
                     help="Wi-Fi radio on apply (default: unchanged)")
     ap.add_argument("--bluetooth", choices=["off", "unchanged"], default="unchanged",
                     help="Bluetooth radio on apply (default: unchanged)")
+    ap.add_argument("--tcp-tw-reuse", choices=["unchanged", "0", "1", "2"], default="unchanged",
+                    help="Linux net.ipv4.tcp_tw_reuse on apply (default: unchanged)")
     ap.add_argument("--state", default=DEFAULT_STATE,
                     help=f"State file path (default: {DEFAULT_STATE})")
     args = ap.parse_args()

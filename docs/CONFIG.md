@@ -217,6 +217,19 @@ Bluetooth radio during the measurement.
 | `off` | switch it off, restored after (recommended) |
 | `unchanged` | leave it as it is |
 
+### `ENV_TCP_TW_REUSE`
+
+Default: `unchanged`
+
+Linux net.ipv4.tcp_tw_reuse during the measurement. A closed TCP connection keeps its port blocked for 60 s (TIME_WAIT); the machine has ~28,000 such ports. Many short connections into a Docker container use two ports each (client to Docker's port relay, relay to the container), and Linux reuses them early only for pure localhost traffic (2, its default): the echo nosleep test with 10,000 clients x 5 rounds ran out of ports in Docker (~20% of connections reset). 1 lets Linux reuse them early for every connection. Restored after.
+
+| Option | Meaning |
+|---|---|
+| `unchanged` | leave it as it is (Linux default 2: early reuse for localhost only) |
+| `1` | early reuse for every connection (many short connections into Docker) |
+| `2` | early reuse for localhost only |
+| `0` | never early |
+
 ### `ON_BATTERY`
 
 Default: `wait`

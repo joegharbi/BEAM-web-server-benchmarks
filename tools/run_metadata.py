@@ -454,6 +454,14 @@ def load1():
     return float(la.split()[0]) if la else ""
 
 
+def tcp_tw_reuse():
+    try:
+        with open("/proc/sys/net/ipv4/tcp_tw_reuse") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
 def machine_state():
     return {
         "time_utc": _now(),
@@ -468,6 +476,7 @@ def machine_state():
         "keyboard_backlight_percent": keyboard_backlight_percent(),
         "wifi": radios().get("wifi", ""),
         "bluetooth": radios().get("bluetooth", ""),
+        "tcp_tw_reuse": tcp_tw_reuse(),
         "cpu_package_temp_c": cpu_package_temp_c(),
         "load1": load1(),
     }

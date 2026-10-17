@@ -40,6 +40,12 @@ for the meter (longer loads, open connections).
 |---|---|---|---|---|
 | A, old setup | `make run CONFIG=campaigns/paper/echo-old.config` | sleep (0.1 s apart) 100 / 1000 / 10000 clients; nosleep 4000 | 160 | ~15 h |
 | B, new setup | `make run CONFIG=campaigns/paper/echo-new.config` | sleep 100 / 1000; nosleep 10000 x 5 rounds; burst 100 x 2000; stream 100 at 10/s for 30 s | 200 | ~5 h |
+| B, Docker nosleep again | `make run CONFIG=campaigns/paper/echo-new-docker-nosleep.config` | nosleep 10000 x 5 rounds, Docker only, ENV_TCP_TW_REUSE=1 | 20 | ~30 min |
+
+A ran 2026-10-17 (results/2026-10-17_043756), B 2026-10-16 (results/2026-10-16_200724). In B, Docker nosleep lost
+~20% of its connections for every server: Docker's port relay takes two ports per connection, each blocked for 60 s
+after closing (TIME_WAIT), and the ~28,000 ports ran out. The re-run lets Linux reuse them early (ENV_TCP_TW_REUSE=1)
+and replaces those 20 rows; B's other rows stay.
 
 Time: about 60 s per measurement besides the load (from the echo check, 2026-10-16), plus the load: sleep
 clients x 0.1 s (10000 clients = 1000 s, ~11 h of A), nosleep a few seconds per round, burst ~15 s, stream 30 s.
