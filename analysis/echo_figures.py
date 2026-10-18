@@ -9,8 +9,9 @@ per test, with Java and C as references.
 nosleep re-run with ENV_TCP_TW_REUSE=1. Images: echo_<new|old>_<container|native> with
   (a) server energy (attributed) per test: Erlang off -> on with the ratio; Java and C as reference marks
   (b) platform energy (measured) saved with busy-waiting off, with its 95% range
-A reference whose runs mostly had the meter behind (tools/progress.py meter_behind) is drawn hollow: its server
-energy is coarse (C in nosleep: one thread per connection, up to 10,000, stalled Scaphandre).
+Where the meter fell behind in most runs of a server and test (tools/progress.py meter_behind: C in nosleep, one
+thread per connection, up to 10,000, stalled Scaphandre), its server energy is the one of the CPU-time method
+(data.energy_by_cpu_time) instead, marked with a dagger; everything else is the meter's (Scaphandre).
 """
 import argparse
 import json
@@ -51,7 +52,8 @@ CAPTION = ("TCP echo servers, busy-waiting on (default) vs off (+sbwt none) for 
            "references (no busy-waiting). (a) Energy attributed to the server process (CPU-time share), log scale; "
            "(b) platform energy (RAPL psys, measured) saved with busy-waiting off, with bootstrap 95% confidence "
            "intervals. Tests ordered from mostly waiting (clients 0.1 s apart) to always busy (all clients at once). "
-           "Hollow: the meter fell behind in most runs, so that value is coarse.")
+           "\u2020 C, nosleep: the meter fell behind (up to 10,000 threads), so this value is the server's exact "
+           "CPU time \u00d7 the platform's price per CPU-second over the load (CPU-time method).")
 
 
 def runs(folders):
@@ -62,8 +64,9 @@ def runs(folders):
         found = {}
         for r in data.rows(folder):
             g = found.setdefault((data.server(r), r["Deploy"], data.busy_wait(r), data.load(r)),
-                                 {"server_j": [], "machine_j": [], "behind": 0})
+                                 {"server_j": [], "machine_j": [], "cpu_j": [], "behind": 0})
             g["server_j"].append(data.num(r, "Container Energy (J)"))
+            g["cpu_j"].append(data.energy_by_cpu_time(r, data.cpu_counter_exact(folder)))
             g["machine_j"].append(data.num(r, "Host Energy (J)"))
             g["behind"] += progress.meter_behind(r)
         out.update(found)
@@ -72,6 +75,14 @@ def runs(folders):
 
 def coarse(g):
     return g["behind"] * 2 > len(g["server_j"])
+
+
+def server_energy(g):
+    """(median server energy, method): the meter's, or the CPU-time method's where the meter fell behind in most
+    runs (only with an exact CPU counter; without one the meter's value stays, marked 'coarse')."""
+    if coarse(g) and None not in g["cpu_j"]:
+        return data.median(g["cpu_j"]), "cpu-time"
+    return data.median(g["server_j"]), "coarse" if coarse(g) else "meter"
 
 
 def echo(r, which, deploy, width, path, dpi):
@@ -101,11 +112,13 @@ def echo(r, which, deploy, width, path, dpi):
             g = r.get((server, deploy, "on", load))
             if not g:
                 continue
-            hollow = coarse(g)
-            any_coarse |= hollow
-            row[key] = dict(server_j=data.median(g["server_j"]), platform_j=data.median(g["machine_j"]), coarse=hollow)
-            a.scatter(row[key]["server_j"], yi + dy, s=13, marker=marker, zorder=3, linewidths=0.8, color=color,
-                      facecolors="white" if hollow else color, edgecolors=color if hollow else "white")
+            value, method = server_energy(g)
+            any_coarse |= method != "meter"
+            row[key] = dict(server_j=value, method=method, meter_j=data.median(g["server_j"]),
+                            platform_j=data.median(g["machine_j"]))
+            a.scatter(value, yi + dy, s=13, marker=marker, zorder=3, color=color, edgecolors="white", linewidths=0.6)
+            if method != "meter":
+                a.text(value / 1.25, yi + dy, "\u2020", va="center", ha="right", fontsize=7, color=MUTED)
         lo, hi = row["saved_ci"]
         b.plot([lo, hi], [yi, yi], color=OFF, lw=0.9, alpha=0.55, zorder=2)
         b.scatter(row["saved"], yi, s=14, color=OFF, zorder=3, marker="s", edgecolors="white", linewidths=0.5)
@@ -129,7 +142,8 @@ def echo(r, which, deploy, width, path, dpi):
     items.append(plt.Line2D([], [], color=OFF, lw=0.9, alpha=0.55, marker="s", markersize=3.5,
                             label="saved, 95% CI"))
     if any_coarse:
-        items.append(figures.dot(MUTED, "hollow: meter behind", "s", hollow=True))
+        items.append(plt.Line2D([], [], ls="", marker="$\u2020$", color=MUTED, markersize=5,
+                                label="CPU-time method (caption)"))
     figures.legend(fig, items, ncol=3)
     fig.subplots_adjust(top=1 - (0.42 + 0.17) / fig.get_size_inches()[1])   # room for the legend's second row
     figures.save(fig, path, dpi)
