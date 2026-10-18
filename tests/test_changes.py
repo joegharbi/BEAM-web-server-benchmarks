@@ -3588,6 +3588,35 @@ class AnalysisStats(unittest.TestCase):
         self.assertGreaterEqual(a[1], self.s.ratio(on, off))
 
 
+class EchoFigures(unittest.TestCase):
+    """analysis/echo_figures.py: a re-run replaces the runs it measured again; meter-behind runs are marked coarse."""
+
+    def folder(self, rows):
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "echo"))
+        head = ["Container Name", "Variant", "Deploy", "Pattern", "Num Clients", "Message Size (B)", "Spacing (s)",
+                "Rounds", "Messages per Client", "Rate (msg/s)", "Container Energy (J)", "Host Energy (J)",
+                "Execution Time (s)", "Energy Sampling Step (ms)", "Energy Samples"]
+        with open(os.path.join(d, "echo", "x_connect.csv"), "w", newline="") as fh:
+            csv.writer(fh).writerows([head] + rows)
+        return d
+
+    def test_rerun_replaces_and_coarse(self):
+        sys.path.insert(0, os.path.join(ROOT, "analysis"))
+        import echo_figures
+        row = lambda name, deploy, energy, samples: [name, "", deploy, "connect", "10000", "15", "0", "5", "", "",
+                                                     energy, "300", "24", "500", samples]
+        first = self.folder([row("ec-c-pure-14", "container", "40", "60"), row("ec-c-pure-14-native", "native", "70", "8")])
+        again = self.folder([row("ec-c-pure-14", "container", "50", "7"), row("ec-c-pure-14", "container", "60", "40")])
+        r = echo_figures.runs([first, again])
+        key = ("ec-c-pure-14", "container", "on", "nosleep 10000 clients x5 rounds")
+        self.assertEqual(r[key]["server_j"], [50.0, 60.0])                       # the re-run, not the first runs
+        self.assertFalse(echo_figures.coarse(r[key]))                            # 1 of 2 behind: not most
+        native = r[("ec-c-pure-14", "native", "on", "nosleep 10000 clients x5 rounds")]
+        self.assertEqual(native["server_j"], [70.0])                             # kept: not measured again
+        self.assertTrue(echo_figures.coarse(native))
+
+
 class PauseUserServices(unittest.TestCase):
     """ENV_PAUSE_SERVICES user:<name>: a service of the person measuring (e.g. Claude Code Remote Control) is
     stopped while measuring and started again after, unless the measurement was started from it."""
