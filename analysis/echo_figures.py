@@ -12,6 +12,10 @@ nosleep re-run with ENV_TCP_TW_REUSE=1. Images: echo_<new|old>_<container|native
 Where the meter fell behind in most runs of a server and test (tools/progress.py meter_behind: C in nosleep, one
 thread per connection, up to 10,000, stalled Scaphandre), its server energy is the one of the CPU-time method
 (data.energy_by_cpu_time) instead, marked with a dagger; everything else is the meter's (Scaphandre).
+  echo_spread_<setup>_<deploy>  the 5 runs of Erlang per test, as % from their median, busy-waiting on vs off,
+                                with the spread (CV) of each: how jumpy the measurement is
+echo_figures.json also holds, per test, the latency and throughput of every server (for the meeting page; not a
+paper figure: the Python client's ~1.5 ms round trip hides wake-up gains of microseconds).
 """
 import argparse
 import json
@@ -54,6 +58,8 @@ CAPTION = ("TCP echo servers, busy-waiting on (default) vs off (+sbwt none) for 
            "intervals. Tests ordered from mostly waiting (clients 0.1 s apart) to always busy (all clients at once). "
            "\u2020 C, nosleep: the meter fell behind (up to 10,000 threads), so this value is the server's exact "
            "CPU time \u00d7 the platform's price per CPU-second over the load (CPU-time method).")
+SPREAD_CAPTION = ("Run-to-run variation of the attributed server energy of the Erlang echo server: its 5 runs per test as "
+                  "deviation from that test's median, busy-waiting on vs off. Right: coefficient of variation on / off.")
 
 
 def runs(folders):
@@ -69,6 +75,9 @@ def runs(folders):
             g["cpu_j"].append(data.energy_by_cpu_time(r, data.cpu_counter_exact(folder)))
             g["machine_j"].append(data.num(r, "Host Energy (J)"))
             g["behind"] += progress.meter_behind(r)
+            g.setdefault("latency_ms", []).append(data.num(r, "Avg Latency (ms)"))
+            g.setdefault("rate", []).append(data.num(r, "Messages/s"))
+            g["failed"] = g.get("failed", 0) + int(data.num(r, "Failed Messages") or 0)
         out.update(found)
     return out
 
@@ -150,6 +159,48 @@ def echo(r, which, deploy, width, path, dpi):
     return out
 
 
+def spread(r, which, deploy, width, path, dpi):
+    """The 5 runs of Erlang per test as % from their median: busy-waiting on scatters, off stays close."""
+    tests = [t for t in TESTS[which] if (ERLANG, deploy, "on", t[0]) in r]
+    fig, a = plt.subplots(figsize=(figures.WIDTH_IN[width], 0.22 * len(tests) + 0.75))
+    y = list(range(len(tests)))[::-1]
+    a.set_yticks(y, [t[1] for t in tests])
+    out = []
+    for yi, (load, name) in zip(y, tests):
+        row = dict(test=load, label=name)
+        for bw, color, dy in (("on", ON, 0.13), ("off", OFF, -0.13)):
+            values = r[(ERLANG, deploy, bw, load)]["server_j"]
+            m = data.median(values)
+            dev = [(v / m - 1) * 100 for v in values]
+            row[f"deviation_{bw}"], row[f"cv_{bw}"] = dev, data.cv(values)
+            a.scatter(dev, [yi + dy] * len(dev), s=9, color=color, alpha=0.85, zorder=3, edgecolors="none")
+        a.text(1.01, yi, f"{row['cv_on']:.0f}% / {row['cv_off']:.0f}%", transform=a.get_yaxis_transform(),
+               va="center", fontsize=6.5, color=MUTED)
+        out.append(row)
+    a.text(1.01, len(tests) - 0.35, "CV on / off", transform=a.get_yaxis_transform(), fontsize=6.5, color=MUTED)
+    a.axvline(0, color=MUTED, lw=0.6)
+    a.set_xlabel("Server energy of each run, from its median (%)")
+    figures.legend(fig, [figures.dot(ON, "Erlang, busy-waiting on, 5 runs"), figures.dot(OFF, "off, 5 runs")],
+                   ncol=2, titles=False)
+    figures.save(fig, path, dpi)
+    return out
+
+
+def latency(r, which, deploy):
+    """Per test: average latency (ms) and messages/s of every server, medians of 5 runs, and failed messages."""
+    out = []
+    for load, name in TESTS[which]:
+        row = dict(test=load, label=name)
+        for key, server, bw in (("erlang_on", ERLANG, "on"), ("erlang_off", ERLANG, "off"),
+                                ("java", REFERENCES[0][1], "on"), ("c", REFERENCES[1][1], "on")):
+            g = r.get((server, deploy, bw, load))
+            if g:
+                row[key] = dict(latency_ms=data.median(g["latency_ms"]), messages_per_s=data.median(g["rate"]),
+                                failed=g["failed"])
+        out.append(row)
+    return out
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--new", required=True, help="results folder of campaigns/paper/echo-new.config")
@@ -165,16 +216,24 @@ def main():
     figures.style()
     new_folders = [args.new] + ([args.rerun] if args.rerun else [])
     figures.CONTEXT["show"], figures.CONTEXT["sources"] = args.title, new_folders + [args.old]
-    figures.CONTEXT["caption"] = CAPTION
-    result = {}
+    result, spreads, latencies = {}, {}, {}
     for which, r in (("new", runs(new_folders)), ("old", runs([args.old]))):
         for deploy in ("container", "native"):
+            key = f"{which}_{deploy}"
             figures.CONTEXT["text"] = f"TCP echo, {SETUP[which]} · {WHERE[deploy]} · median of 5 runs"
-            path = os.path.join(args.out, f"echo_{which}_{deploy}.{args.format}")
+            figures.CONTEXT["caption"] = CAPTION
+            path = os.path.join(args.out, f"echo_{key}.{args.format}")
             print(path)
-            result[f"{which}_{deploy}"] = echo(r, which, deploy, args.width, path, args.dpi)
+            result[key] = echo(r, which, deploy, args.width, path, args.dpi)
+            figures.CONTEXT["text"] = f"TCP echo, {SETUP[which]} · {WHERE[deploy]} · Erlang · 5 runs"
+            figures.CONTEXT["caption"] = SPREAD_CAPTION
+            path = os.path.join(args.out, f"echo_spread_{key}.{args.format}")
+            print(path)
+            spreads[key] = spread(r, which, deploy, args.width, path, args.dpi)
+            latencies[key] = latency(r, which, deploy)
     with open(os.path.join(args.out, "echo_figures.json"), "w") as fh:
-        json.dump({"source": {"new": new_folders, "old": args.old}, "figures": result}, fh, indent=1)
+        json.dump({"source": {"new": new_folders, "old": args.old}, "figures": result, "spread": spreads,
+                   "latency": latencies}, fh, indent=1)
     print(os.path.join(args.out, "echo_figures.json"))
     with open(os.path.join(args.out, "FIGURES.md"), "w") as fh:
         fh.write(f"# Echo figures in this folder\n\nMade by `analysis/echo_figures.py` ({args.width} column, "
