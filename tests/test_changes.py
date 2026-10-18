@@ -3588,6 +3588,34 @@ class AnalysisStats(unittest.TestCase):
         self.assertGreaterEqual(a[1], self.s.ratio(on, off))
 
 
+class CpuTimeMethod(unittest.TestCase):
+    """The second energy method (CPU-time): saved with every new run, used by the analysis where the meter fell behind."""
+
+    def test_formula_and_missing_inputs(self):
+        import server_box
+        self.assertAlmostEqual(server_box.energy_by_cpu_time(13.0, 300.0, 24.0, 8), 13 * 300 / (24 * 8))
+        self.assertIsNone(server_box.energy_by_cpu_time(None, 300.0, 24.0, 8))
+        self.assertIsNone(server_box.energy_by_cpu_time(13.0, 300.0, 0, 8))
+
+    def test_measure_core_writes_and_warns(self):
+        import csv_columns
+        self.assertIn("Container Energy, CPU-time method (J)", csv_columns.ECHO_COLUMNS)
+        self.assertIn("Container Energy, CPU-time method (J)", csv_columns.HTTP_COLUMNS)
+        with open(os.path.join(ROOT, "tools", "measure_core.py")) as fh:
+            src = fh.read()
+        self.assertIn('"Container Energy, CPU-time method (J)": round(by_cpu, 6)', src)
+        self.assertIn("server_box.DISAGREE", src)
+
+    def test_analysis_only_with_an_exact_cpu_counter(self):
+        sys.path.insert(0, os.path.join(ROOT, "analysis"))
+        import data
+        row = {"Container Total CPU (%*s)": "1300", "Host Energy (J)": "300", "Execution Time (s)": "24", "Host CPUs": "8"}
+        self.assertAlmostEqual(data.energy_by_cpu_time(row), 13 * 300 / (24 * 8))
+        self.assertIsNone(data.energy_by_cpu_time(row, exact=False))
+        self.assertEqual(data.energy_by_cpu_time(dict(row, **{"Container Energy, CPU-time method (J)": "5"})), 5.0)
+        self.assertFalse(data.cpu_counter_exact(tempfile.mkdtemp()))           # no metadata: not trusted
+
+
 class EchoFigures(unittest.TestCase):
     """analysis/echo_figures.py: a re-run replaces the runs it measured again; meter-behind runs are marked coarse."""
 

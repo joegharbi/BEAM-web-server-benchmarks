@@ -50,6 +50,20 @@ def cpu_usec(folder):
     return None
 
 
+def energy_by_cpu_time(cpu_seconds, platform_j, seconds, cpus):
+    """The server's energy by the CPU-time method, a second method next to the meter's: its exact CPU-seconds
+    (the cgroup counter) x the price of one CPU-second over the load (platform energy / (load seconds x CPUs)),
+    the rule Scaphandre applies every 0.5 s. It reads no threads, so it cannot fall behind (Scaphandre's /proc
+    scan did for a C server with 10,000 threads), but it prices every CPU-second at the load's average power.
+    None when an input is missing."""
+    if None in (cpu_seconds, platform_j, seconds, cpus) or seconds <= 0 or cpus <= 0:
+        return None
+    return cpu_seconds * platform_j / (seconds * cpus)
+
+
+DISAGREE = 0.25     # the meter and the CPU-time method differ by more than this (both above 1 J): warn
+
+
 def processes(folder):
     """Names of the processes in the cgroup `folder` (threads are not listed), sorted."""
     names = []

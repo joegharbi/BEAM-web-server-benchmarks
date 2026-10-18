@@ -367,11 +367,14 @@ def measure(args, workload):
     # 7. judge, then the CSV row and the results-index line
     cpu, mem = resources['cpu'], resources['mem']
     cpu = load_cpu(cpu, cpu_start, cpu_end, runtime, name)
+    by_cpu = server_box.energy_by_cpu_time((cpu_end - cpu_start) / 1e6, energy["host_energy_j"], runtime, num_cores) \
+        if cpu_start is not None and cpu_end is not None else None
     values = {
         "Container Name": name, **csv_columns.run_fields(args.deploy),
         **workload.values(args, runtime),
         "Execution Time (s)": float(runtime),
         "Container CPU Limit": cpu_limit, "Container Energy (J)": float(energy["energy_j"]),
+        "Container Energy, CPU-time method (J)": round(by_cpu, 6) if by_cpu is not None else "",
         "Container Avg Power (W)": float(energy["avg_power_w"]),
         "Container Avg CPU (%)": float(cpu.get('avg', 0.0)), "Container Peak CPU (%)": float(cpu.get('peak', 0.0)),
         "Container Total CPU (%*s)": float(cpu.get('total', 0.0)), "Container Avg Mem (MB)": float(mem.get('avg', 0.0)),
@@ -397,6 +400,10 @@ def measure(args, workload):
         measure_quiet_msg(f"{name} | {cnt} | {runtime:.1f}s | {rate:.0f} {workload.rate_unit} | {output_csv}")
     if success < total:
         logger.warning("%s | %d of %d %s failed", name, total - success, total, workload.rate_unit.split("/")[0])
+    if by_cpu is not None and min(by_cpu, energy["energy_j"]) > 1 and \
+            abs(by_cpu / energy["energy_j"] - 1) > server_box.DISAGREE:
+        logger.warning("%s | the meter and the CPU-time method disagree: %.1f J vs %.1f J (check the meter readings)",
+                       name, energy["energy_j"], by_cpu)
     if progress.meter_behind(values):
         logger.warning("%s | the meter fell behind: %d readings in %.1f s (step %s ms); the server energy of this "
                        "run is coarse", name, values["Energy Samples"], runtime, values["Energy Sampling Step (ms)"])

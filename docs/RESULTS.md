@@ -63,7 +63,7 @@ HTTP columns, WebSocket files the same with the WebSocket columns.
 | 1. What was measured (WebSocket) | Container Name, Variant, Deploy, Repeat, Session, Measured At (UTC), Test Type, Pattern, Num Clients, Message Size (KB), Rate (msg/s), Bursts, Interval (s), Duration (s) |
 | 2. Performance (HTTP) | Successful Requests, Failed Requests, Execution Time (s), Requests/s |
 | 2. Performance (WebSocket) | Total Messages, Successful Messages, Failed Messages, Execution Time (s), Messages/s, Throughput (MB/s), Avg Latency (ms), Min Latency (ms), Max Latency (ms) |
-| 3. Container | Container CPU Limit, Container Energy (J), Container Avg Power (W), Container Avg CPU (%), Container Peak CPU (%), Container Total CPU (%*s), Container Avg Mem (MB), Container Peak Mem (MB), Container Total Mem (MB*s) |
+| 3. Container | Container CPU Limit, Container Energy (J), Container Energy, CPU-time method (J), Container Avg Power (W), Container Avg CPU (%), Container Peak CPU (%), Container Total CPU (%*s), Container Avg Mem (MB), Container Peak Mem (MB), Container Total Mem (MB*s) |
 | 4. Host | Host CPUs, Host Energy (J), Host Avg Power (W), Host CPU Temp Start (C), Host CPU Temp End (C), Host Throttled (ms), Host CPU Speed Limit Min (MHz), Host CPU Avg Speed (MHz) |
 | 5. Idle | Idle Time (s), Container Idle Energy (J), Container Idle Avg Power (W), Host Idle Avg Power (W) |
 | 6. How the run went | Warm-up (s), Waited Before Start (s), Waited Before Load (s), Ready Check, Energy Samples, Energy Sampling Step (ms), Energy Window Coverage, Raw Log, Server Processes |
@@ -76,6 +76,13 @@ full table of renamed columns is in the README.
 the image, run without Docker in a systemd user scope; `DEPLOY` in the config). Native rows are named
 `<server>-native`; for them the Container columns describe the scope (its cgroup), and Container CPU Limit is
 `none`. Files written before this column read as empty (container).
+
+**Container Energy, CPU-time method (J):** a second split of the platform energy, next to the meter's: the
+server's exact CPU-seconds (Total CPU / 100) x the price of one CPU-second over the load (Host Energy / (load
+seconds x Host CPUs)), the rule Scaphandre applies every 0.5 s. It reads no threads, so it stays right when the
+meter falls behind (a server with thousands of threads), but it prices every CPU-second at the load's average
+power. Empty where the CPU counter could not be read, and in files written before this column. A run where the
+two differ by more than 25% (both above 1 J) gets a warning.
 
 **Container CPU:** Total CPU (%*s, 100 = one core busy for one second) and Avg CPU are the server's CPU time
 over exactly the load window, from its cgroup's own counter (`cpu.stat` usage_usec, read at the start and end

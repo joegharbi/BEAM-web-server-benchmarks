@@ -308,7 +308,7 @@ One row per run. Every measured value says whose it is: `Container …` (the ser
 |---|---|
 | 1. What was measured | Container Name, Variant, Repeat, Session (1 = first start, 2 = after the first resume, ...), Measured At (UTC), then the workload (HTTP: Type, Total Requests, HTTP Max Workers, HTTP Connection Mode; WebSocket: Test Type, Pattern, Num Clients, Message Size (KB), Rate, Bursts, Interval, Duration) |
 | 2. Performance | HTTP: Successful/Failed Requests, Execution Time (s), Requests/s; WebSocket: Total/Successful/Failed Messages, Execution Time (s), Messages/s, Throughput (MB/s), Avg/Min/Max Latency (ms) |
-| 3. Container | Container CPU Limit (`none` = may use every host CPU), Container Energy (J), Container Avg Power (W), Container Avg/Peak/Total CPU, Container Avg/Peak/Total Mem |
+| 3. Container | Container CPU Limit (`none` = may use every host CPU), Container Energy (J), Container Energy, CPU-time method (J) (a second split, docs/RESULTS.md), Container Avg Power (W), Container Avg/Peak/Total CPU, Container Avg/Peak/Total Mem |
 | 4. Host | Host CPUs, Host Energy (J), Host Avg Power (W), Host CPU Temp Start/End (C), Host Throttled (ms) |
 | 5. Idle | Idle Time (s), Container Idle Energy (J), Container Idle Avg Power (W), Host Idle Avg Power (W) |
 | 6. How the run went | Warm-up (s), Waited Before Start/Load (s), Ready Check, Energy Samples, Energy Sampling Step (ms), Energy Window Coverage, Raw Log (the run's kept Scaphandre log, relative to the results folder) |

@@ -28,7 +28,8 @@ WS_PERFORMANCE = ["Total Messages", "Successful Messages", "Failed Messages", "E
                   "Throughput (MB/s)", "Avg Latency (ms)", "Min Latency (ms)", "Max Latency (ms)"]
 ECHO_PERFORMANCE = ["Total Messages", "Successful Messages", "Failed Messages", "Execution Time (s)", "Messages/s",
                     "Avg Latency (ms)", "Min Latency (ms)", "Max Latency (ms)"]
-CONTAINER = ["Container CPU Limit", "Container Energy (J)", "Container Avg Power (W)", "Container Avg CPU (%)",
+CONTAINER = ["Container CPU Limit", "Container Energy (J)", "Container Energy, CPU-time method (J)",
+             "Container Avg Power (W)", "Container Avg CPU (%)",
              "Container Peak CPU (%)", "Container Total CPU (%*s)", "Container Avg Mem (MB)",
              "Container Peak Mem (MB)", "Container Total Mem (MB*s)"]
 HOST = ["Host CPUs", "Host Energy (J)", "Host Avg Power (W)", "Host CPU Temp Start (C)", "Host CPU Temp End (C)",
