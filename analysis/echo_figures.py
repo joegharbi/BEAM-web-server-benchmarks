@@ -12,8 +12,8 @@ nosleep re-run with ENV_TCP_TW_REUSE=1. Images: echo_<new|old>_<container|native
 Where the meter fell behind in most runs of a server and test (tools/progress.py meter_behind: C in nosleep, one
 thread per connection, up to 10,000, stalled Scaphandre), its server energy is the one of the CPU-time method
 (data.energy_by_cpu_time) instead, marked with a dagger; everything else is the meter's (Scaphandre).
-  echo_spread_<setup>_<deploy>  the 5 runs of Erlang per test, as % from their median, busy-waiting on vs off,
-                                with the spread (CV) of each: how jumpy the measurement is
+  echo_spread_<setup>_<deploy>  the 5 runs per test, as % from their median: Erlang busy-waiting on vs off, and
+                                Java and C as references; with the spread (CV) of each: how jumpy the measurement is
 echo_figures.json also holds, per test, the latency and throughput of every server (for the meeting page; not a
 paper figure: the Python client's ~1.5 ms round trip hides wake-up gains of microseconds).
 """
@@ -58,8 +58,11 @@ CAPTION = ("TCP echo servers, busy-waiting on (default) vs off (+sbwt none) for 
            "intervals. Tests ordered from mostly waiting (clients 0.1 s apart) to always busy (all clients at once). "
            "\u2020 C, nosleep: the meter fell behind (up to 10,000 threads), so this value is the server's exact "
            "CPU time \u00d7 the platform's price per CPU-second over the load (CPU-time method).")
-SPREAD_CAPTION = ("Run-to-run variation of the attributed server energy of the Erlang echo server: its 5 runs per test as "
-                  "deviation from that test's median, busy-waiting on vs off. Right: coefficient of variation on / off.")
+SPREAD_CAPTION = ("Run-to-run variation of the attributed server energy: the 5 runs per test as deviation from that "
+                  "test's median, for Erlang with busy-waiting on and off and for the references without busy-waiting "
+                  "(Java, C). Right: coefficient of variation. Sleep with 100 clients: the servers use 0.005-0.07 J, "
+                  "so a single meter reading changes a run by tens of percent. "
+                  "\u2020 C, nosleep: CPU-time method (the meter fell behind).")
 
 
 def runs(folders):
@@ -160,28 +163,51 @@ def echo(r, which, deploy, width, path, dpi):
 
 
 def spread(r, which, deploy, width, path, dpi):
-    """The 5 runs of Erlang per test as % from their median: busy-waiting on scatters, off stays close."""
+    """The 5 runs per test as % from their median: Erlang with busy-waiting on scatters, off stays close, and so do
+    the references without busy-waiting (Java, C). Where the meter fell behind, the CPU-time method's values."""
     tests = [t for t in TESTS[which] if (ERLANG, deploy, "on", t[0]) in r]
-    fig, a = plt.subplots(figsize=(figures.WIDTH_IN[width], 0.22 * len(tests) + 0.75))
+    series = [("on", ERLANG, "on", ON, "o"), ("off", ERLANG, "off", OFF, "o")] + \
+             [(key, server, "on", color, marker) for key, server, color, marker, *_ in REFERENCES]
+    offsets = dict(zip([s[0] for s in series], (0.27, 0.09, -0.09, -0.27)))
+    fig, a = plt.subplots(figsize=(figures.WIDTH_IN[width], 0.36 * len(tests) + 0.85))
     y = list(range(len(tests)))[::-1]
     a.set_yticks(y, [t[1] for t in tests])
-    out = []
+    out, dagger = [], False
     for yi, (load, name) in zip(y, tests):
         row = dict(test=load, label=name)
-        for bw, color, dy in (("on", ON, 0.13), ("off", OFF, -0.13)):
-            values = r[(ERLANG, deploy, bw, load)]["server_j"]
+        cvs = []
+        for key, server, bw, color, marker in series:
+            g = r.get((server, deploy, bw, load))
+            if not g:
+                cvs.append("\u2013")
+                continue
+            by_cpu = coarse(g) and None not in g["cpu_j"]
+            values = g["cpu_j"] if by_cpu else g["server_j"]
             m = data.median(values)
-            dev = [(v / m - 1) * 100 for v in values]
-            row[f"deviation_{bw}"], row[f"cv_{bw}"] = dev, data.cv(values)
-            a.scatter(dev, [yi + dy] * len(dev), s=9, color=color, alpha=0.85, zorder=3, edgecolors="none")
-        a.text(1.01, yi, f"{row['cv_on']:.0f}% / {row['cv_off']:.0f}%", transform=a.get_yaxis_transform(),
-               va="center", fontsize=6.5, color=MUTED)
+            dev = [(v / m - 1) * 100 for v in values] if m else [0.0] * len(values)
+            row[f"deviation_{key}"], row[f"cv_{key}"], row[f"method_{key}"] = dev, data.cv(values), \
+                "cpu-time" if by_cpu else "meter"
+            a.scatter(dev, [yi + offsets[key]] * len(dev), s=8 if marker == "o" else 7, marker=marker, color=color,
+                      alpha=0.85, zorder=3, edgecolors="none")
+            cvs.append(f"{row[f'cv_{key}']:.0f}")
+            row_dagger = row.get("dagger", False) or by_cpu
+            row["dagger"], dagger = row_dagger, dagger or by_cpu
+        a.text(1.01, yi, " / ".join(cvs) + "%" + ("\u2020" if row.get("dagger") else ""),
+               transform=a.get_yaxis_transform(), va="center", fontsize=6.5, color=MUTED)
         out.append(row)
-    a.text(1.01, len(tests) - 0.35, "CV on / off", transform=a.get_yaxis_transform(), fontsize=6.5, color=MUTED)
+    for yi in y[:-1]:
+        a.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
+    a.text(1.01, len(tests) - 0.4, "CV: on / off / Java / C", transform=a.get_yaxis_transform(), fontsize=6.5,
+           color=MUTED)
     a.axvline(0, color=MUTED, lw=0.6)
     a.set_xlabel("Server energy of each run, from its median (%)")
-    figures.legend(fig, [figures.dot(ON, "Erlang, busy-waiting on, 5 runs"), figures.dot(OFF, "off, 5 runs")],
-                   ncol=2, titles=False)
+    items = [figures.dot(ON, "Erlang, busy-waiting on"), figures.dot(OFF, "Erlang, off")]
+    items += [figures.dot(color, label, marker) for _, _, color, marker, label, _ in REFERENCES]
+    if dagger:
+        items.append(plt.Line2D([], [], ls="", marker="$\u2020$", color=MUTED, markersize=5,
+                                label="CPU-time method (caption)"))
+    figures.legend(fig, items, ncol=3, titles=False)
+    fig.subplots_adjust(top=1 - (0.2 + 0.17) / fig.get_size_inches()[1])     # room for the legend's second row
     figures.save(fig, path, dpi)
     return out
 
