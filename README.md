@@ -443,6 +443,7 @@ Port: `HOST_PORT=9001 make check-health` (default 8001). Full clean options: [do
 | [docs/CONFIGURATION_PARITY.md](docs/CONFIGURATION_PARITY.md) | Canonical values (acceptors, max_connections, base image) |
 | [docs/MINIMAL_BASES_AND_UNIFICATION.md](docs/MINIMAL_BASES_AND_UNIFICATION.md) | Unified Dockerfile stages and naming |
 | [docs/BENCHMARKS_AUDIT.md](docs/BENCHMARKS_AUDIT.md) | Current BEAM benchmark set (34 containers) |
+| [docs/DATA_FLOW.md](docs/DATA_FLOW.md) | How the data flows: which program runs when, what it writes, what reads it, up to the paper's figures |
 | [docs/RESULTS.md](docs/RESULTS.md) | CSV format, parameters, visualization |
 | [docs/EXTENDING.md](docs/EXTENDING.md) | Adding new benchmark types (gRPC, etc.) |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Setup, health, Docker, energy, ulimit |
