@@ -345,7 +345,8 @@ def backfill(folder):
 
 def main():
     if sys.argv[1:2] == ["index"]:
-        root = sys.argv[2] if len(sys.argv) > 2 else "results"
+        # The results root is the first word that is not an option; "--quiet" alone must not become a folder
+        root = next((a for a in sys.argv[2:] if a and not a.startswith("--")), "results")
         path, data = write_catalog(root)
         if "--quiet" not in sys.argv:
             for r in data["runs"]:

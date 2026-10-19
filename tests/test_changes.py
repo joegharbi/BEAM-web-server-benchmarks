@@ -3648,6 +3648,23 @@ class MeterOverheadExperiment(unittest.TestCase):
         self.assertEqual(plugins.names("meter"), ["scaphandre"])               # the framework is unchanged
 
 
+class ResultsIndexCommandLine(unittest.TestCase):
+    """'results_index.py index --quiet' without a folder once created a folder named '--quiet'."""
+
+    def test_options_and_empty_words_are_never_the_results_folder(self):
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "results"))
+        tool = os.path.join(ROOT, "tools", "results_index.py")
+        for args in (["index", "--quiet"], ["index", "", "--quiet"]):
+            subprocess.run([sys.executable, tool, *args], cwd=d, check=True, capture_output=True)
+            self.assertFalse(os.path.exists(os.path.join(d, "--quiet")))
+            self.assertTrue(os.path.exists(os.path.join(d, "results", "index.json")))
+        other = os.path.join(d, "elsewhere")
+        os.makedirs(other)
+        subprocess.run([sys.executable, tool, "index", other, "--quiet"], cwd=d, check=True, capture_output=True)
+        self.assertTrue(os.path.exists(os.path.join(other, "index.json")))
+
+
 class EchoFigures(unittest.TestCase):
     """analysis/echo_figures.py: a re-run replaces the runs it measured again; meter-behind runs are marked coarse."""
 
