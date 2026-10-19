@@ -3616,6 +3616,38 @@ class CpuTimeMethod(unittest.TestCase):
         self.assertFalse(data.cpu_counter_exact(tempfile.mkdtemp()))           # no metadata: not trusted
 
 
+class MeterOverheadExperiment(unittest.TestCase):
+    """experiments/meter-overhead: Scaphandre on vs off; the framework's own meters stay as they are."""
+    DIR = os.path.join(ROOT, "experiments", "meter-overhead")
+
+    def py(self, code):
+        return subprocess.run([sys.executable, "-c", code], cwd=self.DIR, capture_output=True, text=True, check=True).stdout
+
+    def test_window_interpolates_and_unwraps_the_counter(self):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "samples.txt")
+        with open(path, "w") as fh:                          # 10 W, counter range 1,000 J: it wraps at t = 100
+            fh.write("# clk_tck 100\n")
+            for i in range(0, 1301):
+                t = i * 0.1
+                fh.write(f"{t:.4f} {int(t * 10e6) % int(1000e6)} {int(1000e6)} {int(t * 50)}\n")
+        out = self.py(f"import json, measure; print(json.dumps(measure.window({path!r}, 95.05, 105.05)))")
+        w = json.loads(out.strip().splitlines()[-1])
+        self.assertAlmostEqual(w["psys_j"], 100.0, places=3)                    # 10 s x 10 W across the wrap
+        self.assertAlmostEqual(w["scaphandre_cpu_s"], 5.0, places=3)            # 50 ticks/s / 100 per s
+        self.assertEqual(w["samples"], 100)
+
+    def test_plan_and_the_off_meter_only_inside_the_experiment(self):
+        out = self.py("import run; p = run.plan(7, 5); print(len(p), len({(i, x) for i, x in p}), "
+                      "all(len({x for i, x in p if i == k}) == 16 for k in range(1, 6)))")
+        self.assertEqual(out.split(), ["80", "80", "True"])
+        help_text = subprocess.run([sys.executable, os.path.join(self.DIR, "measure.py"), "--help"],
+                                   capture_output=True, text=True).stdout
+        self.assertIn("off", help_text.split("--meter")[1].split("--")[0])
+        import plugins
+        self.assertEqual(plugins.names("meter"), ["scaphandre"])               # the framework is unchanged
+
+
 class EchoFigures(unittest.TestCase):
     """analysis/echo_figures.py: a re-run replaces the runs it measured again; meter-behind runs are marked coarse."""
 
