@@ -27,6 +27,9 @@ import stats  # noqa: E402
 
 WIDTH_IN = {"one": 3.46, "two": 7.13}            # IEEE column and page width (8.8 cm, 18.1 cm)
 ON, OFF, JAVA, INK, MUTED, GRID = "#d95926", "#2a78d6", "#1b9e72", "#1f2328", "#5b636b", "#e3e6e8"
+DOT, SQUARE, RUN, LEGEND = 34, 28, 20, 6      # marker sizes: a median, a saved-% square, one run's dot, legend marks
+SAVED_LABEL = "Laptop energy saved\nwith busy-waiting off (%)\n\u2190 off uses more | less \u2192"
+JITTER = (-0.05, -0.025, 0.0, 0.025, 0.05)      # the 5 runs of one row, slightly apart so equal values stay visible
 LANG = {"erlang": "Erlang", "elixir": "Elixir", "gleam": "Gleam", "java": "Java"}
 KIND = {"pure": "pure", "index": "index", "cowboy": "Cowboy", "yaws": "Yaws", "phoenix": "Phoenix", "mist": "mist",
         "bandit": "Bandit", "netty": "Netty"}
@@ -89,23 +92,24 @@ def fig1(rows, title, width, path, dpi):
     y = list(range(n))[::-1]
     for yi, r in zip(y, rows):
         a.plot([r["server_off"], r["server_on"]], [yi, yi], color=GRID, lw=2.2, zorder=1, solid_capstyle="round")
-        a.scatter(r["server_off"], yi, s=16, color=OFF, zorder=3, edgecolors="white", linewidths=0.6)
-        a.scatter(r["server_on"], yi, s=16, color=ON, zorder=3, edgecolors="white", linewidths=0.6)
-        a.text(r["server_on"] + 4, yi, f"{r['ratio']:.1f}×", va="center", fontsize=6.5, color=MUTED)
+        a.scatter(r["server_off"], yi, s=DOT, color=OFF, zorder=3, edgecolors="white", linewidths=0.6)
+        a.scatter(r["server_on"], yi, s=DOT, color=ON, zorder=3, edgecolors="white", linewidths=0.6)
+        a.annotate(f"{r['ratio']:.1f}×", (r["server_on"], yi), xytext=(6, 0), textcoords="offset points",
+                   va="center", fontsize=6.5, color=MUTED)
         lo, hi = r["saved_ci"]
         b.plot([lo, hi], [yi, yi], color=OFF, lw=0.9, alpha=0.55, zorder=2)
-        b.scatter(r["saved"], yi, s=14, color=OFF, zorder=3, marker="s", edgecolors="white", linewidths=0.5)
+        b.scatter(r["saved"], yi, s=SQUARE, color=OFF, zorder=3, marker="s", edgecolors="white", linewidths=0.5)
     a.set_yticks(y, [r["label"] for r in rows])
     a.set_xlim(0, max(r["server_on"] for r in rows) * 1.18)
     a.set_xlabel("Server energy (J)")
     a.set_title("(a) Server, attributed", loc="left")
     b.axvline(0, color=MUTED, lw=0.6)
-    b.set_xlabel("Saved with off (%)")
+    b.set_xlabel(SAVED_LABEL)
     b.set_title("(b) Platform, measured", loc="left")
     b.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(5))
-    a.scatter([], [], s=16, color=ON, label="busy-waiting on (default)")
-    a.scatter([], [], s=16, color=OFF, label="off (+sbwt none)")
-    b.plot([], [], color=OFF, lw=0.9, alpha=0.55, marker="s", markersize=3.5, label="median, 95% CI")
+    a.scatter([], [], s=DOT, color=ON, label="busy-waiting on (default)")
+    a.scatter([], [], s=DOT, color=OFF, label="off (+sbwt none)")
+    b.plot([], [], color=OFF, lw=0.9, alpha=0.55, marker="s", markersize=LEGEND - 1, label="saved: median, 95% range")
     legend(fig, a.get_legend_handles_labels()[0] + b.get_legend_handles_labels()[0])
     save(fig, path, dpi)
 
@@ -174,6 +178,17 @@ def save(fig, path, dpi):
     DESCRIBED.append((os.path.basename(path), CONTEXT["text"], CONTEXT["caption"]))
 
 
+def pair(ax, off, on, yi):
+    """Busy-waiting off (blue) and on (orange) on one row, joined by a grey bar; when the two are within 10% of each
+    other (no real effect), they are drawn slightly above and below each other so neither hides the other."""
+    close = max(on, off) / min(on, off) < 1.1 if min(on, off) > 0 else False
+    dy = 0.12 if close else 0.0
+    if not close:
+        ax.plot([off, on], [yi, yi], color=GRID, lw=2.2, zorder=1, solid_capstyle="round")
+    ax.scatter(off, yi - dy, s=DOT, color=OFF, zorder=3, edgecolors="white", linewidths=0.6)
+    ax.scatter(on, yi + dy, s=DOT, color=ON, zorder=3, edgecolors="white", linewidths=0.6)
+
+
 def legend(fig, items, ncol=3, titles=True):
     """The context line, then one legend row, above the panels and close to their titles."""
     height = fig.get_size_inches()[1]
@@ -186,7 +201,7 @@ def legend(fig, items, ncol=3, titles=True):
 
 
 def dot(color, text, marker="o", hollow=False):
-    return plt.Line2D([], [], ls="", marker=marker, markersize=4, label=text, color=color,
+    return plt.Line2D([], [], ls="", marker=marker, markersize=LEGEND, label=text, color=color,
                       markerfacecolor="white" if hollow else color)
 
 
@@ -206,12 +221,13 @@ def fig2(r, width, path, dpi):
                 continue
             extra = (med(s, "container", bw, "machine_j") / med(s, "native", bw, "machine_j") - 1) * 100
             row[f"docker_extra_{bw}"] = extra
-            a.scatter(extra, y[s], s=16, color=color, zorder=3, edgecolors="white", linewidths=0.6)
+            a.scatter(extra, y[s] + (0.12 if bw == "on" else -0.12), s=DOT, color=color, zorder=3, edgecolors="white",
+                      linewidths=0.6)
         if not java:
             for d, hollow in (("container", False), ("native", True)):
                 ratio = med(s, d, "on", "server_j") / med(s, d, "off", "server_j")
                 row[f"ratio_{d}"] = ratio
-                b.scatter(ratio, y[s] + (0.13 if d == "container" else -0.13), s=14, marker="D", zorder=3,
+                b.scatter(ratio, y[s] + (0.13 if d == "container" else -0.13), s=SQUARE, marker="D", zorder=3,
                           color=ON, facecolors="white" if hollow else ON, linewidths=0.8)
         out.append(row)
     a.axvline(0, color=MUTED, lw=0.6)
@@ -239,11 +255,13 @@ def fig3(r, deploy, width, path, dpi):
             m = data.median(values)
             dev = [(v / m - 1) * 100 for v in values]
             row[f"deviation_{bw}"], row[f"cv_{bw}"] = dev, data.cv(values)
-            a.scatter(dev, [y[s] + dy] * len(dev), s=9, color=color, alpha=0.85, zorder=3, edgecolors="none")
+            a.scatter(dev, [y[s] + dy + JITTER[i % len(JITTER)] for i in range(len(dev))], s=RUN, color=color,
+                      alpha=0.85, zorder=3, edgecolors="white", linewidths=0.4)
         a.text(1.01, y[s], f"{row['cv_on']:.0f}% / {row['cv_off']:.0f}%", transform=a.get_yaxis_transform(),
                va="center", fontsize=6.5, color=MUTED)
         out.append(row)
-    a.text(1.01, len(names) - 0.35, "CV on / off", transform=a.get_yaxis_transform(), fontsize=6.5, color=MUTED)
+    a.text(1.01, len(names) - 0.35, "Spread (CV)\non / off", transform=a.get_yaxis_transform(), fontsize=6.5, color=MUTED,
+           va="bottom")
     a.axvline(0, color=MUTED, lw=0.6)
     a.set_xlabel("Server energy of each run, from its median (%)")
     legend(fig, [dot(ON, "busy-waiting on, 5 runs"), dot(OFF, "off, 5 runs")], ncol=2, titles=False)
@@ -265,18 +283,16 @@ def fig4(r, deploy, width, path, dpi):
             if "-java-" in s:
                 v = med(s, "on", k)
                 row[k] = v
-                ax.scatter(v, y[s], s=16, color=JAVA, zorder=3, edgecolors="white", linewidths=0.6)
+                ax.scatter(v, y[s], s=DOT, color=JAVA, zorder=3, edgecolors="white", linewidths=0.6)
                 continue
             on, off = med(s, "on", k), med(s, "off", k)
             row[k + "_on"], row[k + "_off"] = on, off
-            ax.plot([off, on], [y[s], y[s]], color=GRID, lw=2.2, zorder=1, solid_capstyle="round")
-            ax.scatter(off, y[s], s=16, color=OFF, zorder=3, edgecolors="white", linewidths=0.6)
-            ax.scatter(on, y[s], s=16, color=ON, zorder=3, edgecolors="white", linewidths=0.6)
+            pair(ax, off, on, y[s])
         out.append(row)
     a.set_xlim(0, None)
     a.set_xlabel("Server energy (J)")
     a.set_title("(a) Server, attributed", loc="left")
-    b.set_xlabel("Platform energy (J)")
+    b.set_xlabel("Platform energy (J, axis starts above 0)")
     b.set_title("(b) Platform, measured", loc="left")
     legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
     save(fig, path, dpi)
@@ -314,14 +330,13 @@ def fig5(r, deploy, width, path, dpi):
             if "-java-" in s:
                 v = data.median(r[(s, deploy, "on", test)])
                 row[test] = v
-                ax.scatter(v, y[s], s=16, color=JAVA, zorder=3, edgecolors="white", linewidths=0.6)
+                ax.scatter(v, y[s], s=DOT, color=JAVA, zorder=3, edgecolors="white", linewidths=0.6)
                 continue
             on, off = data.median(r[(s, deploy, "on", test)]), data.median(r[(s, deploy, "off", test)])
             row[test + " on"], row[test + " off"] = on, off
-            ax.plot([off, on], [y[s], y[s]], color=GRID, lw=2.2, zorder=1, solid_capstyle="round")
-            ax.scatter(off, y[s], s=16, color=OFF, zorder=3, edgecolors="white", linewidths=0.6)
-            ax.scatter(on, y[s], s=16, color=ON, zorder=3, edgecolors="white", linewidths=0.6)
-            ax.text(max(on, off) * 1.12, y[s], f"{on / off:.1f}\u00d7", va="center", fontsize=6.5, color=MUTED)
+            pair(ax, off, on, y[s])
+            ax.annotate(f"{on / off:.1f}\u00d7", (max(on, off), y[s]), xytext=(6, 0), textcoords="offset points",
+                        va="center", fontsize=6.5, color=MUTED)
         out.append(row)
     for ax, (_, title) in zip(axes, WS_TESTS):
         ax.set_xscale("log")                      # equal steps = equal ratios, so 2x looks the same everywhere
