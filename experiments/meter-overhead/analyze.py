@@ -19,24 +19,26 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "analysis"))
 import check_attribution  # noqa: E402
 import data  # noqa: E402
 import stats  # noqa: E402
+import measure as experiment  # noqa: E402 - window() over the psys sampler's file (registers 'off' in this process only)
 
 LABEL = {"ec-erlang-pure-29-1-1": "Erlang, busy-waiting on", "ec-erlang-pure-29-1-1-nobw": "Erlang, off",
          "ec-java-pure-27": "Java", "ec-c-pure-14": "C"}
 
 
-def self_report_j(folder, raw_log, t0, t1):
-    """Scaphandre's own consumption in its log over [t0, t1] (what it reports about itself), in J."""
+def self_report_vs_real(folder, raw_log):
+    """Over the whole time Scaphandre recorded in this run (its first to its last reading): the CPUs its report
+    about itself implies (its watts / (platform watts / CPUs), as it prices a CPU-second) and the CPUs it really
+    used (its kernel CPU counter, from the psys sampler's file). Same interval for both; None without a raw log."""
     path = os.path.join(folder, raw_log)
     if not raw_log or not os.path.exists(path):
         return None
-    total, prev = 0.0, None
-    for e in check_attribution.load_entries(path):
-        t = e["host"]["timestamp"]
-        if prev is not None and min(t, t1) > max(prev, t0):
-            w = sum(c["consumption"] for c in e["consumers"] if "scaphandre" in (c.get("exe") or "")) / 1e6
-            total += w * (min(t, t1) - max(prev, t0))
-        prev = t
-    return total
+    entries = check_attribution.load_entries(path)
+    ta, tb = entries[0]["host"]["timestamp"], entries[-1]["host"]["timestamp"]
+    reported = sum(sum(c["consumption"] for c in e["consumers"] if "scaphandre" in (c.get("exe") or "")) / 1e6 * (
+        e["host"]["timestamp"] - p["host"]["timestamp"]) for p, e in zip(entries, entries[1:]))
+    w = experiment.window(os.path.join(folder, "samples.txt"), ta, tb)
+    platform_w = w["psys_j"] / (tb - ta)
+    return reported / (tb - ta) / (platform_w / os.cpu_count()), (w["scaphandre_cpu_s"] or 0) / (tb - ta)
 
 
 def rows_by_run(folder):
@@ -63,18 +65,14 @@ def main(folder):
         g[k]["server_cpus"].append(float(row.get("Container Total CPU (%*s)") or 0) / 100 / rec["load_s"])
         if rec["meter"] == "on":
             g[k]["meter_cpus"].append((rec["scaphandre_cpu_s"] or 0) / rec["load_s"])
-            raw = row.get("Raw Log", "")
-            win = check_attribution.window_file(os.path.join(folder, raw)) if raw else ""
-            if win and os.path.exists(win):
-                w = json.load(open(win))
-                rep = self_report_j(folder, raw, w["load_start_epoch"], w["load_end_epoch"])
-                if rep is not None:
-                    platform_w = rec["psys_j"] / rec["load_s"]
-                    g[k]["self_report_cpus"].append(rep / rec["load_s"] / (platform_w / os.cpu_count()))
+            both = self_report_vs_real(folder, row.get("Raw Log", ""))
+            if both:
+                g[k]["self_report_cpus"].append(both[0])
+                g[k]["meter_cpus_whole"].append(both[1])
     rng = random.Random(stats.SEED)
     out = []
     print(f"{'deploy':<10}{'server':<26}{'power W off -> on':>20}{'extra W (95% range)':>26}{'p':>8}"
-          f"{'energy J off -> on':>22}{'meter CPUs real / self-report':>32}{'failed':>8}")
+          f"{'energy J off -> on':>22}{'meter CPUs: load':>18}{'whole rec. real / self-report':>32}{'failed':>8}")
     for deploy in ("container", "native"):
         for server, label in LABEL.items():
             on, off = g.get((deploy, server, "on")), g.get((deploy, server, "off"))
@@ -90,6 +88,7 @@ def main(folder):
                        load_off_s=data.median(off["load_s"]), load_on_s=data.median(on["load_s"]),
                        meter_cpus=data.median(on["meter_cpus"]) if on["meter_cpus"] else None,
                        meter_self_report_cpus=data.median(on["self_report_cpus"]) if on["self_report_cpus"] else None,
+                       meter_cpus_whole=data.median(on["meter_cpus_whole"]) if on["meter_cpus_whole"] else None,
                        server_cpus_off=data.median(off["server_cpus"]), server_cpus_on=data.median(on["server_cpus"]),
                        failed=sum(on["failed"]) + sum(off["failed"]))
             out.append(row)
@@ -97,13 +96,15 @@ def main(folder):
             print(f"{deploy:<10}{label:<26}{row['power_off_w']:>9.2f} -> {row['power_on_w']:<7.2f}"
                   f"{row['extra_w']:>+10.2f} ({lo:+.2f} to {hi:+.2f}){row['p']:>9.3f}"
                   f"{row['energy_off_j']:>11.0f} -> {row['energy_on_j']:<7.0f}"
-                  f"{(row['meter_cpus'] or 0):>17.2f} / {(row['meter_self_report_cpus'] or 0):<10.2f}{row['failed']:>8}")
+                  f"{(row['meter_cpus'] or 0):>12.2f}{(row['meter_cpus_whole'] or 0):>18.2f} / "
+                  f"{(row['meter_self_report_cpus'] or 0):<11.2f}{row['failed']:>8}")
     with open(os.path.join(folder, "meter_overhead.json"), "w") as fh:
         json.dump(out, fh, indent=1)
     print(f"\nwritten: {os.path.join(folder, 'meter_overhead.json')}")
     print("extra W = median power with Scaphandre on minus off (psys counter, same reading in both); p = exact "
-          "Mann-Whitney test, on vs off; meter CPUs = Scaphandre's CPU-seconds per second of load, from the kernel "
-          "(real) and from its own log (self-report: its watts / (platform watts / CPUs)).")
+          "Mann-Whitney test, on vs off; meter CPUs: load = Scaphandre's CPU-seconds per second of load (kernel counter); "
+          "whole rec. = over its whole recording in the run, real (kernel) vs its own log (self-report: its watts / "
+          "(platform watts / CPUs)).")
 
 
 if __name__ == "__main__":

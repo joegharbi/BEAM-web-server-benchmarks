@@ -72,7 +72,7 @@ def window(path, t0, t1):
 def sidecar(name, mode, t0, t1):
     w = window(os.environ["METER_OVERHEAD_SAMPLES"], t0, t1)
     record = {"server": name, "meter": mode, "deploy": "native" if name.endswith("-native") else "container",
-              "repeat": os.environ.get("MEASURE_REPEAT", ""), "load_s": t1 - t0, **w}
+              "repeat": os.environ.get("MEASURE_REPEAT", ""), "load_s": t1 - t0, "t0": t0, "t1": t1, **w}
     with open(os.environ["METER_OVERHEAD_SIDECAR"], "a") as fh:
         fh.write(json.dumps(record) + "\n")
     return w
