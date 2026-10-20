@@ -98,10 +98,12 @@ def server_energy(g):
 
 
 def echo(r, which, deploy, width, path, dpi):
-    """(a) server energy: Erlang off -> on with the ratio, Java and C as references; (b) platform saved with off."""
+    """(a) server energy: Erlang off -> on with the ratio, Java and C as references; (b) platform saved with off.
+    Each test row has three lanes: Erlang (on/off), Java, C."""
     tests = [t for t in TESTS[which] if (ERLANG, deploy, "on", t[0]) in r]
     rng = random.Random(stats.SEED)
-    fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(figures.WIDTH_IN[width], 0.36 * len(tests) + 0.95),
+    lay = figures.Rows(len(tests), 3, extra_in=0.17)
+    fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(figures.WIDTH_IN[width], lay.height),
                                gridspec_kw={"width_ratios": [1.5, 1], "wspace": 0.08})
     y = list(range(len(tests)))[::-1]
     a.set_yticks(y, [t[1] for t in tests])
@@ -115,11 +117,9 @@ def echo(r, which, deploy, width, path, dpi):
                    saved=stats.saved(on["machine_j"], off["machine_j"]),
                    saved_ci=stats.bootstrap(on["machine_j"], off["machine_j"], stats.saved, rng),
                    platform_on=data.median(on["machine_j"]), platform_off=data.median(off["machine_j"]))
-        yb = yi + 0.12                                     # Erlang just above the row's centre, references below
-        figures.pair(a, s_off, s_on, yb)
-        a.annotate(f"{row['ratio']:.1f}×", (s_on, yb), xytext=(6, 0), textcoords="offset points", va="center",
-                   fontsize=6.5, color=MUTED)
-        for key, server, color, marker, _, dy in REFERENCES:
+        figures.pair(a, s_off, s_on, yi + lay.lane(0), lay)
+        figures.ratio_label(a, s_on, yi + lay.lane(0), f"{row['ratio']:.1f}×")
+        for lane, (key, server, color, marker, *_) in enumerate(REFERENCES, start=1):
             g = r.get((server, deploy, "on", load))
             if not g:
                 continue
@@ -127,13 +127,11 @@ def echo(r, which, deploy, width, path, dpi):
             any_coarse |= method != "meter"
             row[key] = dict(server_j=value, method=method, meter_j=data.median(g["server_j"]),
                             platform_j=data.median(g["machine_j"]))
-            a.scatter(value, yi + dy, s=figures.DOT * 0.85, marker=marker, zorder=3, color=color, edgecolors="white",
-                      linewidths=0.6)
+            figures.point(a, value, yi + lay.lane(lane), color, marker)
             if method != "meter":
-                a.text(value / 1.25, yi + dy, "\u2020", va="center", ha="right", fontsize=7, color=MUTED)
-        lo, hi = row["saved_ci"]
-        b.plot([lo, hi], [yi, yi], color=OFF, lw=0.9, alpha=0.55, zorder=2)
-        b.scatter(row["saved"], yi, s=figures.SQUARE, color=OFF, zorder=3, marker="s", edgecolors="white", linewidths=0.5)
+                a.annotate("\u2020", (value, yi + lay.lane(lane)), xytext=(-6, 0), textcoords="offset points",
+                           va="center", ha="right", fontsize=7, color=MUTED)
+        figures.saved_panel(b, yi, row["saved"], row["saved_ci"])
         out.append(row)
     for yi in y[:-1]:
         for ax in (a, b):
@@ -146,37 +144,34 @@ def echo(r, which, deploy, width, path, dpi):
     a.set_xlim(lo, hi * 2.2)
     a.set_xlabel("Server energy (J, log scale)")
     a.set_title("(a) Server, attributed", loc="left")
-    b.axvline(0, color=MUTED, lw=0.6)
-    b.set_xlabel(figures.SAVED_LABEL)
-    b.set_title("(b) Platform, measured", loc="left")
+    figures.saved_axis(b)
     items = [figures.dot(ON, "Erlang, busy-waiting on"), figures.dot(OFF, "Erlang, off")]
-    items += [figures.dot(color, label, marker) for _, _, color, marker, label, _ in REFERENCES]
-    items.append(plt.Line2D([], [], color=OFF, lw=0.9, alpha=0.55, marker="s", markersize=figures.LEGEND - 1,
-                            label="saved: median, 95% range"))
+    items += [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES]
+    items.append(figures.saved_legend())
     if any_coarse:
         items.append(plt.Line2D([], [], ls="", marker="$\u2020$", color=MUTED, markersize=figures.LEGEND,
                                 label="CPU-time method (caption)"))
-    figures.legend(fig, items, ncol=3)
-    fig.subplots_adjust(top=1 - (0.42 + 0.17) / fig.get_size_inches()[1])   # room for the legend's second row
+    figures.legend(fig, items, ncol=3, legend_rows=2)
     figures.save(fig, path, dpi)
     return out
 
 
 def spread(r, which, deploy, width, path, dpi):
     """The 5 runs per test as % from their median: Erlang with busy-waiting on scatters, off stays close, and so do
-    the references without busy-waiting (Java, C). Where the meter fell behind, the CPU-time method's values."""
+    the references without busy-waiting (Java, C). Where the meter fell behind, the CPU-time method's values.
+    Each test row has four lanes: Erlang on, Erlang off, Java, C."""
     tests = [t for t in TESTS[which] if (ERLANG, deploy, "on", t[0]) in r]
     series = [("on", ERLANG, "on", ON, "o"), ("off", ERLANG, "off", OFF, "o")] + \
              [(key, server, "on", color, marker) for key, server, color, marker, *_ in REFERENCES]
-    offsets = dict(zip([s[0] for s in series], (0.27, 0.09, -0.09, -0.27)))
-    fig, a = plt.subplots(figsize=(figures.WIDTH_IN[width], 0.36 * len(tests) + 0.85))
+    lay = figures.Rows(len(tests), 4, extra_in=0.17)
+    fig, a = plt.subplots(figsize=(figures.WIDTH_IN[width], lay.height))
     y = list(range(len(tests)))[::-1]
     a.set_yticks(y, [t[1] for t in tests])
     out, dagger = [], False
     for yi, (load, name) in zip(y, tests):
         row = dict(test=load, label=name)
         cvs = []
-        for key, server, bw, color, marker in series:
+        for lane, (key, server, bw, color, marker) in enumerate(series):
             g = r.get((server, deploy, bw, load))
             if not g:
                 cvs.append("\u2013")
@@ -187,28 +182,26 @@ def spread(r, which, deploy, width, path, dpi):
             dev = [(v / m - 1) * 100 for v in values] if m else [0.0] * len(values)
             row[f"deviation_{key}"], row[f"cv_{key}"], row[f"method_{key}"] = dev, data.cv(values), \
                 "cpu-time" if by_cpu else "meter"
-            a.scatter(dev, [yi + offsets[key] + figures.JITTER[i % 5] * 0.6 for i in range(len(dev))],
-                      s=figures.RUN if marker == "o" else figures.RUN * 0.9, marker=marker, color=color,
-                      alpha=0.85, zorder=3, edgecolors="white", linewidths=0.4)
+            for v, dy in zip(dev, lay.runs(len(dev))):
+                figures.point(a, v, yi + lay.lane(lane) + dy, color, marker, alpha=0.85)
             cvs.append(f"{row[f'cv_{key}']:.0f}")
-            row_dagger = row.get("dagger", False) or by_cpu
-            row["dagger"], dagger = row_dagger, dagger or by_cpu
+            row["dagger"] = row.get("dagger", False) or by_cpu
+            dagger = dagger or by_cpu
         a.text(1.01, yi, " / ".join(cvs) + "%" + ("\u2020" if row.get("dagger") else ""),
                transform=a.get_yaxis_transform(), va="center", fontsize=6.5, color=MUTED)
         out.append(row)
     for yi in y[:-1]:
         a.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
-    a.text(1.01, len(tests) - 0.4, "Spread (CV):\non / off / Java / C", transform=a.get_yaxis_transform(), fontsize=6.5,
+    a.text(1.01, len(tests) - 0.45, "Spread (CV):\non / off / Java / C", transform=a.get_yaxis_transform(), fontsize=6.5,
            color=MUTED, va="bottom")
     a.axvline(0, color=MUTED, lw=0.6)
     a.set_xlabel("Server energy of each run, from its median (%)")
     items = [figures.dot(ON, "Erlang, busy-waiting on"), figures.dot(OFF, "Erlang, off")]
-    items += [figures.dot(color, label, marker) for _, _, color, marker, label, _ in REFERENCES]
+    items += [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES]
     if dagger:
         items.append(plt.Line2D([], [], ls="", marker="$\u2020$", color=MUTED, markersize=figures.LEGEND,
                                 label="CPU-time method (caption)"))
-    figures.legend(fig, items, ncol=3, titles=False)
-    fig.subplots_adjust(top=1 - (0.2 + 0.17) / fig.get_size_inches()[1])     # room for the legend's second row
+    figures.legend(fig, items, ncol=3, titles=False, legend_rows=2)
     figures.save(fig, path, dpi)
     return out
 

@@ -12,6 +12,7 @@ PNG and SVG files also carry it inside (title and description fields).
 """
 import argparse
 import json
+import math
 import os
 import random
 import sys
@@ -27,9 +28,14 @@ import stats  # noqa: E402
 
 WIDTH_IN = {"one": 3.46, "two": 7.13}            # IEEE column and page width (8.8 cm, 18.1 cm)
 ON, OFF, JAVA, INK, MUTED, GRID = "#d95926", "#2a78d6", "#1b9e72", "#1f2328", "#5b636b", "#e3e6e8"
-DOT, SQUARE, RUN, LEGEND = 34, 28, 20, 6      # marker sizes: a median, a saved-% square, one run's dot, legend marks
-SAVED_LABEL = "Laptop energy saved\nwith busy-waiting off (%)\n\u2190 off uses more | less \u2192"
-JITTER = (-0.05, -0.025, 0.0, 0.025, 0.05)      # the 5 runs of one row, slightly apart so equal values stay visible
+# One drawing rule for every figure (figures.py and echo_figures.py):
+MARK = 28                                  # area (pt^2) of every point, whatever it shows: a median, one run, a reference
+AREA = {"o": 1.0, "s": 0.8, "^": 1.3, "D": 0.75}    # per shape, so a square or a triangle looks as heavy as a circle
+LEGEND = 5.3                               # legend marks (diameter, pt): the same size as the points
+LANE_IN = 0.13                             # height of one line of points (a lane), in inches, in every figure
+ROW_GAP_IN = 0.07                          # space between two rows, in inches
+FRAME_IN = 0.8                             # axis labels, titles and one legend row, in inches
+SAVED_LABEL = "Laptop energy saved\nwith busy-waiting off (%)\n← off uses more | less →"
 LANG = {"erlang": "Erlang", "elixir": "Elixir", "gleam": "Gleam", "java": "Java"}
 KIND = {"pure": "pure", "index": "index", "cowboy": "Cowboy", "yaws": "Yaws", "phoenix": "Phoenix", "mist": "mist",
         "bandit": "Bandit", "netty": "Netty"}
@@ -38,6 +44,38 @@ WS_TESTS = (("stream 8 KB", "(a) 8 KB: server waits"), ("stream 1024 KB", "(b) 1
 
 
 COMPRESSED = "+compressed"      # a server's runs from before the client stopped offering compression (mist)
+
+
+def size(marker="o"):
+    return MARK * AREA.get(marker, 1.0)
+
+
+def point(ax, x, y, color, marker="o", hollow=False, alpha=1.0):
+    """Every point of every figure: the same size per shape, a thin white edge (or a coloured one when hollow)."""
+    return ax.scatter(x, y, s=size(marker), marker=marker, zorder=3, alpha=alpha, color=color,
+                      facecolors="white" if hollow else color, edgecolors=color if hollow else "white",
+                      linewidths=0.9 if hollow else 0.5)
+
+
+class Rows:
+    """The vertical layout of a figure with `n` rows of `lanes` lines of points each: the figure height and where each
+    lane and each run sits, so one lane has the same height (LANE_IN) in every figure."""
+
+    def __init__(self, n, lanes, extra_in=0.0):
+        self.n, self.lanes = n, lanes
+        row_in = lanes * LANE_IN + ROW_GAP_IN
+        self.unit = LANE_IN / row_in                       # one lane, in row units (a row is 1 unit high)
+        self.height = n * row_in + FRAME_IN + extra_in
+
+    def lane(self, i, of=None):
+        """Centre of lane i (0 = top) of a row drawn with `of` lanes (default: all)."""
+        k = self.lanes if of is None else of
+        return ((k - 1) / 2 - i) * self.unit
+
+    def runs(self, n_runs):
+        """Small vertical offsets of the runs within one lane, so equal values stay visible."""
+        half = 0.3 * self.unit
+        return [(-half + 2 * half * i / (n_runs - 1)) if n_runs > 1 else 0.0 for i in range(n_runs)]
 
 
 def label(server):
@@ -84,33 +122,44 @@ def fig1_data(folder, deploy, load=80000):
     return sorted(out, key=lambda r: sort_key(r["server"]))
 
 
+def ratio_label(ax, x, y, text):
+    ax.annotate(text, (x, y), xytext=(6, 0), textcoords="offset points", va="center", fontsize=6.5, color=MUTED)
+
+
+def saved_panel(b, yi, saved, ci):
+    """Panel (b): the laptop energy saved with busy-waiting off (square) and its 95% range (line)."""
+    b.plot(list(ci), [yi, yi], color=OFF, lw=0.9, alpha=0.55, zorder=2)
+    point(b, saved, yi, OFF, "s")
+
+
+def saved_axis(b):
+    b.axvline(0, color=MUTED, lw=0.6)
+    b.set_xlabel(SAVED_LABEL)
+    b.set_title("(b) Platform, measured", loc="left")
+
+
+def saved_legend():
+    return plt.Line2D([], [], color=OFF, lw=0.9, alpha=0.55, marker="s", markersize=LEGEND * 0.9,
+                      label="saved: median, 95% range")
+
+
 def fig1(rows, title, width, path, dpi):
     """(a) server energy, busy-waiting on vs off; (b) platform energy (RAPL psys) saved with it off, 95% CI."""
-    n = len(rows)
-    fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], 0.19 * n + 0.75),
+    lay = Rows(len(rows), 1)
+    fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], lay.height),
                                gridspec_kw={"width_ratios": [1.35, 1], "wspace": 0.08})
-    y = list(range(n))[::-1]
+    y = list(range(len(rows)))[::-1]
     for yi, r in zip(y, rows):
-        a.plot([r["server_off"], r["server_on"]], [yi, yi], color=GRID, lw=2.2, zorder=1, solid_capstyle="round")
-        a.scatter(r["server_off"], yi, s=DOT, color=OFF, zorder=3, edgecolors="white", linewidths=0.6)
-        a.scatter(r["server_on"], yi, s=DOT, color=ON, zorder=3, edgecolors="white", linewidths=0.6)
-        a.annotate(f"{r['ratio']:.1f}×", (r["server_on"], yi), xytext=(6, 0), textcoords="offset points",
-                   va="center", fontsize=6.5, color=MUTED)
-        lo, hi = r["saved_ci"]
-        b.plot([lo, hi], [yi, yi], color=OFF, lw=0.9, alpha=0.55, zorder=2)
-        b.scatter(r["saved"], yi, s=SQUARE, color=OFF, zorder=3, marker="s", edgecolors="white", linewidths=0.5)
+        pair(a, r["server_off"], r["server_on"], yi, lay)
+        ratio_label(a, r["server_on"], yi, f"{r['ratio']:.1f}×")
+        saved_panel(b, yi, r["saved"], r["saved_ci"])
     a.set_yticks(y, [r["label"] for r in rows])
     a.set_xlim(0, max(r["server_on"] for r in rows) * 1.18)
     a.set_xlabel("Server energy (J)")
     a.set_title("(a) Server, attributed", loc="left")
-    b.axvline(0, color=MUTED, lw=0.6)
-    b.set_xlabel(SAVED_LABEL)
-    b.set_title("(b) Platform, measured", loc="left")
+    saved_axis(b)
     b.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(5))
-    a.scatter([], [], s=DOT, color=ON, label="busy-waiting on (default)")
-    a.scatter([], [], s=DOT, color=OFF, label="off (+sbwt none)")
-    b.plot([], [], color=OFF, lw=0.9, alpha=0.55, marker="s", markersize=LEGEND - 1, label="saved: median, 95% range")
-    legend(fig, a.get_legend_handles_labels()[0] + b.get_legend_handles_labels()[0])
+    legend(fig, [dot(ON, "busy-waiting on (default)"), dot(OFF, "off (+sbwt none)"), saved_legend()])
     save(fig, path, dpi)
 
 
@@ -153,12 +202,15 @@ CAPTIONS = {
             "(busy-waiting on and off) and Java; (b) busy-wait on/off ratio of the attributed server energy in Docker "
             "(filled) and native (hollow).",
     "fig3": "Run-to-run variation of the attributed server energy: the 5 runs of every server as deviation from that "
-            "server's median, busy-waiting on vs off. Right: coefficient of variation on / off.",
+            "server's median, BEAM with busy-waiting on vs off, Java (no busy-waiting) as reference. Right: coefficient "
+            "of variation.",
     "fig4": "Java reference servers (no busy-waiting) vs BEAM servers with busy-waiting on and off. (a) Attributed "
             "server energy (CPU-time share); (b) platform energy (RAPL psys, measured).",
     "fig5": "WebSocket streams (100 clients, 10 messages/s each, 5 s): attributed server energy with busy-waiting on "
             "vs off, log scale. (a) 8 KB messages; (b) 1 MB messages. Java Netty as reference. Gleam mist without "
             "per-message compression (re-run) and with it (first run; the only server that accepted the client's offer).",
+    "fig6": "WebSocket streams: run-to-run variation of the attributed server energy, the 5 runs of every server as "
+            "deviation from its median, busy-waiting on vs off, Java Netty as reference. (a) 8 KB; (b) 1 MB messages.",
 }
 
 
@@ -173,27 +225,44 @@ def save(fig, path, dpi):
     fmt = os.path.splitext(path)[1][1:]
     meta = {"png": {"Title": CONTEXT["text"], "Description": description, "Software": "WSEB analysis/figures.py"},
             "svg": {"Title": CONTEXT["text"], "Description": description}}.get(fmt)
+    settle_pairs(fig)
     fig.savefig(path, dpi=dpi, metadata=meta)
     plt.close(fig)
     DESCRIBED.append((os.path.basename(path), CONTEXT["text"], CONTEXT["caption"]))
 
 
-def pair(ax, off, on, yi):
-    """Busy-waiting off (blue) and on (orange) on one row, joined by a grey bar; when the two are within 10% of each
-    other (no real effect), they are drawn slightly above and below each other so neither hides the other."""
-    close = max(on, off) / min(on, off) < 1.1 if min(on, off) > 0 else False
-    dy = 0.12 if close else 0.0
-    if not close:
-        ax.plot([off, on], [yi, yi], color=GRID, lw=2.2, zorder=1, solid_capstyle="round")
-    ax.scatter(off, yi - dy, s=DOT, color=OFF, zorder=3, edgecolors="white", linewidths=0.6)
-    ax.scatter(on, yi + dy, s=DOT, color=ON, zorder=3, edgecolors="white", linewidths=0.6)
+PAIRS = []          # pairs drawn but not yet checked for overlap (done in save(), once the axes are final)
+OVERLAP = 0.03      # two points closer than this share of the axis width would cover each other
 
 
-def legend(fig, items, ncol=3, titles=True):
-    """The context line, then one legend row, above the panels and close to their titles."""
+def pair(ax, off, on, yi, lay):
+    """Busy-waiting off (blue) and on (orange) on one lane, joined by a grey bar. Where the two would cover each
+    other on the drawn axis (no real effect), save() moves them slightly above and below each other instead."""
+    bar = ax.plot([off, on], [yi, yi], color=GRID, lw=2.2, zorder=1, solid_capstyle="round")[0]
+    PAIRS.append((ax, off, on, yi, lay.unit, bar, point(ax, off, yi, OFF), point(ax, on, yi, ON)))
+
+
+def settle_pairs(fig):
+    """Separate the pairs of this figure whose two points would overlap, judged on the final axis (log or linear)."""
+    keep = []
+    for ax, off, on, yi, unit, bar, p_off, p_on in PAIRS:
+        if ax.figure is not fig:
+            keep.append((ax, off, on, yi, unit, bar, p_off, p_on))
+            continue
+        lo, hi = ax.get_xlim()
+        f = (lambda v: math.log10(v)) if ax.get_xscale() == "log" else (lambda v: v)
+        if abs(f(on) - f(off)) < OVERLAP * abs(f(hi) - f(lo)):
+            bar.remove()
+            p_off.set_offsets([[off, yi - 0.35 * unit]])
+            p_on.set_offsets([[on, yi + 0.35 * unit]])
+    PAIRS[:] = keep
+
+
+def legend(fig, items, ncol=3, titles=True, legend_rows=1):
+    """The context line, then the legend, above the panels and close to their titles."""
     height = fig.get_size_inches()[1]
     context = 0.17 if CONTEXT["show"] and CONTEXT["text"] else 0.0
-    fig.subplots_adjust(top=1 - ((0.42 if titles else 0.2) + context) / height)
+    fig.subplots_adjust(top=1 - ((0.42 if titles else 0.2) + 0.17 * (legend_rows - 1) + context) / height)
     if context:
         fig.text(0.5, 1.0, CONTEXT["text"], ha="center", va="top", fontsize=7.5, color=INK, fontweight="bold")
     fig.legend(handles=items, loc="upper center", bbox_to_anchor=(0.5, 1.0 - context / height), ncol=ncol,
@@ -201,34 +270,33 @@ def legend(fig, items, ncol=3, titles=True):
 
 
 def dot(color, text, marker="o", hollow=False):
-    return plt.Line2D([], [], ls="", marker=marker, markersize=LEGEND, label=text, color=color,
-                      markerfacecolor="white" if hollow else color)
+    return plt.Line2D([], [], ls="", marker=marker, markersize=LEGEND * (AREA.get(marker, 1.0) ** 0.5), label=text,
+                      color=color, markerfacecolor="white" if hollow else color)
 
 
 def fig2(r, width, path, dpi):
     """Docker vs native: (a) what Docker adds to the machine energy, (b) the busy-wait ratio in both."""
     names = servers(r)
     med = lambda s, d, b, k: data.median(r[(s, d, b)][k])
-    fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], 0.19 * len(names) + 0.75),
+    lay = Rows(len(names), 2)
+    fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], lay.height),
                                gridspec_kw={"width_ratios": [1, 1], "wspace": 0.08})
     y = rows_axis(a, names)
     out = []
     for s in names:
         java = "-java-" in s
         row = {"server": s, "label": label(s)}
-        for bw, color in (("on", JAVA if java else ON), ("off", OFF)):
+        for i, (bw, color) in enumerate((("on", JAVA if java else ON), ("off", OFF))):
             if (s, "native", bw) not in r:
                 continue
             extra = (med(s, "container", bw, "machine_j") / med(s, "native", bw, "machine_j") - 1) * 100
             row[f"docker_extra_{bw}"] = extra
-            a.scatter(extra, y[s] + (0.12 if bw == "on" else -0.12), s=DOT, color=color, zorder=3, edgecolors="white",
-                      linewidths=0.6)
+            point(a, extra, y[s] + (lay.lane(0, of=1) if java else lay.lane(i)), color)
         if not java:
-            for d, hollow in (("container", False), ("native", True)):
+            for i, (d, hollow) in enumerate((("container", False), ("native", True))):
                 ratio = med(s, d, "on", "server_j") / med(s, d, "off", "server_j")
                 row[f"ratio_{d}"] = ratio
-                b.scatter(ratio, y[s] + (0.13 if d == "container" else -0.13), s=SQUARE, marker="D", zorder=3,
-                          color=ON, facecolors="white" if hollow else ON, linewidths=0.8)
+                point(b, ratio, y[s] + lay.lane(i), ON, "D", hollow=hollow)
         out.append(row)
     a.axvline(0, color=MUTED, lw=0.6)
     a.set_xlabel("Docker vs native, platform (%)")
@@ -242,29 +310,41 @@ def fig2(r, width, path, dpi):
     return out
 
 
-def fig3(r, deploy, width, path, dpi):
-    """The 5 runs of every BEAM server, as % from their own median: busy-waiting on scatters, off is tight."""
-    names = servers(r, java=False)
-    fig, a = plt.subplots(figsize=(WIDTH_IN[width], 0.19 * len(names) + 0.75))
-    y = rows_axis(a, names)
+def spread_rows(ax, r_runs, names, lay, cv_header):
+    """The 5 runs of every server as % from its own median: BEAM with busy-waiting on (top lane) and off (bottom
+    lane), Java (one lane, the reference without busy-waiting); the spread (CV) of each on the right."""
+    y = rows_axis(ax, names)
     out = []
     for s in names:
         row = {"server": s, "label": label(s)}
-        for bw, color, dy in (("on", ON, 0.13), ("off", OFF, -0.13)):
-            values = r[(s, deploy, bw)]["server_j"]
+        series = [("java", "on", JAVA, 0, 1)] if "-java-" in s else [("on", "on", ON, 0, 2), ("off", "off", OFF, 1, 2)]
+        cvs = []
+        for key, bw, color, lane, of in series:
+            values = r_runs(s, bw)
             m = data.median(values)
             dev = [(v / m - 1) * 100 for v in values]
-            row[f"deviation_{bw}"], row[f"cv_{bw}"] = dev, data.cv(values)
-            a.scatter(dev, [y[s] + dy + JITTER[i % len(JITTER)] for i in range(len(dev))], s=RUN, color=color,
-                      alpha=0.85, zorder=3, edgecolors="white", linewidths=0.4)
-        a.text(1.01, y[s], f"{row['cv_on']:.0f}% / {row['cv_off']:.0f}%", transform=a.get_yaxis_transform(),
-               va="center", fontsize=6.5, color=MUTED)
+            row[f"deviation_{key}"], row[f"cv_{key}"] = dev, data.cv(values)
+            base = y[s] + lay.lane(lane, of=of)
+            for v, dy in zip(dev, lay.runs(len(dev))):
+                point(ax, v, base + dy, color, alpha=0.85)
+            cvs.append(f"{row[f'cv_{key}']:.0f}%")
+        ax.text(1.01, y[s], " / ".join(cvs), transform=ax.get_yaxis_transform(), va="center", fontsize=6.5, color=MUTED)
         out.append(row)
-    a.text(1.01, len(names) - 0.35, "Spread (CV)\non / off", transform=a.get_yaxis_transform(), fontsize=6.5, color=MUTED,
-           va="bottom")
-    a.axvline(0, color=MUTED, lw=0.6)
+    ax.text(1.01, len(names) - 0.45, cv_header, transform=ax.get_yaxis_transform(), fontsize=6.5, color=MUTED,
+            va="bottom")
+    ax.axvline(0, color=MUTED, lw=0.6)
+    return out
+
+
+def fig3(r, deploy, width, path, dpi):
+    """The 5 runs of every server, as % from their own median: busy-waiting on scatters, off and Java are tight."""
+    names = servers(r)
+    lay = Rows(len(names), 2)
+    fig, a = plt.subplots(figsize=(WIDTH_IN[width], lay.height))
+    out = spread_rows(a, lambda s, bw: r[(s, deploy, bw)]["server_j"], names, lay, "Spread (CV)\non / off; Java")
     a.set_xlabel("Server energy of each run, from its median (%)")
-    legend(fig, [dot(ON, "busy-waiting on, 5 runs"), dot(OFF, "off, 5 runs")], ncol=2, titles=False)
+    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")],
+           titles=False)
     save(fig, path, dpi)
     return out
 
@@ -273,7 +353,8 @@ def fig4(r, deploy, width, path, dpi):
     """Java as the reference: (a) server energy, attributed; (b) machine energy, measured."""
     names = servers(r)
     med = lambda s, b, k: data.median(r[(s, deploy, b)][k])
-    fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], 0.19 * len(names) + 0.75),
+    lay = Rows(len(names), 1)
+    fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], lay.height),
                                gridspec_kw={"width_ratios": [1, 1], "wspace": 0.08})
     y = rows_axis(a, names)
     out = []
@@ -283,11 +364,11 @@ def fig4(r, deploy, width, path, dpi):
             if "-java-" in s:
                 v = med(s, "on", k)
                 row[k] = v
-                ax.scatter(v, y[s], s=DOT, color=JAVA, zorder=3, edgecolors="white", linewidths=0.6)
+                point(ax, v, y[s], JAVA)
                 continue
             on, off = med(s, "on", k), med(s, "off", k)
             row[k + "_on"], row[k + "_off"] = on, off
-            pair(ax, off, on, y[s])
+            pair(ax, off, on, y[s], lay)
         out.append(row)
     a.set_xlim(0, None)
     a.set_xlabel("Server energy (J)")
@@ -316,12 +397,26 @@ def ws_runs(folders):
     return out
 
 
+def log_axis(ax, label_text):
+    ax.set_xscale("log")                      # equal steps = equal ratios, so 2x looks the same everywhere
+    lo, hi = ax.get_xlim()
+    ax.set_xlim(lo, hi * 1.6)
+    ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1, 2, 5)))
+    ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
+    ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+    ax.set_xlabel(label_text)
+
+
+def ws_names(r):
+    names = sorted({k[0] for k in r}, key=sort_key)
+    return [s for s in names if "-java-" not in s] + [s for s in names if "-java-" in s]
+
+
 def fig5(r, deploy, width, path, dpi):
     """WebSocket streams: busy-waiting on vs off for small (8 KB) and large (1 MB) messages, server energy."""
-    names = sorted({k[0] for k in r}, key=sort_key)
-    names = [s for s in names if "-java-" not in s] + [s for s in names if "-java-" in s]
-    fig, axes = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], 0.19 * len(names) + 0.95),
-                             gridspec_kw={"wspace": 0.08})
+    names = ws_names(r)
+    lay = Rows(len(names), 1, extra_in=0.2)
+    fig, axes = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], lay.height), gridspec_kw={"wspace": 0.08})
     y = rows_axis(axes[0], names)
     out = []
     for s in names:
@@ -330,23 +425,31 @@ def fig5(r, deploy, width, path, dpi):
             if "-java-" in s:
                 v = data.median(r[(s, deploy, "on", test)])
                 row[test] = v
-                ax.scatter(v, y[s], s=DOT, color=JAVA, zorder=3, edgecolors="white", linewidths=0.6)
+                point(ax, v, y[s], JAVA)
                 continue
             on, off = data.median(r[(s, deploy, "on", test)]), data.median(r[(s, deploy, "off", test)])
             row[test + " on"], row[test + " off"] = on, off
-            pair(ax, off, on, y[s])
-            ax.annotate(f"{on / off:.1f}\u00d7", (max(on, off), y[s]), xytext=(6, 0), textcoords="offset points",
-                        va="center", fontsize=6.5, color=MUTED)
+            pair(ax, off, on, y[s], lay)
+            ratio_label(ax, max(on, off), y[s], f"{on / off:.1f}×")
         out.append(row)
     for ax, (_, title) in zip(axes, WS_TESTS):
-        ax.set_xscale("log")                      # equal steps = equal ratios, so 2x looks the same everywhere
-        lo, hi = ax.get_xlim()
-        ax.set_xlim(lo, hi * 1.6)
-        ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1, 2, 5)))
-        ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
-        ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
-        ax.set_xlabel("Server energy (J, log scale)")
+        log_axis(ax, "Server energy (J, log scale)")
         ax.set_title(title, loc="left")
+    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
+    save(fig, path, dpi)
+    return out
+
+
+def fig6(r, deploy, width, path, dpi):
+    """WebSocket streams: the 5 runs of every server as % from its median, 8 KB and 1 MB, Java Netty as reference."""
+    names = ws_names(r)
+    lay = Rows(len(names), 2, extra_in=0.2)
+    fig, axes = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], lay.height), gridspec_kw={"wspace": 0.35})
+    out = {}
+    for ax, (test, title) in zip(axes, WS_TESTS):
+        out[test] = spread_rows(ax, lambda s, bw: r[(s, deploy, bw, test)], names, lay, "CV\non / off")
+        ax.set_title(title, loc="left")
+        ax.set_xlabel("Each run, from its median (%)")
     legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
     save(fig, path, dpi)
     return out
@@ -366,7 +469,7 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     style()
     CONTEXT["show"], CONTEXT["sources"] = args.title, args.folders
-    figures = {"fig1": {}, "fig2": {}, "fig3": {}, "fig4": {}, "fig5": {}}
+    figures = {"fig1": {}, "fig2": {}, "fig3": {}, "fig4": {}, "fig5": {}, "fig6": {}}
 
     def out(name):
         path = os.path.join(args.out, f"{name}.{args.format}")
@@ -379,6 +482,9 @@ def main():
             about("fig5", f"WebSocket streams \u00b7 {'Docker (container)' if deploy == 'container' else 'native (no Docker)'} "
                           "\u00b7 100 clients \u00b7 median of 5 runs")
             figures["fig5"][deploy] = fig5(r, deploy, args.width, out(f"fig5_websocket_{deploy}"), args.dpi)
+            about("fig6", f"WebSocket streams \u00b7 {'Docker (container)' if deploy == 'container' else 'native (no Docker)'} "
+                          "\u00b7 100 clients \u00b7 5 runs")
+            figures["fig6"][deploy] = fig6(r, deploy, args.width, out(f"fig6_websocket_spread_{deploy}"), args.dpi)
     for folder in (f for f in args.folders if f not in websocket):
         wl, r = workload(folder), runs(folder)
         setting = lambda deploy: f"{wl.capitalize()} HTTP \u00b7 {deploy} \u00b7 80,000 requests \u00b7 median of 5 runs"
