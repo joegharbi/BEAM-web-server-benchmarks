@@ -192,16 +192,18 @@ def spread(r, which, deploy, width, path, dpi):
         out.append(row)
     for yi in y[:-1]:
         a.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
-    a.text(1.01, len(tests) - 0.45, "Spread (CV):\non / off / Java / C", transform=a.get_yaxis_transform(), fontsize=6.5,
-           color=MUTED, va="bottom")
+    a.text(1.01, len(tests) - 0.45, figures.SPREAD_HEADER + "on / off / Java / C", transform=a.get_yaxis_transform(),
+           fontsize=6.5, color=MUTED, va="bottom")
     a.axvline(0, color=MUTED, lw=0.6)
+    lo, hi = a.get_xlim()
+    a.set_xlim(lo, hi + 0.06 * (hi - lo))
     a.set_xlabel("Server energy of each run, from its median (%)")
     items = [figures.dot(ON, "Erlang, busy-waiting on"), figures.dot(OFF, "Erlang, off")]
     items += [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES]
     if dagger:
         items.append(plt.Line2D([], [], ls="", marker="$\u2020$", color=MUTED, markersize=figures.LEGEND,
                                 label="CPU-time method (caption)"))
-    figures.legend(fig, items, ncol=3, titles=False, legend_rows=2)
+    figures.legend(fig, items, ncol=3, legend_rows=2)
     figures.save(fig, path, dpi)
     return out
 

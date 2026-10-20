@@ -159,7 +159,7 @@ def fig1(rows, title, width, path, dpi):
     a.set_title("(a) Server, attributed", loc="left")
     saved_axis(b)
     b.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(5))
-    legend(fig, [dot(ON, "busy-waiting on (default)"), dot(OFF, "off (+sbwt none)"), saved_legend()])
+    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), saved_legend()])
     save(fig, path, dpi)
 
 
@@ -304,8 +304,8 @@ def fig2(r, width, path, dpi):
     b.set_xlim(0, None)
     b.set_xlabel("Busy-wait on/off, server (×)")
     b.set_title("(b) Busy-wait effect", loc="left")
-    legend(fig, [dot(ON, "BEAM, on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java"),
-                 dot(ON, "Docker", "D"), dot(ON, "native", "D", hollow=True)], ncol=5)
+    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)"),
+                 dot(ON, "on ÷ off in Docker", "D"), dot(ON, "on ÷ off native", "D", hollow=True)], ncol=3, legend_rows=2)
     save(fig, path, dpi)
     return out
 
@@ -333,7 +333,12 @@ def spread_rows(ax, r_runs, names, lay, cv_header):
     ax.text(1.01, len(names) - 0.45, cv_header, transform=ax.get_yaxis_transform(), fontsize=6.5, color=MUTED,
             va="bottom")
     ax.axvline(0, color=MUTED, lw=0.6)
+    lo, hi = ax.get_xlim()
+    ax.set_xlim(lo, hi + 0.06 * (hi - lo))           # room between the last dot and the spread numbers
     return out
+
+
+SPREAD_HEADER = "Spread (CV)\n"                     # the same header on every jumpy figure, then its series
 
 
 def fig3(r, deploy, width, path, dpi):
@@ -341,10 +346,9 @@ def fig3(r, deploy, width, path, dpi):
     names = servers(r)
     lay = Rows(len(names), 2)
     fig, a = plt.subplots(figsize=(WIDTH_IN[width], lay.height))
-    out = spread_rows(a, lambda s, bw: r[(s, deploy, bw)]["server_j"], names, lay, "Spread (CV)\non / off; Java")
+    out = spread_rows(a, lambda s, bw: r[(s, deploy, bw)]["server_j"], names, lay, SPREAD_HEADER + "on / off; Java")
     a.set_xlabel("Server energy of each run, from its median (%)")
-    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")],
-           titles=False)
+    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
     save(fig, path, dpi)
     return out
 
@@ -444,10 +448,12 @@ def fig6(r, deploy, width, path, dpi):
     """WebSocket streams: the 5 runs of every server as % from its median, 8 KB and 1 MB, Java Netty as reference."""
     names = ws_names(r)
     lay = Rows(len(names), 2, extra_in=0.2)
-    fig, axes = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], lay.height), gridspec_kw={"wspace": 0.35})
+    # room between the panels for panel (a)'s spread numbers: wider in one column, where the panels are narrow
+    fig, axes = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], lay.height),
+                             gridspec_kw={"wspace": 0.75 if width == "one" else 0.35})
     out = {}
     for ax, (test, title) in zip(axes, WS_TESTS):
-        out[test] = spread_rows(ax, lambda s, bw: r[(s, deploy, bw, test)], names, lay, "CV\non / off")
+        out[test] = spread_rows(ax, lambda s, bw: r[(s, deploy, bw, test)], names, lay, SPREAD_HEADER + "on / off; Java")
         ax.set_title(title, loc="left")
         ax.set_xlabel("Each run, from its median (%)")
     legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
