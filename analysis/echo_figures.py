@@ -53,7 +53,7 @@ TESTS = {   # load (data.load) -> label; ordered from "the server mostly waits" 
 SETUP = {"new": "new setup", "old": "old setup (MIPRO 2024)"}
 WHERE = {"container": "Docker (container)", "native": "native (no Docker)"}
 CAPTION = ("TCP echo servers, busy-waiting on (default) vs off (+sbwt none) for Erlang, per test, with Java and C as "
-           "references (no busy-waiting). (a) Energy attributed to the server process (CPU-time share), in joules; "
+           "references (no busy-waiting). (a) Energy attributed to the server process, log scale; "
            "(b) platform energy (RAPL psys, measured), in joules. Tests ordered from mostly waiting (clients 0.1 s "
            "apart) to always busy (all clients at once). \u2020 C, nosleep: the meter fell behind (a new thread per "
            "connection, about 2,000 per second); (a) is the server's exact CPU time \u00d7 the platform's price per "
@@ -131,26 +131,23 @@ def echo(r, which, deploy, width, path, dpi):
                             platform_j=data.median(g["machine_j"]))
             figures.point(a, value, yi + lay.lane(lane), color, marker)
             figures.point(b, row[key]["platform_j"], yi + lay.lane(lane), color, marker)
-            if method != "meter":
-                for ax, v in ((a, value), (b, row[key]["platform_j"])):
-                    ax.annotate("\u2020", (v, yi + lay.lane(lane)), xytext=(-6, 0), textcoords="offset points",
-                                va="center", ha="right", fontsize=7, color=MUTED)
         out.append(row)
     for yi in y[:-1]:
         for ax in (a, b):
             ax.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
+    a.set_xscale("log")                       # server energies differ 1,000-fold between tests (0.01-77 J)
+    a.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1,)))
+    a.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
+    a.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     lo, hi = a.get_xlim()
-    a.set_xlim(0, hi * 1.12)                  # joules from 0, as panel (b) and the HTTP figures; room for the ratios
-    a.set_xlabel("Server energy (J)")
+    a.set_xlim(lo, hi * 2.2)
+    a.set_xlabel("Server energy (J, log scale)")
     a.set_title("(a) Server, attributed", loc="left")
     b.set_xlim(0, None)
     b.set_xlabel("Platform energy (J)")
     b.set_title("(b) Platform, measured", loc="left")
     items = [figures.dot(ON, "Erlang, busy-waiting on"), figures.dot(OFF, "Erlang, off")]
     items += [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES]
-    if any_coarse:
-        items.append(plt.Line2D([], [], ls="", marker="$\u2020$", color=MUTED, markersize=figures.LEGEND,
-                                label="CPU-time method (caption)"))
     figures.legend(fig, items, ncol=3, legend_rows=2)
     figures.save(fig, path, dpi)
     return out
@@ -187,7 +184,7 @@ def spread(r, which, deploy, width, path, dpi):
             cvs.append(f"{row[f'cv_{key}']:.0f}")
             row["dagger"] = row.get("dagger", False) or by_cpu
             dagger = dagger or by_cpu
-        a.text(1.01, yi, " / ".join(cvs) + "%" + ("\u2020" if row.get("dagger") else ""),
+        a.text(1.01, yi, " / ".join(cvs) + "%",
                transform=a.get_yaxis_transform(), va="center", fontsize=6.5, color=MUTED)
         out.append(row)
     for yi in y[:-1]:
@@ -200,9 +197,6 @@ def spread(r, which, deploy, width, path, dpi):
     a.set_xlabel("Server energy of each run, from its median (%)")
     items = [figures.dot(ON, "Erlang, busy-waiting on"), figures.dot(OFF, "Erlang, off")]
     items += [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES]
-    if dagger:
-        items.append(plt.Line2D([], [], ls="", marker="$\u2020$", color=MUTED, markersize=figures.LEGEND,
-                                label="CPU-time method (caption)"))
     figures.legend(fig, items, ncol=3, legend_rows=2)
     figures.save(fig, path, dpi)
     return out
