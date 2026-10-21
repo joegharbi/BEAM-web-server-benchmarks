@@ -54,10 +54,11 @@ SETUP = {"new": "new setup", "old": "old setup (MIPRO 2024)"}
 WHERE = {"container": "Docker (container)", "native": "native (no Docker)"}
 CAPTION = ("TCP echo servers, busy-waiting on (default) vs off (+sbwt none) for Erlang, per test, with Java and C as "
            "references (no busy-waiting). (a) Energy attributed to the server process (CPU-time share), log scale; "
-           "(b) platform energy (RAPL psys, measured) saved with busy-waiting off, with bootstrap 95% confidence "
-           "intervals. Tests ordered from mostly waiting (clients 0.1 s apart) to always busy (all clients at once). "
-           "\u2020 C, nosleep: the meter fell behind (up to 10,000 threads), so this value is the server's exact "
-           "CPU time \u00d7 the platform's price per CPU-second over the load (CPU-time method).")
+           "(b) platform energy (RAPL psys, measured), log scale. Tests ordered from mostly waiting (clients 0.1 s "
+           "apart) to always busy (all clients at once). \u2020 C, nosleep: the meter fell behind (a new thread per "
+           "connection, about 2,000 per second); (a) is the server's exact CPU time \u00d7 the platform's price per "
+           "CPU-second over the load (CPU-time method); (b) includes the meter's own extra work, about 20% (measured "
+           "with the meter on and off).")
 SPREAD_CAPTION = ("Run-to-run variation of the attributed server energy: the 5 runs per test as deviation from that "
                   "test's median, for Erlang with busy-waiting on and off and for the references without busy-waiting "
                   "(Java, C). Right: coefficient of variation. Sleep with 100 clients: the servers use 0.005-0.07 J, "
@@ -98,13 +99,13 @@ def server_energy(g):
 
 
 def echo(r, which, deploy, width, path, dpi):
-    """(a) server energy: Erlang off -> on with the ratio, Java and C as references; (b) platform saved with off.
-    Each test row has three lanes: Erlang (on/off), Java, C."""
+    """(a) server energy, attributed; (b) platform energy, measured: in both, Erlang off -> on, Java and C as
+    references (as panel (b) of the HTTP Fig. 4). Each test row has three lanes: Erlang (on/off), Java, C."""
     tests = [t for t in TESTS[which] if (ERLANG, deploy, "on", t[0]) in r]
     rng = random.Random(stats.SEED)
     lay = figures.Rows(len(tests), 3, extra_in=0.17)
     fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(figures.WIDTH_IN[width], lay.height),
-                               gridspec_kw={"width_ratios": [1.5, 1], "wspace": 0.08})
+                               gridspec_kw={"width_ratios": [1, 1], "wspace": 0.08})
     y = list(range(len(tests)))[::-1]
     a.set_yticks(y, [t[1] for t in tests])
     out, any_coarse = [], False
@@ -119,6 +120,7 @@ def echo(r, which, deploy, width, path, dpi):
                    platform_on=data.median(on["machine_j"]), platform_off=data.median(off["machine_j"]))
         figures.pair(a, s_off, s_on, yi + lay.lane(0), lay)
         figures.ratio_label(a, s_on, yi + lay.lane(0), f"{row['ratio']:.1f}×")
+        figures.pair(b, row["platform_off"], row["platform_on"], yi + lay.lane(0), lay)
         for lane, (key, server, color, marker, *_) in enumerate(REFERENCES, start=1):
             g = r.get((server, deploy, "on", load))
             if not g:
@@ -128,26 +130,28 @@ def echo(r, which, deploy, width, path, dpi):
             row[key] = dict(server_j=value, method=method, meter_j=data.median(g["server_j"]),
                             platform_j=data.median(g["machine_j"]))
             figures.point(a, value, yi + lay.lane(lane), color, marker)
+            figures.point(b, row[key]["platform_j"], yi + lay.lane(lane), color, marker)
             if method != "meter":
-                a.annotate("\u2020", (value, yi + lay.lane(lane)), xytext=(-6, 0), textcoords="offset points",
-                           va="center", ha="right", fontsize=7, color=MUTED)
-        figures.saved_panel(b, yi, row["saved"], row["saved_ci"])
+                for ax, v in ((a, value), (b, row[key]["platform_j"])):
+                    ax.annotate("\u2020", (v, yi + lay.lane(lane)), xytext=(-6, 0), textcoords="offset points",
+                                va="center", ha="right", fontsize=7, color=MUTED)
         out.append(row)
     for yi in y[:-1]:
         for ax in (a, b):
             ax.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
-    a.set_xscale("log")                       # equal steps = equal ratios
-    a.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1,)))
-    a.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
-    a.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+    for ax, subs in ((a, (1,)), (b, (1, 2, 5))):
+        ax.set_xscale("log")                  # equal steps = equal ratios
+        ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=subs))
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
+        ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     lo, hi = a.get_xlim()
     a.set_xlim(lo, hi * 2.2)
     a.set_xlabel("Server energy (J, log scale)")
     a.set_title("(a) Server, attributed", loc="left")
-    figures.saved_axis(b)
+    b.set_xlabel("Platform energy (J, log scale)")
+    b.set_title("(b) Platform, measured", loc="left")
     items = [figures.dot(ON, "Erlang, busy-waiting on"), figures.dot(OFF, "Erlang, off")]
     items += [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES]
-    items.append(figures.saved_legend())
     if any_coarse:
         items.append(plt.Line2D([], [], ls="", marker="$\u2020$", color=MUTED, markersize=figures.LEGEND,
                                 label="CPU-time method (caption)"))
