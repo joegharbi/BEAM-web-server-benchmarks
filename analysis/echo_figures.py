@@ -53,7 +53,7 @@ TESTS = {   # load (data.load) -> label; ordered from "the server mostly waits" 
 SETUP = {"new": "new setup", "old": "old setup (MIPRO 2024)"}
 WHERE = {"container": "Docker (container)", "native": "native (no Docker)"}
 CAPTION = ("TCP echo servers, busy-waiting on (default) vs off (+sbwt none) for Erlang, per test, with Java and C as "
-           "references (no busy-waiting). (a) Energy attributed to the server process (CPU-time share), log scale; "
+           "references (no busy-waiting). (a) Energy attributed to the server process (CPU-time share), in joules; "
            "(b) platform energy (RAPL psys, measured), in joules. Tests ordered from mostly waiting (clients 0.1 s "
            "apart) to always busy (all clients at once). \u2020 C, nosleep: the meter fell behind (a new thread per "
            "connection, about 2,000 per second); (a) is the server's exact CPU time \u00d7 the platform's price per "
@@ -139,13 +139,9 @@ def echo(r, which, deploy, width, path, dpi):
     for yi in y[:-1]:
         for ax in (a, b):
             ax.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
-    a.set_xscale("log")                       # equal steps = equal ratios (the tests differ 1,000-fold)
-    a.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1,)))
-    a.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
-    a.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     lo, hi = a.get_xlim()
-    a.set_xlim(lo, hi * 2.2)
-    a.set_xlabel("Server energy (J, log scale)")
+    a.set_xlim(0, hi * 1.12)                  # joules from 0, as panel (b) and the HTTP figures; room for the ratios
+    a.set_xlabel("Server energy (J)")
     a.set_title("(a) Server, attributed", loc="left")
     b.set_xlim(0, None)
     b.set_xlabel("Platform energy (J)")
