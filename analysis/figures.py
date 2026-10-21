@@ -41,6 +41,8 @@ KIND = {"pure": "pure", "index": "index", "cowboy": "Cowboy", "yaws": "Yaws", "p
         "bandit": "Bandit", "netty": "Netty"}
 ORDER = ["pure", "index", "cowboy", "yaws", "phoenix", "bandit", "mist", "netty"]
 WS_TESTS = (("stream 8 KB", "(a) 8 KB: server waits"), ("stream 1024 KB", "(b) 1 MB: server busy"))
+WS_PANELS = (("(a) 8 KB: server, attributed", "(b) 8 KB: platform, measured"),
+             ("(c) 1 MB: server, attributed", "(d) 1 MB: platform, measured"))
 
 
 COMPRESSED = "+compressed"      # a server's runs from before the client stopped offering compression (mist)
@@ -206,8 +208,9 @@ CAPTIONS = {
             "of variation.",
     "fig4": "Java reference servers (no busy-waiting) vs BEAM servers with busy-waiting on and off. (a) Attributed "
             "server energy (CPU-time share); (b) platform energy (RAPL psys, measured).",
-    "fig5": "WebSocket streams (100 clients, 10 messages/s each, 5 s): attributed server energy with busy-waiting on "
-            "vs off, log scale. (a) 8 KB messages; (b) 1 MB messages. Java Netty as reference. Gleam mist without "
+    "fig5": "WebSocket streams (100 clients, 10 messages/s each, 5 s): busy-waiting on vs off, Java Netty as "
+            "reference. (a, b) 8 KB messages; (c, d) 1 MB messages. (a, c) Energy attributed to the server process, log "
+            "scale; (b, d) platform energy (RAPL psys, measured), in joules. Gleam mist without "
             "per-message compression (re-run) and with it (first run; the only server that accepted the client's offer).",
     "fig6": "WebSocket streams: run-to-run variation of the attributed server energy, the 5 runs of every server as "
             "deviation from its median, busy-waiting on vs off, Java Netty as reference. (a) 8 KB; (b) 1 MB messages.",
@@ -384,16 +387,17 @@ def fig4(r, deploy, width, path, dpi):
     return out
 
 
-def ws_runs(folders):
-    """{(server, deploy, 'on'|'off', test): [server energy of each run]} of the WebSocket streams. A later folder
-    replaces an earlier one's runs of the same server, and those earlier runs are kept as '<server>+compressed':
-    the mist re-run without compression replaces the first run, in which only mist accepted compression."""
+def ws_runs(folders, column="Container Energy (J)"):
+    """{(server, deploy, 'on'|'off', test): [server energy of each run]} of the WebSocket streams (or of another
+    column, e.g. "Host Energy (J)" for the platform). A later folder replaces an earlier one's runs of the same
+    server, and those earlier runs are kept as '<server>+compressed': the mist re-run without compression replaces
+    the first run, in which only mist accepted compression."""
     out = {}
     for folder in folders:
         found = {}
         for r in data.rows(folder):
             found.setdefault((data.server(r), r["Deploy"], data.busy_wait(r), data.load(r)), []).append(
-                data.num(r, "Container Energy (J)"))
+                data.num(r, column))
         for key in found:
             if key in out:
                 out[(key[0] + COMPRESSED,) + key[1:]] = out[key]
@@ -405,7 +409,7 @@ def log_axis(ax, label_text):
     ax.set_xscale("log")                      # equal steps = equal ratios, so 2x looks the same everywhere
     lo, hi = ax.get_xlim()
     ax.set_xlim(lo, hi * 1.6)
-    ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1, 2, 5)))
+    ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1, 2, 5), numticks=12))
     ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     ax.set_xlabel(label_text)
@@ -416,29 +420,40 @@ def ws_names(r):
     return [s for s in names if "-java-" not in s] + [s for s in names if "-java-" in s]
 
 
-def fig5(r, deploy, width, path, dpi):
-    """WebSocket streams: busy-waiting on vs off for small (8 KB) and large (1 MB) messages, server energy."""
+def fig5(r, m, deploy, width, path, dpi):
+    """WebSocket streams, busy-waiting on vs off, Java Netty as reference: per message size (8 KB top, 1 MB bottom)
+    the server energy, attributed (log scale), and the platform energy, measured (joules), as the echo figure."""
     names = ws_names(r)
     lay = Rows(len(names), 1, extra_in=0.2)
-    fig, axes = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], lay.height), gridspec_kw={"wspace": 0.08})
-    y = rows_axis(axes[0], names)
+    fig, axes = plt.subplots(2, 2, sharey=True, figsize=(WIDTH_IN[width], 2 * lay.height - FRAME_IN + 0.45),
+                             gridspec_kw={"wspace": 0.08, "hspace": 0.55})
+    y = rows_axis(axes[0][0], names)
+    rows_axis(axes[1][0], names)
     out = []
     for s in names:
         row = {"server": s, "label": label(s)}
-        for ax, (test, _) in zip(axes, WS_TESTS):
+        for (a, b), (test, _) in zip(axes, WS_TESTS):
             if "-java-" in s:
-                v = data.median(r[(s, deploy, "on", test)])
-                row[test] = v
-                point(ax, v, y[s], JAVA)
+                row[test], row[test + " platform"] = data.median(r[(s, deploy, "on", test)]), \
+                    data.median(m[(s, deploy, "on", test)])
+                point(a, row[test], y[s], JAVA)
+                point(b, row[test + " platform"], y[s], JAVA)
                 continue
             on, off = data.median(r[(s, deploy, "on", test)]), data.median(r[(s, deploy, "off", test)])
-            row[test + " on"], row[test + " off"] = on, off
-            pair(ax, off, on, y[s], lay)
-            ratio_label(ax, max(on, off), y[s], f"{on / off:.1f}×")
+            p_on, p_off = data.median(m[(s, deploy, "on", test)]), data.median(m[(s, deploy, "off", test)])
+            row.update({test + " on": on, test + " off": off, test + " platform on": p_on,
+                        test + " platform off": p_off})
+            pair(a, off, on, y[s], lay)
+            ratio_label(a, max(on, off), y[s], f"{on / off:.1f}×")
+            pair(b, p_off, p_on, y[s], lay)
         out.append(row)
-    for ax, (_, title) in zip(axes, WS_TESTS):
-        log_axis(ax, "Server energy (J, log scale)")
-        ax.set_title(title, loc="left")
+    axes[0][0].set_ylim(-0.6, len(names) - 0.4)        # room for a pair moved apart in the top row
+    for (a, b), titles in zip(axes, WS_PANELS):
+        log_axis(a, "Server energy (J, log scale)")
+        b.set_xlim(0, None)
+        b.set_xlabel("Platform energy (J)")
+        for ax, title in zip((a, b), titles):
+            ax.set_title(title, loc="left")
     legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
     save(fig, path, dpi)
     return out
@@ -483,11 +498,11 @@ def main():
         return path
     websocket = [f for f in args.folders if data.is_websocket(data.rows(f)[0])]
     if websocket:
-        r = ws_runs(websocket)
+        r, m = ws_runs(websocket), ws_runs(websocket, "Host Energy (J)")
         for deploy in ("container", "native"):
             about("fig5", f"WebSocket streams \u00b7 {'Docker (container)' if deploy == 'container' else 'native (no Docker)'} "
                           "\u00b7 100 clients \u00b7 median of 5 runs")
-            figures["fig5"][deploy] = fig5(r, deploy, args.width, out(f"fig5_websocket_{deploy}"), args.dpi)
+            figures["fig5"][deploy] = fig5(r, m, deploy, args.width, out(f"fig5_websocket_{deploy}"), args.dpi)
             about("fig6", f"WebSocket streams \u00b7 {'Docker (container)' if deploy == 'container' else 'native (no Docker)'} "
                           "\u00b7 100 clients \u00b7 5 runs")
             figures["fig6"][deploy] = fig6(r, deploy, args.width, out(f"fig6_websocket_spread_{deploy}"), args.dpi)
