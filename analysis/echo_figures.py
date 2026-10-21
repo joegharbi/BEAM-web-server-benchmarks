@@ -54,7 +54,7 @@ SETUP = {"new": "new setup", "old": "old setup (MIPRO 2024)"}
 WHERE = {"container": "Docker (container)", "native": "native (no Docker)"}
 CAPTION = ("TCP echo servers, busy-waiting on (default) vs off (+sbwt none) for Erlang, per test, with Java and C as "
            "references (no busy-waiting). (a) Energy attributed to the server process (CPU-time share), log scale; "
-           "(b) platform energy (RAPL psys, measured), in joules. Tests ordered from mostly waiting (clients 0.1 s "
+           "(b) platform energy (RAPL psys, measured), log scale. Tests ordered from mostly waiting (clients 0.1 s "
            "apart) to always busy (all clients at once). \u2020 C, nosleep: the meter fell behind (a new thread per "
            "connection, about 2,000 per second); (a) is the server's exact CPU time \u00d7 the platform's price per "
            "CPU-second over the load (CPU-time method); (b) includes the meter's own extra work, about 20% (measured "
@@ -139,16 +139,16 @@ def echo(r, which, deploy, width, path, dpi):
     for yi in y[:-1]:
         for ax in (a, b):
             ax.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
-    a.set_xscale("log")                       # equal steps = equal ratios (the tests differ 1,000-fold)
-    a.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1,)))
-    a.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
-    a.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+    for ax, subs in ((a, (1,)), (b, (1, 2, 5))):
+        ax.set_xscale("log")                  # equal steps = equal ratios
+        ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=subs))
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
+        ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     lo, hi = a.get_xlim()
     a.set_xlim(lo, hi * 2.2)
     a.set_xlabel("Server energy (J, log scale)")
     a.set_title("(a) Server, attributed", loc="left")
-    b.set_xlim(0, None)
-    b.set_xlabel("Platform energy (J)")
+    b.set_xlabel("Platform energy (J, log scale)")
     b.set_title("(b) Platform, measured", loc="left")
     items = [figures.dot(ON, "Erlang, busy-waiting on"), figures.dot(OFF, "Erlang, off")]
     items += [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES]
