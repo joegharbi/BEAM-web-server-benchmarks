@@ -55,15 +55,15 @@ WHERE = {"container": "Docker (container)", "native": "native (no Docker)"}
 CAPTION = ("TCP echo servers, busy-waiting on (default) vs off (+sbwt none) for Erlang, per test, with Java and C as "
            "references (no busy-waiting). (a) Energy attributed to the server process, log scale; "
            "(b) platform energy (RAPL psys, measured), in joules. Tests ordered from mostly waiting (clients 0.1 s "
-           "apart) to always busy (all clients at once). \u2020 C, nosleep: the meter fell behind (a new thread per "
-           "connection, about 2,000 per second); (a) is the server's exact CPU time \u00d7 the platform's price per "
-           "CPU-second over the load (CPU-time method); (b) includes the meter's own extra work, about 20% (measured "
-           "with the meter on and off).")
+           "apart) to always busy (all clients at once). C, nosleep: the meter fell behind (a new thread per "
+           "connection, about 2,000 per second), so (a) is the server's exact CPU time \u00d7 the platform's price per "
+           "CPU-second over the load, and (b) includes the meter's own extra work, about 20% (measured with the meter "
+           "on and off).")
 SPREAD_CAPTION = ("Run-to-run variation of the attributed server energy: the 5 runs per test as deviation from that "
                   "test's median, for Erlang with busy-waiting on and off and for the references without busy-waiting "
                   "(Java, C). Right: coefficient of variation. Sleep with 100 clients: the servers use 0.005-0.07 J, "
                   "so a single meter reading changes a run by tens of percent. "
-                  "\u2020 C, nosleep: CPU-time method (the meter fell behind).")
+                  "C, nosleep: from the server's exact CPU time (the meter fell behind).")
 
 
 def runs(folders):
