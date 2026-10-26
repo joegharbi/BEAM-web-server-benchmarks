@@ -42,8 +42,8 @@ KIND = {"pure": "pure", "index": "index", "cowboy": "Cowboy", "yaws": "Yaws", "p
         "bandit": "Bandit", "netty": "Netty"}
 ORDER = ["pure", "index", "cowboy", "yaws", "phoenix", "bandit", "mist", "netty"]
 WS_TESTS = (("stream 8 KB", "(a) 8 KB: server waits"), ("stream 1024 KB", "(b) 1 MB: server busy"))
-WS_PANELS = (("(a) 8 KB: server, attributed", "(b) Platform, measured"),        # the size once per row, so
-             ("(c) 1 MB: server, attributed", "(d) Platform, measured"))        # the titles leave room for the spread
+WS_PANELS = (("8 KB messages", "(a) Server, attributed", "(b) Platform, measured"),   # the same panel titles as
+             ("1 MB messages", "(c) Server, attributed", "(d) Platform, measured"))   # the other figures; the size above
 
 
 COMPRESSED = "+compressed"      # a server's runs from before the client stopped offering compression (mist)
@@ -162,7 +162,7 @@ def fig1(rows, title, width, path, dpi):
     a.set_title("(a) Server, attributed", loc="left")
     saved_axis(b)
     b.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(5))
-    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), saved_legend()])
+    on_off_legend(fig, "BEAM", [saved_legend()])
     save(fig, path, dpi)
 
 
@@ -275,6 +275,17 @@ def legend(fig, items, ncol=3, titles=True, legend_rows=1):
                frameon=False, handletextpad=0.2, columnspacing=1.0)
 
 
+def on_off_legend(fig, who, references):
+    """The same legend in every figure: '<who>, busy-waiting on' and '<who>, busy-waiting off' in the first row, the
+    references (without busy-waiting, or a figure's own mark) in the second. The legend fills column by column."""
+    on, off = dot(ON, f"{who}, busy-waiting on"), dot(OFF, f"{who}, busy-waiting off")
+    legend(fig, [on, *references[:1], off, *references[1:]], ncol=2, legend_rows=2)
+
+
+def java_dot():
+    return dot(JAVA, JAVA_LABEL, JAVA_MARK)
+
+
 def dot(color, text, marker="o", hollow=False):
     return plt.Line2D([], [], ls="", marker=marker, markersize=LEGEND * (AREA.get(marker, 1.0) ** 0.5), label=text,
                       color=color, markerfacecolor="white" if hollow else color)
@@ -310,7 +321,7 @@ def fig2(r, width, path, dpi):
     b.set_xlim(0, None)
     b.set_xlabel("Busy-wait on/off, server (×)")
     b.set_title("(b) Busy-wait effect", loc="left")
-    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, JAVA_LABEL, JAVA_MARK),
+    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, busy-waiting off"), java_dot(),
                  dot(ON, "on ÷ off in Docker", "D"), dot(ON, "on ÷ off native", "D", hollow=True)], ncol=3, legend_rows=2)
     save(fig, path, dpi)
     return out
@@ -346,13 +357,19 @@ SPREAD_HEADER = "Spread (CV)\n"                     # the same header on every j
 CV_COLUMN_IN = 0.55                                 # room right of the panels for the spread numbers, in inches
 
 
-def cv_column(ax, rows, top, header, room_in=CV_COLUMN_IN):
+def cv_column(ax, rows, top, header, room_in=CV_COLUMN_IN, between=False):
     """The spread (CV) of the runs, as a column of text right of `ax`: rows = [(y, text)], the header above the
-    top row (at y = top). The figure keeps its width; its panels make room (`room_in`) for the column."""
+    top row (at y = top). The figure keeps its width; its panels make room (`room_in`) for the column: at the
+    right edge, or (between=True, for the left of two panels side by side) between the two panels."""
     for yi, text in rows:
-        ax.text(1.01, yi, text, transform=ax.get_yaxis_transform(), va="center", fontsize=6.5, color=MUTED)
-    ax.text(1.01, top, header, transform=ax.get_yaxis_transform(), fontsize=6.5, color=MUTED, va="bottom")
-    ax.figure.subplots_adjust(right=1 - room_in / ax.figure.get_size_inches()[0])
+        ax.text(1.02, yi, text, transform=ax.get_yaxis_transform(), va="center", fontsize=6.5, color=MUTED)
+    ax.text(1.02, top, header, transform=ax.get_yaxis_transform(), fontsize=6.5, color=MUTED, va="bottom")
+    fig = ax.figure
+    if between:   # two panels share the width W: gap = wspace x panel width, panel width = (W - gap) / 2
+        width = (fig.subplotpars.right - fig.subplotpars.left) * fig.get_size_inches()[0]
+        ax.get_gridspec().update(wspace=2 * room_in / (width - room_in))   # the panels' own spacing wins
+    else:
+        fig.subplots_adjust(right=1 - room_in / fig.get_size_inches()[0])
 
 
 def from_zero(ax):
@@ -372,7 +389,7 @@ def fig3(r, deploy, width, path, dpi):
     fig, a = plt.subplots(figsize=(WIDTH_IN[width], lay.height))
     out = spread_rows(a, lambda s, bw: r[(s, deploy, bw)]["server_j"], names, lay, SPREAD_HEADER + "on / off; Java")
     a.set_xlabel("Server energy of each run, from its median (%)")
-    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, JAVA_LABEL, JAVA_MARK)])
+    on_off_legend(fig, "BEAM", [java_dot()])
     save(fig, path, dpi)
     return out
 
@@ -400,17 +417,20 @@ def fig4(r, deploy, width, path, dpi):
             pair(ax, off, on, y[s], lay)
         if "-java-" not in s:
             ratio_label(a, row["server_j_on"], y[s], f"{row['server_j_on'] / row['server_j_off']:.1f}×")
-        row["cv"] = [data.cv(r[(s, deploy, bw)]["server_j"]) for bw in (("on",) if "-java-" in s else ("on", "off"))]
         out.append(row)
-    cv_column(b, [(y[s], cv_text(*[r[(s, deploy, bw)]["server_j"] for bw in (("on",) if "-java-" in s else ("on", "off"))]))
-                  for s in names], len(names) - 0.45, SPREAD_HEADER + "on / off; Java")
-    a.set_xlim(0, max(row["server_j_on"] for row in out if "server_j_on" in row) * 1.18)
+    variants = lambda s: ("on",) if "-java-" in s else ("on", "off")
+    for ax, k in ((b, "machine_j"), (a, "server_j")):           # right edge first, then the gap between the panels
+        for row in out:
+            row[k + "_cv"] = [data.cv(r[(row["server"], deploy, bw)][k]) for bw in variants(row["server"])]
+        cv_column(ax, [(y[s], cv_text(*[r[(s, deploy, bw)][k] for bw in variants(s)])) for s in names],
+                  len(names) - 0.45, SPREAD_HEADER + "on / off; Java", between=ax is a)
+    a.set_xlim(0, max(row["server_j_on"] for row in out if "server_j_on" in row) * 1.4)   # room for the ratios
     a.set_xlabel("Server energy (J)")
     a.set_title("(a) Server, attributed", loc="left")
     from_zero(b)
     b.set_xlabel("Platform energy (J)")
     b.set_title("(b) Platform, measured", loc="left")
-    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, JAVA_LABEL, JAVA_MARK)])
+    on_off_legend(fig, "BEAM", [java_dot()])
     save(fig, path, dpi)
     return out
 
@@ -436,8 +456,8 @@ def ws_runs(folders, column="Container Energy (J)"):
 def log_axis(ax, label_text):
     ax.set_xscale("log")                      # equal steps = equal ratios, so 2x looks the same everywhere
     lo, hi = ax.get_xlim()
-    ax.set_xlim(lo, hi * 2.5)                 # room for the ratio label of the right-most pair
-    ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1, 2, 5), numticks=12))
+    ax.set_xlim(lo, hi * 4)                   # room for the ratio label of the right-most pair
+    ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1, 3), numticks=12))
     ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     ax.set_xlabel(label_text)
@@ -478,17 +498,21 @@ def fig5(r, m, deploy, width, path, dpi):
         out.append(row)
     axes[0][0].set_ylim(-0.6, len(names) - 0.4)        # room for a pair moved apart in the top row
     for (a, b), (test, _) in zip(axes, WS_TESTS):
-        runs_of = lambda s: [r[(s, deploy, bw, test)] for bw in (("on",) if "-java-" in s else ("on", "off"))]
-        cv_column(b, [(y[s], cv_text(*runs_of(s))) for s in names], len(names) - 0.45, SPREAD_HEADER + "on / off; Java")
-        for row in out:
-            row[test + " cv"] = [data.cv(v) for v in runs_of(row["server"])]
-    for (a, b), titles in zip(axes, WS_PANELS):
+        for ax, runs, key in ((b, m, " platform cv"), (a, r, " cv")):   # right edge first, then between the panels
+            runs_of = lambda s: [runs[(s, deploy, bw, test)] for bw in (("on",) if "-java-" in s else ("on", "off"))]
+            cv_column(ax, [(y[s], cv_text(*runs_of(s))) for s in names], len(names) - 0.45,
+                      SPREAD_HEADER + "on / off; Java", between=ax is a)
+            for row in out:
+                row[test + key] = [data.cv(v) for v in runs_of(row["server"])]
+    for (a, b), (size, *titles) in zip(axes, WS_PANELS):
         log_axis(a, "Server energy (J, log scale)")
         from_zero(b)
         b.set_xlabel("Platform energy (J)")
         for ax, title in zip((a, b), titles):
             ax.set_title(title, loc="left")
-    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, JAVA_LABEL, JAVA_MARK)])
+        a.annotate(size, xy=(0.0, 1.0), xycoords=("figure fraction", "axes fraction"), xytext=(2, 14),
+                   textcoords="offset points", fontweight="bold", va="bottom")
+    on_off_legend(fig, "BEAM", [java_dot()])
     save(fig, path, dpi)
     return out
 
@@ -505,7 +529,7 @@ def fig6(r, deploy, width, path, dpi):
         out[test] = spread_rows(ax, lambda s, bw: r[(s, deploy, bw, test)], names, lay, SPREAD_HEADER + "on / off; Java")
         ax.set_title(title, loc="left")
         ax.set_xlabel("Each run, from its median (%)")
-    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, JAVA_LABEL, JAVA_MARK)])
+    on_off_legend(fig, "BEAM", [java_dot()])
     save(fig, path, dpi)
     return out
 

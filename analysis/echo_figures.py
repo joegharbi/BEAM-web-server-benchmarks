@@ -143,28 +143,31 @@ def echo(r, which, deploy, width, path, dpi):
     for yi in y[:-1]:
         for ax in (a, b):
             ax.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
-    series = [(ERLANG, "on"), (ERLANG, "off")] + [(server, "on") for _, server, *_ in REFERENCES]
-    cv_rows = []
-    for yi, row in zip(y, out):
-        groups = [r.get((server, deploy, bw, row["test"])) for server, bw in series]
-        row["cv"] = [data.cv(run_values(g)) if g else None for g in groups]
-        cv_rows.append((yi, figures.cv_text(*[run_values(g) for g in groups if g])))
-    figures.cv_column(b, cv_rows, len(tests) - 0.45, figures.SPREAD_HEADER + "on / off / Java / C", room_in=0.8)
+    # the spread (CV) next to each line of points: Erlang on / off, then Java, then C; server and platform panels
+    lanes = [[(ERLANG, "on"), (ERLANG, "off")]] + [[(server, "on")] for _, server, *_ in REFERENCES]
+    for ax, values in ((b, lambda g: g["machine_j"]), (a, run_values)):    # right edge first, then between panels
+        cv_rows = []
+        for yi, row in zip(y, out):
+            for lane, series in enumerate(lanes):
+                groups = [r.get((server, deploy, bw, row["test"])) for server, bw in series]
+                if all(groups):
+                    cv_rows.append((yi + lay.lane(lane), figures.cv_text(*[values(g) for g in groups])))
+            row["platform_cv" if ax is b else "cv"] = [
+                data.cv(values(g)) if g else None
+                for g in (r.get((server, deploy, bw, row["test"])) for series in lanes for server, bw in series)]
+        figures.cv_column(ax, cv_rows, len(tests) - 0.45, "Spread (CV)", between=ax is a)   # beside each line
     a.set_xscale("log")                       # server energies differ 1,000-fold between tests (0.01-77 J)
     a.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1,)))
     a.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     a.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     lo, hi = a.get_xlim()
-    a.set_xlim(lo, hi * 8)                    # room for the ratio label of the right-most pair
+    a.set_xlim(lo, hi * 40)                   # room for the ratio label of the right-most pair
     a.set_xlabel("Server energy (J, log scale)")
     a.set_title("(a) Server, attributed", loc="left")
     figures.from_zero(b)
     b.set_xlabel("Platform energy (J)")
     b.set_title("(b) Platform, measured", loc="left")
-    java, c = [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES]
-    # two full rows (Erlang on, off / Java, C): the legend fills column by column
-    figures.legend(fig, [figures.dot(ON, "Erlang, busy-waiting on"), java, figures.dot(OFF, "Erlang, off"), c],
-                   ncol=2, legend_rows=2)
+    figures.on_off_legend(fig, "Erlang", [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES])
     figures.save(fig, path, dpi)
     return out
 
@@ -211,9 +214,7 @@ def spread(r, which, deploy, width, path, dpi):
     lo, hi = a.get_xlim()
     a.set_xlim(lo, hi + 0.06 * (hi - lo))
     a.set_xlabel("Server energy of each run, from its median (%)")
-    items = [figures.dot(ON, "Erlang, busy-waiting on"), figures.dot(OFF, "Erlang, off")]
-    items += [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES]
-    figures.legend(fig, items, ncol=3, legend_rows=2)
+    figures.on_off_legend(fig, "Erlang", [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES])
     figures.save(fig, path, dpi)
     return out
 
