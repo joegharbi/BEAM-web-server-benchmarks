@@ -37,8 +37,8 @@ import progress  # noqa: E402
 
 ON, OFF, JAVA, C, MUTED, GRID = figures.ON, figures.OFF, figures.JAVA, "#9c3d8f", figures.MUTED, figures.GRID
 ERLANG = "ec-erlang-pure-29-1-1"
-REFERENCES = [("java", "ec-java-pure-27", JAVA, "^", "Java (reference)", -0.14),   # last: offset below the row centre
-              ("c", "ec-c-pure-14", C, "s", "C (reference)", -0.3)]
+REFERENCES = [("java", "ec-java-pure-27", JAVA, figures.JAVA_MARK, figures.JAVA_LABEL, -0.14),   # last: offset
+              ("c", "ec-c-pure-14", C, "s", "C (no busy-waiting)", -0.3)]                       # below the row centre
 TESTS = {   # load (data.load) -> label; ordered from "the server mostly waits" to "it is always busy"
     "new": [("connect 100 clients spacing 0.1 s", "sleep, 100 clients"),
             ("connect 1000 clients spacing 0.1 s", "sleep, 1,000 clients"),
@@ -58,7 +58,8 @@ CAPTION = ("TCP echo servers, busy-waiting on (default) vs off (+sbwt none) for 
            "apart) to always busy (all clients at once). C, nosleep: the meter fell behind (a new thread per "
            "connection, about 2,000 per second), so (a) is the server's exact CPU time \u00d7 the platform's price per "
            "CPU-second over the load, and (b) includes the meter's own extra work, about 20% (measured with the meter "
-           "on and off).")
+           "on and off). Right: spread (CV) of the 5 runs' server energy; in sleep with 100 clients the servers use "
+           "0.005-0.07 J, so a single meter reading changes a run by tens of percent.")
 SPREAD_CAPTION = ("Run-to-run variation of the attributed server energy: the 5 runs per test as deviation from that "
                   "test's median, for Erlang with busy-waiting on and off and for the references without busy-waiting "
                   "(Java, C). Right: coefficient of variation. Sleep with 100 clients: the servers use 0.005-0.07 J, "
@@ -90,6 +91,12 @@ def coarse(g):
     return g["behind"] * 2 > len(g["server_j"])
 
 
+def run_values(g):
+    """The server energy of each run as the figures use it: the CPU-time method's where the meter fell behind in
+    most runs (and an exact CPU counter exists), else the meter's."""
+    return g["cpu_j"] if coarse(g) and None not in g["cpu_j"] else g["server_j"]
+
+
 def server_energy(g):
     """(median server energy, method): the meter's, or the CPU-time method's where the meter fell behind in most
     runs (only with an exact CPU counter; without one the meter's value stays, marked 'coarse')."""
@@ -100,7 +107,8 @@ def server_energy(g):
 
 def echo(r, which, deploy, width, path, dpi):
     """(a) server energy, attributed; (b) platform energy, measured: in both, Erlang off -> on, Java and C as
-    references (as panel (b) of the HTTP Fig. 4). Each test row has three lanes: Erlang (on/off), Java, C."""
+    references (as panel (b) of the HTTP Fig. 4). Each test row has three lanes: Erlang (on/off), Java, C. Right:
+    the spread (CV) of the server energy over the runs, Erlang on / off / Java / C (as the echo spread figure)."""
     tests = [t for t in TESTS[which] if (ERLANG, deploy, "on", t[0]) in r]
     rng = random.Random(stats.SEED)
     lay = figures.Rows(len(tests), 3, extra_in=0.17)
@@ -135,20 +143,28 @@ def echo(r, which, deploy, width, path, dpi):
     for yi in y[:-1]:
         for ax in (a, b):
             ax.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
+    series = [(ERLANG, "on"), (ERLANG, "off")] + [(server, "on") for _, server, *_ in REFERENCES]
+    cv_rows = []
+    for yi, row in zip(y, out):
+        groups = [r.get((server, deploy, bw, row["test"])) for server, bw in series]
+        row["cv"] = [data.cv(run_values(g)) if g else None for g in groups]
+        cv_rows.append((yi, figures.cv_text(*[run_values(g) for g in groups if g])))
+    figures.cv_column(b, cv_rows, len(tests) - 0.45, figures.SPREAD_HEADER + "on / off / Java / C", room_in=0.8)
     a.set_xscale("log")                       # server energies differ 1,000-fold between tests (0.01-77 J)
     a.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1,)))
     a.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     a.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     lo, hi = a.get_xlim()
-    a.set_xlim(lo, hi * 2.2)
+    a.set_xlim(lo, hi * 8)                    # room for the ratio label of the right-most pair
     a.set_xlabel("Server energy (J, log scale)")
     a.set_title("(a) Server, attributed", loc="left")
-    b.set_xlim(0, None)
+    figures.from_zero(b)
     b.set_xlabel("Platform energy (J)")
     b.set_title("(b) Platform, measured", loc="left")
-    items = [figures.dot(ON, "Erlang, busy-waiting on"), figures.dot(OFF, "Erlang, off")]
-    items += [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES]
-    figures.legend(fig, items, ncol=3, legend_rows=2)
+    java, c = [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES]
+    # two full rows (Erlang on, off / Java, C): the legend fills column by column
+    figures.legend(fig, [figures.dot(ON, "Erlang, busy-waiting on"), java, figures.dot(OFF, "Erlang, off"), c],
+                   ncol=2, legend_rows=2)
     figures.save(fig, path, dpi)
     return out
 
@@ -174,7 +190,7 @@ def spread(r, which, deploy, width, path, dpi):
                 cvs.append("\u2013")
                 continue
             by_cpu = coarse(g) and None not in g["cpu_j"]
-            values = g["cpu_j"] if by_cpu else g["server_j"]
+            values = run_values(g)
             m = data.median(values)
             dev = [(v / m - 1) * 100 for v in values] if m else [0.0] * len(values)
             row[f"deviation_{key}"], row[f"cv_{key}"], row[f"method_{key}"] = dev, data.cv(values), \

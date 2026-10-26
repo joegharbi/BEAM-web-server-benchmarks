@@ -28,6 +28,7 @@ import stats  # noqa: E402
 
 WIDTH_IN = {"one": 3.46, "two": 7.13}            # IEEE column and page width (8.8 cm, 18.1 cm)
 ON, OFF, JAVA, INK, MUTED, GRID = "#d95926", "#2a78d6", "#1b9e72", "#1f2328", "#5b636b", "#e3e6e8"
+JAVA_MARK, JAVA_LABEL = "^", "Java (no busy-waiting)"     # the reference: the same shape and words in every figure
 # One drawing rule for every figure (figures.py and echo_figures.py):
 MARK = 28                                  # area (pt^2) of every point, whatever it shows: a median, one run, a reference
 AREA = {"o": 1.0, "s": 0.8, "^": 1.3, "D": 0.75}    # per shape, so a square or a triangle looks as heavy as a circle
@@ -41,8 +42,8 @@ KIND = {"pure": "pure", "index": "index", "cowboy": "Cowboy", "yaws": "Yaws", "p
         "bandit": "Bandit", "netty": "Netty"}
 ORDER = ["pure", "index", "cowboy", "yaws", "phoenix", "bandit", "mist", "netty"]
 WS_TESTS = (("stream 8 KB", "(a) 8 KB: server waits"), ("stream 1024 KB", "(b) 1 MB: server busy"))
-WS_PANELS = (("(a) 8 KB: server, attributed", "(b) 8 KB: platform, measured"),
-             ("(c) 1 MB: server, attributed", "(d) 1 MB: platform, measured"))
+WS_PANELS = (("(a) 8 KB: server, attributed", "(b) Platform, measured"),        # the size once per row, so
+             ("(c) 1 MB: server, attributed", "(d) Platform, measured"))        # the titles leave room for the spread
 
 
 COMPRESSED = "+compressed"      # a server's runs from before the client stopped offering compression (mist)
@@ -207,10 +208,12 @@ CAPTIONS = {
             "server's median, BEAM with busy-waiting on vs off, Java (no busy-waiting) as reference. Right: coefficient "
             "of variation.",
     "fig4": "Java reference servers (no busy-waiting) vs BEAM servers with busy-waiting on and off. (a) Attributed "
-            "server energy (CPU-time share); (b) platform energy (RAPL psys, measured).",
+            "server energy (CPU-time share), with the on/off ratio; (b) platform energy (RAPL psys, measured). Right: "
+            "spread (CV) of the 5 runs' server energy.",
     "fig5": "WebSocket streams (100 clients, 10 messages/s each, 5 s): busy-waiting on vs off, Java Netty as "
             "reference. (a, b) 8 KB messages; (c, d) 1 MB messages. (a, c) Energy attributed to the server process, log "
-            "scale; (b, d) platform energy (RAPL psys, measured), in joules. Gleam mist without "
+            "scale; (b, d) platform energy (RAPL psys, measured), in joules. Right: spread (CV) of the 5 runs' server "
+            "energy. Gleam mist without "
             "per-message compression (re-run) and with it (first run; the only server that accepted the client's offer).",
     "fig6": "WebSocket streams: run-to-run variation of the attributed server energy, the 5 runs of every server as "
             "deviation from its median, busy-waiting on vs off, Java Netty as reference. (a) 8 KB; (b) 1 MB messages.",
@@ -294,7 +297,7 @@ def fig2(r, width, path, dpi):
                 continue
             extra = (med(s, "container", bw, "machine_j") / med(s, "native", bw, "machine_j") - 1) * 100
             row[f"docker_extra_{bw}"] = extra
-            point(a, extra, y[s] + (lay.lane(0, of=1) if java else lay.lane(i)), color)
+            point(a, extra, y[s] + (lay.lane(0, of=1) if java else lay.lane(i)), color, JAVA_MARK if java else "o")
         if not java:
             for i, (d, hollow) in enumerate((("container", False), ("native", True))):
                 ratio = med(s, d, "on", "server_j") / med(s, d, "off", "server_j")
@@ -307,7 +310,7 @@ def fig2(r, width, path, dpi):
     b.set_xlim(0, None)
     b.set_xlabel("Busy-wait on/off, server (×)")
     b.set_title("(b) Busy-wait effect", loc="left")
-    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)"),
+    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, JAVA_LABEL, JAVA_MARK),
                  dot(ON, "on ÷ off in Docker", "D"), dot(ON, "on ÷ off native", "D", hollow=True)], ncol=3, legend_rows=2)
     save(fig, path, dpi)
     return out
@@ -320,21 +323,19 @@ def spread_rows(ax, r_runs, names, lay, cv_header):
     out = []
     for s in names:
         row = {"server": s, "label": label(s)}
-        series = [("java", "on", JAVA, 0, 1)] if "-java-" in s else [("on", "on", ON, 0, 2), ("off", "off", OFF, 1, 2)]
-        cvs = []
-        for key, bw, color, lane, of in series:
+        series = [("java", "on", JAVA, JAVA_MARK, 0, 1)] if "-java-" in s else \
+            [("on", "on", ON, "o", 0, 2), ("off", "off", OFF, "o", 1, 2)]
+        for key, bw, color, marker, lane, of in series:
             values = r_runs(s, bw)
             m = data.median(values)
             dev = [(v / m - 1) * 100 for v in values]
             row[f"deviation_{key}"], row[f"cv_{key}"] = dev, data.cv(values)
             base = y[s] + lay.lane(lane, of=of)
             for v, dy in zip(dev, lay.runs(len(dev))):
-                point(ax, v, base + dy, color, alpha=0.85)
-            cvs.append(f"{row[f'cv_{key}']:.0f}%")
-        ax.text(1.01, y[s], " / ".join(cvs), transform=ax.get_yaxis_transform(), va="center", fontsize=6.5, color=MUTED)
+                point(ax, v, base + dy, color, marker, alpha=0.85)
         out.append(row)
-    ax.text(1.01, len(names) - 0.45, cv_header, transform=ax.get_yaxis_transform(), fontsize=6.5, color=MUTED,
-            va="bottom")
+    cv_column(ax, [(y[s], cv_text(*[r_runs(s, bw) for bw in (("on",) if "-java-" in s else ("on", "off"))]))
+                   for s in names], len(names) - 0.45, cv_header)
     ax.axvline(0, color=MUTED, lw=0.6)
     lo, hi = ax.get_xlim()
     ax.set_xlim(lo, hi + 0.06 * (hi - lo))           # room between the last dot and the spread numbers
@@ -342,6 +343,26 @@ def spread_rows(ax, r_runs, names, lay, cv_header):
 
 
 SPREAD_HEADER = "Spread (CV)\n"                     # the same header on every jumpy figure, then its series
+CV_COLUMN_IN = 0.55                                 # room right of the panels for the spread numbers, in inches
+
+
+def cv_column(ax, rows, top, header, room_in=CV_COLUMN_IN):
+    """The spread (CV) of the runs, as a column of text right of `ax`: rows = [(y, text)], the header above the
+    top row (at y = top). The figure keeps its width; its panels make room (`room_in`) for the column."""
+    for yi, text in rows:
+        ax.text(1.01, yi, text, transform=ax.get_yaxis_transform(), va="center", fontsize=6.5, color=MUTED)
+    ax.text(1.01, top, header, transform=ax.get_yaxis_transform(), fontsize=6.5, color=MUTED, va="bottom")
+    ax.figure.subplots_adjust(right=1 - room_in / ax.figure.get_size_inches()[0])
+
+
+def from_zero(ax):
+    """A joule axis from 0, with room on the right so the last point stays clear of the spread numbers."""
+    ax.set_xlim(0, ax.get_xlim()[1] * 1.08)
+
+
+def cv_text(*values):
+    """'29 / 3%': the spread (CV) of each list of runs given, the same way in every figure."""
+    return " / ".join(f"{data.cv(v):.0f}" for v in values) + "%"
 
 
 def fig3(r, deploy, width, path, dpi):
@@ -351,13 +372,14 @@ def fig3(r, deploy, width, path, dpi):
     fig, a = plt.subplots(figsize=(WIDTH_IN[width], lay.height))
     out = spread_rows(a, lambda s, bw: r[(s, deploy, bw)]["server_j"], names, lay, SPREAD_HEADER + "on / off; Java")
     a.set_xlabel("Server energy of each run, from its median (%)")
-    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
+    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, JAVA_LABEL, JAVA_MARK)])
     save(fig, path, dpi)
     return out
 
 
 def fig4(r, deploy, width, path, dpi):
-    """Java as the reference: (a) server energy, attributed; (b) machine energy, measured."""
+    """Java as the reference: (a) server energy, attributed, with the on/off ratio; (b) machine energy, measured,
+    from 0 like the other platform panels; right: the spread (CV) of the server energy over the runs."""
     names = servers(r)
     med = lambda s, b, k: data.median(r[(s, deploy, b)][k])
     lay = Rows(len(names), 1)
@@ -371,18 +393,24 @@ def fig4(r, deploy, width, path, dpi):
             if "-java-" in s:
                 v = med(s, "on", k)
                 row[k] = v
-                point(ax, v, y[s], JAVA)
+                point(ax, v, y[s], JAVA, JAVA_MARK)
                 continue
             on, off = med(s, "on", k), med(s, "off", k)
             row[k + "_on"], row[k + "_off"] = on, off
             pair(ax, off, on, y[s], lay)
+        if "-java-" not in s:
+            ratio_label(a, row["server_j_on"], y[s], f"{row['server_j_on'] / row['server_j_off']:.1f}×")
+        row["cv"] = [data.cv(r[(s, deploy, bw)]["server_j"]) for bw in (("on",) if "-java-" in s else ("on", "off"))]
         out.append(row)
-    a.set_xlim(0, None)
+    cv_column(b, [(y[s], cv_text(*[r[(s, deploy, bw)]["server_j"] for bw in (("on",) if "-java-" in s else ("on", "off"))]))
+                  for s in names], len(names) - 0.45, SPREAD_HEADER + "on / off; Java")
+    a.set_xlim(0, max(row["server_j_on"] for row in out if "server_j_on" in row) * 1.18)
     a.set_xlabel("Server energy (J)")
     a.set_title("(a) Server, attributed", loc="left")
-    b.set_xlabel("Platform energy (J, axis starts above 0)")
+    from_zero(b)
+    b.set_xlabel("Platform energy (J)")
     b.set_title("(b) Platform, measured", loc="left")
-    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
+    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, JAVA_LABEL, JAVA_MARK)])
     save(fig, path, dpi)
     return out
 
@@ -408,7 +436,7 @@ def ws_runs(folders, column="Container Energy (J)"):
 def log_axis(ax, label_text):
     ax.set_xscale("log")                      # equal steps = equal ratios, so 2x looks the same everywhere
     lo, hi = ax.get_xlim()
-    ax.set_xlim(lo, hi * 1.6)
+    ax.set_xlim(lo, hi * 2.5)                 # room for the ratio label of the right-most pair
     ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1, 2, 5), numticks=12))
     ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
@@ -422,7 +450,8 @@ def ws_names(r):
 
 def fig5(r, m, deploy, width, path, dpi):
     """WebSocket streams, busy-waiting on vs off, Java Netty as reference: per message size (8 KB top, 1 MB bottom)
-    the server energy, attributed (log scale), and the platform energy, measured (joules), as the echo figure."""
+    the server energy, attributed (log scale), and the platform energy, measured (joules), as the echo figure;
+    right of each size: the spread (CV) of the server energy over the runs."""
     names = ws_names(r)
     lay = Rows(len(names), 1, extra_in=0.2)
     fig, axes = plt.subplots(2, 2, sharey=True, figsize=(WIDTH_IN[width], 2 * lay.height - FRAME_IN + 0.45),
@@ -436,8 +465,8 @@ def fig5(r, m, deploy, width, path, dpi):
             if "-java-" in s:
                 row[test], row[test + " platform"] = data.median(r[(s, deploy, "on", test)]), \
                     data.median(m[(s, deploy, "on", test)])
-                point(a, row[test], y[s], JAVA)
-                point(b, row[test + " platform"], y[s], JAVA)
+                point(a, row[test], y[s], JAVA, JAVA_MARK)
+                point(b, row[test + " platform"], y[s], JAVA, JAVA_MARK)
                 continue
             on, off = data.median(r[(s, deploy, "on", test)]), data.median(r[(s, deploy, "off", test)])
             p_on, p_off = data.median(m[(s, deploy, "on", test)]), data.median(m[(s, deploy, "off", test)])
@@ -448,13 +477,18 @@ def fig5(r, m, deploy, width, path, dpi):
             pair(b, p_off, p_on, y[s], lay)
         out.append(row)
     axes[0][0].set_ylim(-0.6, len(names) - 0.4)        # room for a pair moved apart in the top row
+    for (a, b), (test, _) in zip(axes, WS_TESTS):
+        runs_of = lambda s: [r[(s, deploy, bw, test)] for bw in (("on",) if "-java-" in s else ("on", "off"))]
+        cv_column(b, [(y[s], cv_text(*runs_of(s))) for s in names], len(names) - 0.45, SPREAD_HEADER + "on / off; Java")
+        for row in out:
+            row[test + " cv"] = [data.cv(v) for v in runs_of(row["server"])]
     for (a, b), titles in zip(axes, WS_PANELS):
         log_axis(a, "Server energy (J, log scale)")
-        b.set_xlim(0, None)
+        from_zero(b)
         b.set_xlabel("Platform energy (J)")
         for ax, title in zip((a, b), titles):
             ax.set_title(title, loc="left")
-    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
+    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, JAVA_LABEL, JAVA_MARK)])
     save(fig, path, dpi)
     return out
 
@@ -471,7 +505,7 @@ def fig6(r, deploy, width, path, dpi):
         out[test] = spread_rows(ax, lambda s, bw: r[(s, deploy, bw, test)], names, lay, SPREAD_HEADER + "on / off; Java")
         ax.set_title(title, loc="left")
         ax.set_xlabel("Each run, from its median (%)")
-    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, "Java (no busy-waiting)")])
+    legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, off"), dot(JAVA, JAVA_LABEL, JAVA_MARK)])
     save(fig, path, dpi)
     return out
 
