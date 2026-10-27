@@ -111,7 +111,7 @@ def echo(r, which, deploy, width, path, dpi):
     rng = random.Random(stats.SEED)
     lay = figures.Rows(len(tests), 3, extra_in=0.17)
     fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(figures.WIDTH_IN[width], lay.height),
-                               gridspec_kw={"width_ratios": [1, 1], "wspace": 0.08})
+                               gridspec_kw={"width_ratios": [1, 1], "wspace": figures.PANEL_GAP})
     y = list(range(len(tests)))[::-1]
     a.set_yticks(y, [t[1] for t in tests])
     out, any_coarse = [], False
@@ -142,15 +142,15 @@ def echo(r, which, deploy, width, path, dpi):
         for ax in (a, b):
             ax.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
     a.set_xscale("log")                       # server energies differ 1,000-fold between tests (0.01-77 J)
-    a.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1,)))
+    a.xaxis.set_major_locator(matplotlib.ticker.LogLocator(base=100))      # 0.01, 1, 100: room for 8 pt labels
     a.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     a.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     lo, hi = a.get_xlim()
-    a.set_xlim(lo, hi * 8)                    # room for the ratio label of the right-most pair
-    a.set_xlabel("Server energy (J, log scale)")
+    a.set_xlim(lo, hi * 25)                   # room for the ratio label of the right-most pair
+    a.set_xlabel("Energy (J, log scale)")                  # the panel title says whose
     a.set_title("(a) Server, attributed", loc="left")
     figures.from_zero(b)
-    b.set_xlabel("Platform energy (J)")
+    b.set_xlabel("Energy (J)")
     b.set_title("(b) Platform, measured", loc="left")
     figures.on_off_legend(fig, "Erlang", [figures.dot(color, text, marker) for _, _, color, marker, text, _ in REFERENCES])
     figures.save(fig, path, dpi)
@@ -189,12 +189,12 @@ def spread(r, which, deploy, width, path, dpi):
             row["dagger"] = row.get("dagger", False) or by_cpu
             dagger = dagger or by_cpu
         a.text(1.01, yi, " / ".join(cvs) + "%",
-               transform=a.get_yaxis_transform(), va="center", fontsize=6.5, color=MUTED)
+               transform=a.get_yaxis_transform(), va="center", fontsize=figures.FONT_PT, color=MUTED)
         out.append(row)
     for yi in y[:-1]:
         a.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
     a.text(1.01, len(tests) - 0.45, figures.SPREAD_HEADER + "on / off / Java / C", transform=a.get_yaxis_transform(),
-           fontsize=6.5, color=MUTED, va="bottom")
+           fontsize=figures.FONT_PT, color=MUTED, va="bottom")
     a.axvline(0, color=MUTED, lw=0.6)
     lo, hi = a.get_xlim()
     a.set_xlim(lo, hi + 0.06 * (hi - lo))

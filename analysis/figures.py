@@ -26,7 +26,10 @@ import busy_wait_http  # noqa: E402
 import data  # noqa: E402
 import stats  # noqa: E402
 
-WIDTH_IN = {"one": 3.46, "two": 7.13}            # IEEE column and page width (8.8 cm, 18.1 cm)
+PANEL_GAP = 0.16                                 # between two panels side by side: their end ticks stay apart
+WIDTH_IN = {"one": 3.29, "two": 6.83}            # MIPRO (A4, 0.72 in margins, 0.25 in gap): column and text width
+FONT_PT = 8                                      # every text in every figure, as the paper's captions (no shrinking:
+PAD_IN = 0.02                                    # the saved image is exactly WIDTH_IN wide, see save())
 ON, OFF, JAVA, INK, MUTED, GRID = "#d95926", "#2a78d6", "#1b9e72", "#1f2328", "#5b636b", "#e3e6e8"
 JAVA_MARK, JAVA_LABEL = "^", "Java (no busy-waiting)"     # the reference: the same shape and words in every figure
 # One drawing rule for every figure (figures.py and echo_figures.py):
@@ -42,8 +45,8 @@ KIND = {"pure": "pure", "index": "index", "cowboy": "Cowboy", "yaws": "Yaws", "p
         "bandit": "Bandit", "netty": "Netty"}
 ORDER = ["pure", "index", "cowboy", "yaws", "phoenix", "bandit", "mist", "netty"]
 WS_TESTS = (("stream 8 KB", "(a) 8 KB: server waits"), ("stream 1024 KB", "(b) 1 MB: server busy"))
-WS_PANELS = (("8 KB messages", "(a) Server, attributed", "(b) Platform, measured"),   # the same panel titles as
-             ("1 MB messages", "(c) Server, attributed", "(d) Platform, measured"))   # the other figures; the size above
+WS_PANELS = (("(a) Server, 8 KB", "(b) Platform, 8 KB"),       # the message size in the titles: one column
+             ("(c) Server, 1 MB", "(d) Platform, 1 MB"))       # has no room for more at 8 pt
 
 
 COMPRESSED = "+compressed"      # a server's runs from before the client stopped offering compression (mist)
@@ -95,11 +98,12 @@ def sort_key(server):
 def style():
     plt.rcParams.update({
         "font.family": "serif", "font.serif": ["Nimbus Roman", "Liberation Serif", "DejaVu Serif"],
-        "font.size": 7.5, "axes.titlesize": 7.5, "axes.labelsize": 7.5, "xtick.labelsize": 7, "ytick.labelsize": 7,
-        "legend.fontsize": 7, "axes.edgecolor": MUTED, "axes.linewidth": 0.6, "xtick.color": MUTED,
+        "font.size": FONT_PT, "axes.titlesize": FONT_PT, "axes.labelsize": FONT_PT, "xtick.labelsize": FONT_PT,
+        "ytick.labelsize": FONT_PT,
+        "legend.fontsize": FONT_PT, "axes.edgecolor": MUTED, "axes.linewidth": 0.6, "xtick.color": MUTED,
         "ytick.color": INK, "xtick.major.width": 0.6, "ytick.major.size": 0, "axes.spines.top": False,
         "axes.spines.right": False, "axes.grid": True, "axes.grid.axis": "x", "grid.color": GRID,
-        "grid.linewidth": 0.6, "savefig.bbox": "tight", "savefig.pad_inches": 0.02,
+        "grid.linewidth": 0.6, "savefig.bbox": "tight", "savefig.pad_inches": PAD_IN,
     })
 
 
@@ -126,7 +130,7 @@ def fig1_data(folder, deploy, load=80000):
 
 
 def ratio_label(ax, x, y, text):
-    ax.annotate(text, (x, y), xytext=(6, 0), textcoords="offset points", va="center", fontsize=6.5, color=MUTED)
+    ax.annotate(text, (x, y), xytext=(6, 0), textcoords="offset points", va="center", fontsize=FONT_PT, color=MUTED)
 
 
 def saved_panel(b, yi, saved, ci):
@@ -150,7 +154,7 @@ def fig1(rows, title, width, path, dpi):
     """(a) server energy, busy-waiting on vs off; (b) platform energy (RAPL psys) saved with it off, 95% CI."""
     lay = Rows(len(rows), 1)
     fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], lay.height),
-                               gridspec_kw={"width_ratios": [1.35, 1], "wspace": 0.08})
+                               gridspec_kw={"width_ratios": [1.35, 1], "wspace": PANEL_GAP})
     y = list(range(len(rows)))[::-1]
     for yi, r in zip(y, rows):
         pair(a, r["server_off"], r["server_on"], yi, lay)
@@ -230,9 +234,28 @@ def save(fig, path, dpi):
     meta = {"png": {"Title": CONTEXT["text"], "Description": description, "Software": "WSEB analysis/figures.py"},
             "svg": {"Title": CONTEXT["text"], "Description": description}}.get(fmt)
     settle_pairs(fig)
+    fit_width(fig, fig.get_size_inches()[0])
     fig.savefig(path, dpi=dpi, metadata=meta)
     plt.close(fig)
     DESCRIBED.append((os.path.basename(path), CONTEXT["text"], CONTEXT["caption"]))
+
+
+def fit_width(fig, width_in):
+    """Make the saved image exactly `width_in` wide, so LaTeX prints it at 100% and its text at FONT_PT: the figure
+    keeps that width and its panels move in (or out) until the outermost labels touch its edges."""
+    w = width_in - 2 * PAD_IN                                    # the saved image adds PAD_IN on both sides
+    fig.set_size_inches(w, fig.get_size_inches()[1])
+    for _ in range(6):
+        fig.canvas.draw()
+        box, sp = fig.get_tightbbox(fig.canvas.get_renderer()), fig.subplotpars
+        if abs(box.x0) < 0.003 and abs(box.x1 - w) < 0.003:
+            return
+        left, right = sp.left - box.x0 / w, sp.right - (box.x1 - w) / w
+        if right - left < 0.2:                                      # a legend or title wider than the page itself
+            break
+        fig.subplots_adjust(left=left, right=right)
+    print(f"  note: {CONTEXT['text'] or 'figure'} is {box.width + 2 * PAD_IN:.2f} in wide, not {width_in} in",
+          file=sys.stderr)
 
 
 PAIRS = []          # pairs drawn but not yet checked for overlap (done in save(), once the axes are final)
@@ -268,7 +291,7 @@ def legend(fig, items, ncol=3, titles=True, legend_rows=1):
     context = 0.17 if CONTEXT["show"] and CONTEXT["text"] else 0.0
     fig.subplots_adjust(top=1 - ((0.42 if titles else 0.2) + 0.17 * (legend_rows - 1) + context) / height)
     if context:
-        fig.text(0.5, 1.0, CONTEXT["text"], ha="center", va="top", fontsize=7.5, color=INK, fontweight="bold")
+        fig.text(0.5, 1.0, CONTEXT["text"], ha="center", va="top", fontsize=FONT_PT, color=INK, fontweight="bold")
     fig.legend(handles=items, loc="upper center", bbox_to_anchor=(0.5, 1.0 - context / height), ncol=ncol,
                frameon=False, handletextpad=0.2, columnspacing=1.0)
 
@@ -295,7 +318,7 @@ def fig2(r, width, path, dpi):
     med = lambda s, d, b, k: data.median(r[(s, d, b)][k])
     lay = Rows(len(names), 2)
     fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], lay.height),
-                               gridspec_kw={"width_ratios": [1, 1], "wspace": 0.08})
+                               gridspec_kw={"width_ratios": [1, 1], "wspace": PANEL_GAP})
     y = rows_axis(a, names)
     out = []
     for s in names:
@@ -320,7 +343,7 @@ def fig2(r, width, path, dpi):
     b.set_xlabel("Busy-wait on/off, server (×)")
     b.set_title("(b) Busy-wait effect", loc="left")
     legend(fig, [dot(ON, "BEAM, busy-waiting on"), dot(OFF, "BEAM, busy-waiting off"), java_dot(),
-                 dot(ON, "on ÷ off in Docker", "D"), dot(ON, "on ÷ off native", "D", hollow=True)], ncol=3, legend_rows=2)
+                 dot(ON, "on ÷ off in Docker", "D"), dot(ON, "on ÷ off native", "D", hollow=True)], ncol=2, legend_rows=3)
     save(fig, path, dpi)
     return out
 
@@ -358,8 +381,8 @@ def cv_column(ax, rows, top, header):
     """The spread (CV) of the runs, as a column of text right of `ax`: rows = [(y, text)], the header above the
     top row (at y = top)."""
     for yi, text in rows:
-        ax.text(1.01, yi, text, transform=ax.get_yaxis_transform(), va="center", fontsize=6.5, color=MUTED)
-    ax.text(1.01, top, header, transform=ax.get_yaxis_transform(), fontsize=6.5, color=MUTED, va="bottom")
+        ax.text(1.01, yi, text, transform=ax.get_yaxis_transform(), va="center", fontsize=FONT_PT, color=MUTED)
+    ax.text(1.01, top, header, transform=ax.get_yaxis_transform(), fontsize=FONT_PT, color=MUTED, va="bottom")
 
 
 def from_zero(ax):
@@ -391,7 +414,7 @@ def fig4(r, deploy, width, path, dpi):
     med = lambda s, b, k: data.median(r[(s, deploy, b)][k])
     lay = Rows(len(names), 1)
     fig, (a, b) = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], lay.height),
-                               gridspec_kw={"width_ratios": [1, 1], "wspace": 0.08})
+                               gridspec_kw={"width_ratios": [1, 1], "wspace": PANEL_GAP})
     y = rows_axis(a, names)
     out = []
     for s in names:
@@ -408,11 +431,11 @@ def fig4(r, deploy, width, path, dpi):
         if "-java-" not in s:
             ratio_label(a, row["server_j_on"], y[s], f"{row['server_j_on'] / row['server_j_off']:.1f}×")
         out.append(row)
-    a.set_xlim(0, max(row["server_j_on"] for row in out if "server_j_on" in row) * 1.18)   # room for the ratios
-    a.set_xlabel("Server energy (J)")
+    a.set_xlim(0, max(row["server_j_on"] for row in out if "server_j_on" in row) * 1.3)   # room for the ratios
+    a.set_xlabel("Energy (J)")                      # the panel title says whose
     a.set_title("(a) Server, attributed", loc="left")
     from_zero(b)
-    b.set_xlabel("Platform energy (J)")
+    b.set_xlabel("Energy (J)")
     b.set_title("(b) Platform, measured", loc="left")
     on_off_legend(fig, "BEAM", [java_dot()])
     save(fig, path, dpi)
@@ -440,7 +463,7 @@ def ws_runs(folders, column="Container Energy (J)"):
 def log_axis(ax, label_text):
     ax.set_xscale("log")                      # equal steps = equal ratios, so 2x looks the same everywhere
     lo, hi = ax.get_xlim()
-    ax.set_xlim(lo, hi * 2.5)                 # room for the ratio label of the right-most pair
+    ax.set_xlim(lo, hi * 4)                   # room for the ratio label of the right-most pair
     ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1, 3), numticks=12))
     ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
@@ -458,7 +481,7 @@ def fig5(r, m, deploy, width, path, dpi):
     names = ws_names(r)
     lay = Rows(len(names), 1, extra_in=0.2)
     fig, axes = plt.subplots(2, 2, sharey=True, figsize=(WIDTH_IN[width], 2 * lay.height - FRAME_IN + 0.45),
-                             gridspec_kw={"wspace": 0.08, "hspace": 0.55})
+                             gridspec_kw={"wspace": PANEL_GAP, "hspace": 0.55})
     y = rows_axis(axes[0][0], names)
     rows_axis(axes[1][0], names)
     out = []
@@ -480,14 +503,12 @@ def fig5(r, m, deploy, width, path, dpi):
             pair(b, p_off, p_on, y[s], lay)
         out.append(row)
     axes[0][0].set_ylim(-0.6, len(names) - 0.4)        # room for a pair moved apart in the top row
-    for (a, b), (size, *titles) in zip(axes, WS_PANELS):
-        log_axis(a, "Server energy (J, log scale)")
+    for (a, b), titles in zip(axes, WS_PANELS):
+        log_axis(a, "Energy (J, log scale)")
         from_zero(b)
-        b.set_xlabel("Platform energy (J)")
+        b.set_xlabel("Energy (J)")
         for ax, title in zip((a, b), titles):
             ax.set_title(title, loc="left")
-        a.annotate(size, xy=(0.0, 1.0), xycoords=("figure fraction", "axes fraction"), xytext=(2, 14),
-                   textcoords="offset points", fontweight="bold", va="bottom")
     on_off_legend(fig, "BEAM", [java_dot()])
     save(fig, path, dpi)
     return out
@@ -497,14 +518,14 @@ def fig6(r, deploy, width, path, dpi):
     """WebSocket streams: the 5 runs of every server as % from its median, 8 KB and 1 MB, Java Netty as reference."""
     names = ws_names(r)
     lay = Rows(len(names), 2, extra_in=0.2)
-    # room between the panels for panel (a)'s spread numbers: wider in one column, where the panels are narrow
-    fig, axes = plt.subplots(1, 2, sharey=True, figsize=(WIDTH_IN[width], lay.height),
-                             gridspec_kw={"wspace": 0.75 if width == "one" else 0.35})
+    # one panel above the other: side by side, two panels with their spread numbers do not fit one column at 8 pt
+    fig, axes = plt.subplots(2, 1, figsize=(WIDTH_IN[width], 2 * lay.height - FRAME_IN + 0.45),
+                             gridspec_kw={"hspace": 0.45})
     out = {}
     for ax, (test, title) in zip(axes, WS_TESTS):
         out[test] = spread_rows(ax, lambda s, bw: r[(s, deploy, bw, test)], names, lay, SPREAD_HEADER + "on / off; Java")
         ax.set_title(title, loc="left")
-        ax.set_xlabel("Each run, from its median (%)")
+        ax.set_xlabel("Server energy of each run, from its median (%)")
     on_off_legend(fig, "BEAM", [java_dot()])
     save(fig, path, dpi)
     return out
