@@ -208,12 +208,10 @@ CAPTIONS = {
             "server's median, BEAM with busy-waiting on vs off, Java (no busy-waiting) as reference. Right: coefficient "
             "of variation.",
     "fig4": "Java reference servers (no busy-waiting) vs BEAM servers with busy-waiting on and off. (a) Attributed "
-            "server energy (CPU-time share), with the on/off ratio; (b) platform energy (RAPL psys, measured). Right: "
-            "spread (CV) of the 5 runs' server energy.",
+            "server energy (CPU-time share), with the on/off ratio; (b) platform energy (RAPL psys, measured).",
     "fig5": "WebSocket streams (100 clients, 10 messages/s each, 5 s): busy-waiting on vs off, Java Netty as "
             "reference. (a, b) 8 KB messages; (c, d) 1 MB messages. (a, c) Energy attributed to the server process, log "
-            "scale; (b, d) platform energy (RAPL psys, measured), in joules. Right: spread (CV) of the 5 runs' server "
-            "energy. Gleam mist without "
+            "scale; (b, d) platform energy (RAPL psys, measured), in joules. Gleam mist without "
             "per-message compression (re-run) and with it (first run; the only server that accepted the client's offer).",
     "fig6": "WebSocket streams: run-to-run variation of the attributed server energy, the 5 runs of every server as "
             "deviation from its median, busy-waiting on vs off, Java Netty as reference. (a) 8 KB; (b) 1 MB messages.",
@@ -354,22 +352,14 @@ def spread_rows(ax, r_runs, names, lay, cv_header):
 
 
 SPREAD_HEADER = "Spread (CV)\n"                     # the same header on every jumpy figure, then its series
-CV_COLUMN_IN = 0.55                                 # room right of the panels for the spread numbers, in inches
 
 
-def cv_column(ax, rows, top, header, room_in=CV_COLUMN_IN, between=False):
+def cv_column(ax, rows, top, header):
     """The spread (CV) of the runs, as a column of text right of `ax`: rows = [(y, text)], the header above the
-    top row (at y = top). The figure keeps its width; its panels make room (`room_in`) for the column: at the
-    right edge, or (between=True, for the left of two panels side by side) between the two panels."""
+    top row (at y = top)."""
     for yi, text in rows:
-        ax.text(1.02, yi, text, transform=ax.get_yaxis_transform(), va="center", fontsize=6.5, color=MUTED)
-    ax.text(1.02, top, header, transform=ax.get_yaxis_transform(), fontsize=6.5, color=MUTED, va="bottom")
-    fig = ax.figure
-    if between:   # two panels share the width W: gap = wspace x panel width, panel width = (W - gap) / 2
-        width = (fig.subplotpars.right - fig.subplotpars.left) * fig.get_size_inches()[0]
-        ax.get_gridspec().update(wspace=2 * room_in / (width - room_in))   # the panels' own spacing wins
-    else:
-        fig.subplots_adjust(right=1 - room_in / fig.get_size_inches()[0])
+        ax.text(1.01, yi, text, transform=ax.get_yaxis_transform(), va="center", fontsize=6.5, color=MUTED)
+    ax.text(1.01, top, header, transform=ax.get_yaxis_transform(), fontsize=6.5, color=MUTED, va="bottom")
 
 
 def from_zero(ax):
@@ -396,7 +386,7 @@ def fig3(r, deploy, width, path, dpi):
 
 def fig4(r, deploy, width, path, dpi):
     """Java as the reference: (a) server energy, attributed, with the on/off ratio; (b) machine energy, measured,
-    from 0 like the other platform panels; right: the spread (CV) of the server energy over the runs."""
+    from 0 like the other platform panels."""
     names = servers(r)
     med = lambda s, b, k: data.median(r[(s, deploy, b)][k])
     lay = Rows(len(names), 1)
@@ -418,13 +408,7 @@ def fig4(r, deploy, width, path, dpi):
         if "-java-" not in s:
             ratio_label(a, row["server_j_on"], y[s], f"{row['server_j_on'] / row['server_j_off']:.1f}×")
         out.append(row)
-    variants = lambda s: ("on",) if "-java-" in s else ("on", "off")
-    for ax, k in ((b, "machine_j"), (a, "server_j")):           # right edge first, then the gap between the panels
-        for row in out:
-            row[k + "_cv"] = [data.cv(r[(row["server"], deploy, bw)][k]) for bw in variants(row["server"])]
-        cv_column(ax, [(y[s], cv_text(*[r[(s, deploy, bw)][k] for bw in variants(s)])) for s in names],
-                  len(names) - 0.45, SPREAD_HEADER + "on / off; Java", between=ax is a)
-    a.set_xlim(0, max(row["server_j_on"] for row in out if "server_j_on" in row) * 1.4)   # room for the ratios
+    a.set_xlim(0, max(row["server_j_on"] for row in out if "server_j_on" in row) * 1.18)   # room for the ratios
     a.set_xlabel("Server energy (J)")
     a.set_title("(a) Server, attributed", loc="left")
     from_zero(b)
@@ -456,7 +440,7 @@ def ws_runs(folders, column="Container Energy (J)"):
 def log_axis(ax, label_text):
     ax.set_xscale("log")                      # equal steps = equal ratios, so 2x looks the same everywhere
     lo, hi = ax.get_xlim()
-    ax.set_xlim(lo, hi * 4)                   # room for the ratio label of the right-most pair
+    ax.set_xlim(lo, hi * 2.5)                 # room for the ratio label of the right-most pair
     ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1, 3), numticks=12))
     ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
@@ -470,8 +454,7 @@ def ws_names(r):
 
 def fig5(r, m, deploy, width, path, dpi):
     """WebSocket streams, busy-waiting on vs off, Java Netty as reference: per message size (8 KB top, 1 MB bottom)
-    the server energy, attributed (log scale), and the platform energy, measured (joules), as the echo figure;
-    right of each size: the spread (CV) of the server energy over the runs."""
+    the server energy, attributed (log scale), and the platform energy, measured (joules), as the echo figure."""
     names = ws_names(r)
     lay = Rows(len(names), 1, extra_in=0.2)
     fig, axes = plt.subplots(2, 2, sharey=True, figsize=(WIDTH_IN[width], 2 * lay.height - FRAME_IN + 0.45),
@@ -497,13 +480,6 @@ def fig5(r, m, deploy, width, path, dpi):
             pair(b, p_off, p_on, y[s], lay)
         out.append(row)
     axes[0][0].set_ylim(-0.6, len(names) - 0.4)        # room for a pair moved apart in the top row
-    for (a, b), (test, _) in zip(axes, WS_TESTS):
-        for ax, runs, key in ((b, m, " platform cv"), (a, r, " cv")):   # right edge first, then between the panels
-            runs_of = lambda s: [runs[(s, deploy, bw, test)] for bw in (("on",) if "-java-" in s else ("on", "off"))]
-            cv_column(ax, [(y[s], cv_text(*runs_of(s))) for s in names], len(names) - 0.45,
-                      SPREAD_HEADER + "on / off; Java", between=ax is a)
-            for row in out:
-                row[test + key] = [data.cv(v) for v in runs_of(row["server"])]
     for (a, b), (size, *titles) in zip(axes, WS_PANELS):
         log_axis(a, "Server energy (J, log scale)")
         from_zero(b)

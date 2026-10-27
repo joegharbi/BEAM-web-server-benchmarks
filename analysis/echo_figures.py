@@ -58,8 +58,7 @@ CAPTION = ("TCP echo servers, busy-waiting on (default) vs off (+sbwt none) for 
            "apart) to always busy (all clients at once). C, nosleep: the meter fell behind (a new thread per "
            "connection, about 2,000 per second), so (a) is the server's exact CPU time \u00d7 the platform's price per "
            "CPU-second over the load, and (b) includes the meter's own extra work, about 20% (measured with the meter "
-           "on and off). Right: spread (CV) of the 5 runs' server energy; in sleep with 100 clients the servers use "
-           "0.005-0.07 J, so a single meter reading changes a run by tens of percent.")
+           "on and off).")
 SPREAD_CAPTION = ("Run-to-run variation of the attributed server energy: the 5 runs per test as deviation from that "
                   "test's median, for Erlang with busy-waiting on and off and for the references without busy-waiting "
                   "(Java, C). Right: coefficient of variation. Sleep with 100 clients: the servers use 0.005-0.07 J, "
@@ -107,8 +106,7 @@ def server_energy(g):
 
 def echo(r, which, deploy, width, path, dpi):
     """(a) server energy, attributed; (b) platform energy, measured: in both, Erlang off -> on, Java and C as
-    references (as panel (b) of the HTTP Fig. 4). Each test row has three lanes: Erlang (on/off), Java, C. Right:
-    the spread (CV) of the server energy over the runs, Erlang on / off / Java / C (as the echo spread figure)."""
+    references (as panel (b) of the HTTP Fig. 4). Each test row has three lanes: Erlang (on/off), Java, C."""
     tests = [t for t in TESTS[which] if (ERLANG, deploy, "on", t[0]) in r]
     rng = random.Random(stats.SEED)
     lay = figures.Rows(len(tests), 3, extra_in=0.17)
@@ -143,25 +141,12 @@ def echo(r, which, deploy, width, path, dpi):
     for yi in y[:-1]:
         for ax in (a, b):
             ax.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
-    # the spread (CV) next to each line of points: Erlang on / off, then Java, then C; server and platform panels
-    lanes = [[(ERLANG, "on"), (ERLANG, "off")]] + [[(server, "on")] for _, server, *_ in REFERENCES]
-    for ax, values in ((b, lambda g: g["machine_j"]), (a, run_values)):    # right edge first, then between panels
-        cv_rows = []
-        for yi, row in zip(y, out):
-            for lane, series in enumerate(lanes):
-                groups = [r.get((server, deploy, bw, row["test"])) for server, bw in series]
-                if all(groups):
-                    cv_rows.append((yi + lay.lane(lane), figures.cv_text(*[values(g) for g in groups])))
-            row["platform_cv" if ax is b else "cv"] = [
-                data.cv(values(g)) if g else None
-                for g in (r.get((server, deploy, bw, row["test"])) for series in lanes for server, bw in series)]
-        figures.cv_column(ax, cv_rows, len(tests) - 0.45, "Spread (CV)", between=ax is a)   # beside each line
     a.set_xscale("log")                       # server energies differ 1,000-fold between tests (0.01-77 J)
     a.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1,)))
     a.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     a.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     lo, hi = a.get_xlim()
-    a.set_xlim(lo, hi * 40)                   # room for the ratio label of the right-most pair
+    a.set_xlim(lo, hi * 8)                    # room for the ratio label of the right-most pair
     a.set_xlabel("Server energy (J, log scale)")
     a.set_title("(a) Server, attributed", loc="left")
     figures.from_zero(b)
