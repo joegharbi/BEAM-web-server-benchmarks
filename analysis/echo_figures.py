@@ -9,9 +9,9 @@ per test, with Java and C as references.
 nosleep re-run with ENV_TCP_TW_REUSE=1. Images: echo_<new|old>_<container|native> with
   (a) server energy (attributed) per test: Erlang off -> on with the ratio; Java and C as reference marks
   (b) platform energy (measured) saved with busy-waiting off, with its 95% range
-Where the meter fell behind in most runs of a server and test (tools/progress.py meter_behind: C in nosleep, one
-thread per connection, up to 10,000, stalled Scaphandre), its server energy is the one of the CPU-time method
-(data.energy_by_cpu_time) instead, marked with a dagger; everything else is the meter's (Scaphandre).
+Every value is the meter's (Scaphandre), as recorded. Where it fell behind in most runs of a server and test
+(tools/progress.py meter_behind: C in nosleep, one thread per connection, up to 10,000, stalled Scaphandre) the
+value is unreliable; echo_figures.json marks it (meter_behind) and keeps the CPU-time method's estimate next to it.
   echo_spread_<setup>_<deploy>  the 5 runs per test, as % from their median: Erlang busy-waiting on vs off, and
                                 Java and C as references; with the spread (CV) of each: how jumpy the measurement is
 echo_figures.json also holds, per test, the latency and throughput of every server (for the meeting page; not a
@@ -55,15 +55,14 @@ WHERE = {"container": "Docker (container)", "native": "native (no Docker)"}
 CAPTION = ("TCP echo servers, busy-waiting on (default) vs off (+sbwt none) for Erlang, per test, with Java and C as "
            "references (no busy-waiting). (a) Energy attributed to the server process, log scale; "
            "(b) platform energy (RAPL psys, measured), in joules. Tests ordered from mostly waiting (clients 0.1 s "
-           "apart) to always busy (all clients at once). C, nosleep: the meter fell behind (a new thread per "
-           "connection, about 2,000 per second), so (a) is the server's exact CPU time \u00d7 the platform's price per "
-           "CPU-second over the load, and (b) includes the meter's own extra work, about 20% (measured with the meter "
-           "on and off).")
+           "apart) to always busy (all clients at once). C, nosleep: the meter fell behind (one OS thread per "
+           "connection, about 2,000 new threads per second), so (a) is unreliable for C there, and (b) includes the "
+           "meter's own extra work, about 20% (measured with the meter on and off).")
 SPREAD_CAPTION = ("Run-to-run variation of the attributed server energy: the 5 runs per test as deviation from that "
                   "test's median, for Erlang with busy-waiting on and off and for the references without busy-waiting "
                   "(Java, C). Right: coefficient of variation. Sleep with 100 clients: the servers use 0.005-0.07 J, "
                   "so a single meter reading changes a run by tens of percent. "
-                  "C, nosleep: from the server's exact CPU time (the meter fell behind).")
+                  "C, nosleep: the meter fell behind (one OS thread per connection), so its runs jump.")
 
 
 def runs(folders):
@@ -90,18 +89,9 @@ def coarse(g):
     return g["behind"] * 2 > len(g["server_j"])
 
 
-def run_values(g):
-    """The server energy of each run as the figures use it: the CPU-time method's where the meter fell behind in
-    most runs (and an exact CPU counter exists), else the meter's."""
-    return g["cpu_j"] if coarse(g) and None not in g["cpu_j"] else g["server_j"]
-
-
-def server_energy(g):
-    """(median server energy, method): the meter's, or the CPU-time method's where the meter fell behind in most
-    runs (only with an exact CPU counter; without one the meter's value stays, marked 'coarse')."""
-    if coarse(g) and None not in g["cpu_j"]:
-        return data.median(g["cpu_j"]), "cpu-time"
-    return data.median(g["server_j"]), "coarse" if coarse(g) else "meter"
+def cpu_time_estimate(g):
+    """The CPU-time method's median server energy (not drawn; kept in echo_figures.json), or None."""
+    return data.median(g["cpu_j"]) if None not in g["cpu_j"] else None
 
 
 def echo(r, which, deploy, width, path, dpi):
@@ -114,7 +104,7 @@ def echo(r, which, deploy, width, path, dpi):
                                gridspec_kw={"width_ratios": [1, 1], "wspace": figures.PANEL_GAP})
     y = list(range(len(tests)))[::-1]
     a.set_yticks(y, [t[1] for t in tests])
-    out, any_coarse = [], False
+    out = []
     for yi, (load, name) in zip(y, tests):
         on, off = r[(ERLANG, deploy, "on", load)], r[(ERLANG, deploy, "off", load)]
         s_on, s_off = data.median(on["server_j"]), data.median(off["server_j"])
@@ -131,9 +121,8 @@ def echo(r, which, deploy, width, path, dpi):
             g = r.get((server, deploy, "on", load))
             if not g:
                 continue
-            value, method = server_energy(g)
-            any_coarse |= method != "meter"
-            row[key] = dict(server_j=value, method=method, meter_j=data.median(g["server_j"]),
+            value = data.median(g["server_j"])
+            row[key] = dict(server_j=value, meter_behind=coarse(g), cpu_time_j=cpu_time_estimate(g),
                             platform_j=data.median(g["machine_j"]))
             figures.point(a, value, yi + lay.lane(lane), color, marker)
             figures.point(b, row[key]["platform_j"], yi + lay.lane(lane), color, marker)
@@ -159,8 +148,8 @@ def echo(r, which, deploy, width, path, dpi):
 
 def spread(r, which, deploy, width, path, dpi):
     """The 5 runs per test as % from their median: Erlang with busy-waiting on scatters, off stays close, and so do
-    the references without busy-waiting (Java, C). Where the meter fell behind, the CPU-time method's values.
-    Each test row has four lanes: Erlang on, Erlang off, Java, C."""
+    the references without busy-waiting (Java, C). The meter's values throughout, also where it fell behind (C in
+    nosleep: its runs jump). Each test row has four lanes: Erlang on, Erlang off, Java, C."""
     tests = [t for t in TESTS[which] if (ERLANG, deploy, "on", t[0]) in r]
     series = [("on", ERLANG, "on", ON, "o"), ("off", ERLANG, "off", OFF, "o")] + \
              [(key, server, "on", color, marker) for key, server, color, marker, *_ in REFERENCES]
@@ -168,7 +157,7 @@ def spread(r, which, deploy, width, path, dpi):
     fig, a = plt.subplots(figsize=(figures.WIDTH_IN[width], lay.height))
     y = list(range(len(tests)))[::-1]
     a.set_yticks(y, [t[1] for t in tests])
-    out, dagger = [], False
+    out = []
     for yi, (load, name) in zip(y, tests):
         row = dict(test=load, label=name)
         cvs = []
@@ -177,17 +166,15 @@ def spread(r, which, deploy, width, path, dpi):
             if not g:
                 cvs.append("\u2013")
                 continue
-            by_cpu = coarse(g) and None not in g["cpu_j"]
-            values = run_values(g)
+            values = g["server_j"]
             m = data.median(values)
             dev = [(v / m - 1) * 100 for v in values] if m else [0.0] * len(values)
-            row[f"deviation_{key}"], row[f"cv_{key}"], row[f"method_{key}"] = dev, data.cv(values), \
-                "cpu-time" if by_cpu else "meter"
+            # no spread without energy: the meter can record none at all (old setup, native C nosleep, 2 s)
+            row[f"deviation_{key}"], row[f"cv_{key}"], row[f"meter_behind_{key}"] = dev, data.cv(values) if m else None, \
+                coarse(g)
             for v, dy in zip(dev, lay.runs(len(dev))):
                 figures.point(a, v, yi + lay.lane(lane) + dy, color, marker, alpha=0.85)
-            cvs.append(f"{row[f'cv_{key}']:.0f}")
-            row["dagger"] = row.get("dagger", False) or by_cpu
-            dagger = dagger or by_cpu
+            cvs.append(f"{row[f'cv_{key}']:.0f}" if m else "\u2013")
         a.text(1.01, yi, " / ".join(cvs) + "%",
                transform=a.get_yaxis_transform(), va="center", fontsize=figures.FONT_PT, color=MUTED)
         out.append(row)
