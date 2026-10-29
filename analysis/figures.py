@@ -26,7 +26,7 @@ import busy_wait_http  # noqa: E402
 import data  # noqa: E402
 import stats  # noqa: E402
 
-PANEL_GAP = 0.16                                 # between two panels side by side: their end ticks stay apart
+PANEL_GAP = 0.24                                 # between two panels side by side: their end ticks stay apart
 WIDTH_IN = {"one": 3.29, "two": 6.83}            # MIPRO (A4, 0.72 in margins, 0.25 in gap): column and text width
 FONT_PT = 8                                      # every text in every figure, as the paper's captions (no shrinking:
 PAD_IN = 0.02                                    # the saved image is exactly WIDTH_IN wide, see save())
@@ -45,8 +45,8 @@ KIND = {"pure": "pure", "index": "index", "cowboy": "Cowboy", "yaws": "Yaws", "p
         "bandit": "Bandit", "netty": "Netty"}
 ORDER = ["pure", "index", "cowboy", "yaws", "phoenix", "bandit", "mist", "netty"]
 WS_TESTS = (("stream 8 KB", "(a) 8 KB: server waits"), ("stream 1024 KB", "(b) 1 MB: server busy"))
-WS_PANELS = (("(a) Server, 8 KB", "(b) Platform, 8 KB"),       # the message size in the titles: one column
-             ("(c) Server, 1 MB", "(d) Platform, 1 MB"))       # has no room for more at 8 pt
+WS_PANELS = (("8 KB messages", "(a) Server, attributed", "(b) Platform, measured"),   # the same panel titles as
+             ("1 MB messages", "(c) Server, attributed", "(d) Platform, measured"))   # the other figures; the size beside
 
 
 COMPRESSED = "+compressed"      # a server's runs from before the client stopped offering compression (mist)
@@ -400,7 +400,7 @@ def fig3(r, deploy, width, path, dpi):
     names = servers(r)
     lay = Rows(len(names), 2)
     fig, a = plt.subplots(figsize=(WIDTH_IN[width], lay.height))
-    out = spread_rows(a, lambda s, bw: r[(s, deploy, bw)]["server_j"], names, lay, SPREAD_HEADER + "on / off; Java")
+    out = spread_rows(a, lambda s, bw: r[(s, deploy, bw)]["server_j"], names, lay, SPREAD_HEADER + "BEAM on / off; Java")
     a.set_xlabel("Server energy of each run, from its median (%)")
     on_off_legend(fig, "BEAM", [java_dot()])
     save(fig, path, dpi)
@@ -431,8 +431,7 @@ def fig4(r, deploy, width, path, dpi):
         if "-java-" not in s:
             ratio_label(a, row["server_j_on"], y[s], f"{row['server_j_on'] / row['server_j_off']:.1f}×")
         out.append(row)
-    a.set_xlim(0, max(row["server_j_on"] for row in out if "server_j_on" in row) * 1.3)   # room for the ratios
-    a.set_xlabel("Energy (J)")                      # the panel title says whose
+    log_axis(a, "Energy (J, log scale)")            # every server panel on a log scale: equal ratios look equal
     a.set_title("(a) Server, attributed", loc="left")
     from_zero(b)
     b.set_xlabel("Energy (J)")
@@ -463,7 +462,7 @@ def ws_runs(folders, column="Container Energy (J)"):
 def log_axis(ax, label_text):
     ax.set_xscale("log")                      # equal steps = equal ratios, so 2x looks the same everywhere
     lo, hi = ax.get_xlim()
-    ax.set_xlim(lo, hi * 4)                   # room for the ratio label of the right-most pair
+    ax.set_xlim(lo, hi * 3)                   # room for the ratio label of the right-most pair
     ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(subs=(1, 3), numticks=12))
     ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
@@ -503,12 +502,15 @@ def fig5(r, m, deploy, width, path, dpi):
             pair(b, p_off, p_on, y[s], lay)
         out.append(row)
     axes[0][0].set_ylim(-0.6, len(names) - 0.4)        # room for a pair moved apart in the top row
-    for (a, b), titles in zip(axes, WS_PANELS):
+    for (a, b), (size, *titles) in zip(axes, WS_PANELS):
         log_axis(a, "Energy (J, log scale)")
         from_zero(b)
         b.set_xlabel("Energy (J)")
         for ax, title in zip((a, b), titles):
             ax.set_title(title, loc="left")
+        # the size in the server names' column, on the line of the panel titles (clear of the legend above)
+        a.annotate(size, xy=(0.0, 1.0), xycoords=("figure fraction", "axes fraction"), xytext=(2, 6),
+                   textcoords="offset points", fontweight="bold", va="baseline")
     on_off_legend(fig, "BEAM", [java_dot()])
     save(fig, path, dpi)
     return out
@@ -523,7 +525,7 @@ def fig6(r, deploy, width, path, dpi):
                              gridspec_kw={"hspace": 0.45})
     out = {}
     for ax, (test, title) in zip(axes, WS_TESTS):
-        out[test] = spread_rows(ax, lambda s, bw: r[(s, deploy, bw, test)], names, lay, SPREAD_HEADER + "on / off; Java")
+        out[test] = spread_rows(ax, lambda s, bw: r[(s, deploy, bw, test)], names, lay, SPREAD_HEADER + "BEAM on / off; Java")
         ax.set_title(title, loc="left")
         ax.set_xlabel("Server energy of each run, from its median (%)")
     on_off_legend(fig, "BEAM", [java_dot()])

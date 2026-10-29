@@ -175,12 +175,12 @@ def spread(r, which, deploy, width, path, dpi):
             for v, dy in zip(dev, lay.runs(len(dev))):
                 figures.point(a, v, yi + lay.lane(lane) + dy, color, marker, alpha=0.85)
             cvs.append(f"{row[f'cv_{key}']:.0f}" if m else "\u2013")
-        a.text(1.01, yi, " / ".join(cvs) + "%",
+        a.text(1.01, yi, " / ".join(cvs[:2]) + "; " + "; ".join(cvs[2:]) + "%",   # as the header: on / off; Java; C
                transform=a.get_yaxis_transform(), va="center", fontsize=figures.FONT_PT, color=MUTED)
         out.append(row)
     for yi in y[:-1]:
         a.axhline(yi - 0.5, color=GRID, lw=0.6, zorder=0)
-    a.text(1.01, len(tests) - 0.45, figures.SPREAD_HEADER + "on / off / Java / C", transform=a.get_yaxis_transform(),
+    a.text(1.01, len(tests) - 0.45, figures.SPREAD_HEADER + "Erlang on / off; Java; C", transform=a.get_yaxis_transform(),
            fontsize=figures.FONT_PT, color=MUTED, va="bottom")
     a.axvline(0, color=MUTED, lw=0.6)
     lo, hi = a.get_xlim()
