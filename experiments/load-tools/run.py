@@ -302,6 +302,7 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw):
     counter.join()
     proc.returncode = os.waitstatus_to_exitcode(status)
     if meter:
+        time.sleep(1.0)        # two more Scaphandre readings, so that its samples cover the run up to its end
         meter.stop()
     err.close()
     if out is not subprocess.DEVNULL:
