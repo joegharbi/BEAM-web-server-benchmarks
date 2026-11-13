@@ -7,6 +7,7 @@ OHA=1.16.0      # https://github.com/hatoo/oha (no checksum file, hash checked b
 K6=2.4.0       # https://github.com/grafana/k6
 VEGETA=12.13.0  # https://github.com/tsenart/vegeta
 WRK2=44a94c17d8e6a0bac8559b53da76848e430cb7a7  # https://github.com/giltene/wrk2 (no releases, last commit)
+LUAJIT=63c8f1a9b479ba5518cf6a170ff7729178bc3cfd  # https://github.com/LuaJIT/LuaJIT branch v2.1 (rolling, no releases), for wrk2
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BIN="$HERE/bin"
@@ -30,6 +31,12 @@ tar xzf "vegeta_${VEGETA}_linux_amd64.tar.gz" vegeta
 
 git clone -q https://github.com/giltene/wrk2.git
 git -C wrk2 checkout -q "$WRK2"
+# wrk2's bundled LuaJIT 2.0 builds but panics on start on current Linux ("unprotected error in call to Lua API").
+# Use the current LuaJIT 2.1 instead; it only renamed one type that wrk2 uses (luaL_reg -> luaL_Reg).
+rm -rf wrk2/deps/luajit
+git clone -q -b v2.1 https://github.com/LuaJIT/LuaJIT.git wrk2/deps/luajit
+git -C wrk2/deps/luajit checkout -q "$LUAJIT"
+sed -i 's/\bluaL_reg\b/luaL_Reg/g' wrk2/src/script.c
 make -C wrk2 -j4 > wrk2-build.log 2>&1
 
 install -m 755 oha "$BIN/oha"
