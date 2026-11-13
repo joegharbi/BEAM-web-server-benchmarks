@@ -12,8 +12,8 @@ once, in a shuffled order, against GET / of the server in Docker. Per run it rec
   - energy from Scaphandre over the tool's run: the tool's (by its process ID), the server's (its container) and
     the whole laptop's. Scaphandre's raw log lists every process on the laptop, so it is deleted once the numbers
     are taken (--keep-raw keeps it, locally only).
-A tool leaves the ramp (for this server and repeat) once it reaches less than 95 % of the target or more than 1 % of
-its requests fail; the ramp ends when no tool is left. The Python client (the framework's own) has no rate setting:
+A tool leaves the ramp (for this server and repeat) once it reaches less than 95 % of the target, more than 1 % of
+its requests fail, or its per-second rate swings more than 5 % (CV); the ramp ends when no tool is left. The Python client (the framework's own) has no rate setting:
 it runs once per server and repeat and sends --python-requests requests as fast as it can.
 
     ./srv/bin/python3 experiments/load-tools/run.py --short       (asks for sudo once; 2 rates, 10 s, 1 repeat)
@@ -54,6 +54,8 @@ URL = f"http://localhost:{PORT}/"
 CONTAINER = "lt-server"
 MIN_RATE_SHARE = 0.95      # below this share of the target, the tool leaves the ramp
 MAX_FAILED_SHARE = 0.01    # above this share of failed requests, too
+MAX_RATE_CV_PCT = 5.0      # and when the per-second rate swings more than this (an overloaded tool can still hold
+                           # the average: vegeta at 40k/s on Java, ±19 % per second and 2 s median latency)
 
 
 def say(text):
@@ -350,7 +352,8 @@ def held(row):
     if row["exit"] != 0 or not row.get("ok"):
         return False
     total = row["ok"] + row["failed"]
-    return row["rate"] >= MIN_RATE_SHARE * row["target_rate"] and row["failed"] <= MAX_FAILED_SHARE * total
+    steady = row.get("rate_cv_pct") is None or row["rate_cv_pct"] <= MAX_RATE_CV_PCT
+    return row["rate"] >= MIN_RATE_SHARE * row["target_rate"] and row["failed"] <= MAX_FAILED_SHARE * total and steady
 
 
 def show(n, row):
