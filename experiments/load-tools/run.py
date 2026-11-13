@@ -57,6 +57,11 @@ URL = f"http://localhost:{PORT}/"
 CONTAINER = "lt-server"
 MIN_RATE_SHARE = 0.95      # below this share of the target, the tool leaves the ramp
 MAX_FAILED_SHARE = 0.01    # above this share of failed requests, too
+# CPU split on this laptop (i7-10610U: 4 cores, 2 hardware threads each; core n = CPUs n and n+4), so that the tool
+# and the server never share a core: core 0 for the system (Linux, Docker, Scaphandre, this script), core 1 for the
+# load tool, cores 2 and 3 for the server. Each is a run.py option; "none" switches it off.
+CPUS = {"system": "0,4", "tool": "1,5", "server": "2,3,6,7"}
+TOOL_CPUS = None           # set in main(): the CPUs the tool may use (None = all)
 MAX_RATE_CV_PCT = 5.0      # and when the per-second rate swings more than this (an overloaded tool can still hold
                            # the average: vegeta at 40k/s on Java, ±19 % per second and 2 s median latency)
 
@@ -69,7 +74,7 @@ def say(text):
 
 def wrk2_cmd(rate, seconds, conns, raw):
     # one thread per CPU the tool may use, as oha, k6 and vegeta do by default (they size themselves to the CPUs)
-    threads = min(len(os.sched_getaffinity(0)), conns)
+    threads = min(len(TOOL_CPUS or os.sched_getaffinity(0)), conns)
     return [os.path.join(BIN, "wrk2"), f"-t{threads}", f"-c{conns}", f"-d{seconds}s", f"-R{rate}", "--latency", URL], None, raw + ".txt"
 
 
@@ -143,7 +148,7 @@ def vegeta_parse(raw):
 
 
 def python_cmd(n_requests, seconds, conns, raw):
-    return [PY, os.path.join(HERE, "python_client.py"), URL, str(n_requests)], None, raw + ".json"
+    return [PY, os.path.join(HERE, "python_client.py"), URL, str(n_requests), str(conns)], None, raw + ".json"
 
 
 def python_parse(raw):
@@ -167,9 +172,10 @@ TOOLS = {"idle": (idle_cmd, None), "python": (python_cmd, python_parse), "wrk2":
 # ---- server ---------------------------------------------------------------------------------------------------------
 
 class Server:
-    def __init__(self, image):
+    def __init__(self, image, cpus=None):
         subprocess.run(["docker", "rm", "-f", CONTAINER], capture_output=True)
-        subprocess.run(["docker", "run", "-d", "--rm", "--ulimit", "nofile=100000:100000", "--name", CONTAINER,
+        pin = ["--cpuset-cpus", cpus] if cpus else []
+        subprocess.run(["docker", "run", "-d", "--rm", *pin, "--ulimit", "nofile=100000:100000", "--name", CONTAINER,
                         "-e", f"PORT={PORT}", "-p", f"{PORT}:{PORT}", image], check=True, capture_output=True)
         for _ in range(60):
             try:
@@ -308,7 +314,7 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw):
     counter.start()
     server0, t0, m0 = server.cpu_s(), time.time(), time.monotonic()
     proc = subprocess.Popen(cmd, env=env, stdin=subprocess.PIPE if tool == "vegeta" else subprocess.DEVNULL,
-                            stdout=out, stderr=err, text=True)
+                            stdout=out, stderr=err, text=True, preexec_fn=pin_tool)
     if tool == "vegeta":
         proc.stdin.write(f"GET {URL}\n")
         proc.stdin.close()
@@ -326,7 +332,7 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw):
     fixed_rate = tool not in ("python", "idle")
     row = {"tool": tool, "target_rate": target if fixed_rate else None, "target_seconds": seconds,
            "connections": conns if fixed_rate else None, "command": " ".join(cmd), "exit": proc.returncode,
-           "wall_s": round(wall, 3),
+           "tool_cpus": sorted(TOOL_CPUS) if TOOL_CPUS else "all", "wall_s": round(wall, 3),
            "start_epoch": t0, "end_epoch": t1, "tool_cpu_s": round(usage.ru_utime + usage.ru_stime, 3),
            "server_cpu_s": round(server1 - server0, 3)}
     if meter:
@@ -355,6 +361,16 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw):
     return row
 
 
+def pin_tool():
+    """In the tool's process before it starts: only the tool's CPUs (its threads and children inherit it)."""
+    if TOOL_CPUS:
+        os.sched_setaffinity(0, TOOL_CPUS)
+
+
+def cpu_set(text):
+    return None if text == "none" else {int(c) for c in text.split(",")}
+
+
 def warm_up(rate, seconds, conns, out):
     """Unmeasured load right after the server starts, so that no tool gets a cold server (Java's JIT compiler made
     the first run of a ramp cost the server about 5 times more CPU than the next ones)."""
@@ -362,7 +378,7 @@ def warm_up(rate, seconds, conns, out):
         return
     say(f"   warm-up: k6 at {rate}/s for {seconds} s (not measured)")
     cmd, env, _ = k6_cmd(rate, seconds, conns, os.path.join(out, ".warmup"))
-    subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=pin_tool)
     if os.path.exists(os.path.join(out, ".warmup.json")):
         os.remove(os.path.join(out, ".warmup.json"))
 
@@ -406,7 +422,13 @@ def main():
     ap.add_argument("--no-machine", action="store_true", help="no machine settings and no readiness gate (no sudo)")
     ap.add_argument("--no-energy", action="store_true", help="no Scaphandre (no sudo)")
     ap.add_argument("--keep-raw", action="store_true", help="keep Scaphandre's raw logs (they list every process)")
+    for side, cpus in CPUS.items():
+        ap.add_argument(f"--{side}-cpus", default=cpus, help=f"CPUs for the {side} (default {cpus}), or none")
     a = ap.parse_args()
+    global TOOL_CPUS
+    TOOL_CPUS = cpu_set(a.tool_cpus)
+    if cpu_set(a.system_cpus):           # this script, and so Scaphandre, the readiness gate and the byte counter
+        os.sched_setaffinity(0, cpu_set(a.system_cpus))
     cfg, _ = bench_config.load(os.path.join(HERE, "load-tools.config"))
     if a.short:
         a.rates, a.seconds, a.repeats, a.python_requests = [1000, 5000], 10, 1, 10000
@@ -464,7 +486,7 @@ def main():
         for rep in range(1, a.repeats + 1):                   # every repeat has all servers, in a new random order,
             for server_name in rng.sample(a.servers, len(a.servers)):   # so a slow drift of the laptop is not a server effect
                 say(f"{server_name} repeat {rep}: starting {SERVERS[server_name]}")
-                server = Server(SERVERS[server_name])
+                server = Server(SERVERS[server_name], None if a.server_cpus == "none" else a.server_cpus)
                 warm_up(a.rates[0], a.warmup_seconds, a.connections, out)
                 first = True
                 left = list(rate_tools)
