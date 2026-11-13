@@ -47,7 +47,8 @@ import scaphandre_energy  # noqa: E402
 
 PY = sys.executable
 BIN = os.path.join(HERE, "bin")
-SERVERS = {"erlang": "st-erlang-pure-29-1-1-nobw", "java": "st-java-netty-4-2-19"}
+SERVERS = {"erlang-nobw": "st-erlang-pure-29-1-1-nobw", "erlang-bw": "st-erlang-pure-29-1-1",
+           "java": "st-java-netty-4-2-19"}
 RATES = [1000, 2000, 5000, 10000, 20000, 40000, 80000]
 PORT = 8001
 URL = f"http://localhost:{PORT}/"
