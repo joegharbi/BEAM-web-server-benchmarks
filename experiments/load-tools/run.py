@@ -429,7 +429,7 @@ def main():
             if tool in a.tools or (tool == "k6" and "k6-paced" in a.tools):
                 v = subprocess.run(cmd, capture_output=True, text=True)
                 fh.write(f"{tool}: {(v.stdout or v.stderr).strip().splitlines()[0]}\n")
-        pins = re.findall(r"^(\w+)=(\S+)", open(os.path.join(HERE, "install.sh")).read(), re.M)
+        pins = re.findall(r"^(OHA|K6|VEGETA|WRK2|LUAJIT)=(\S+)", open(os.path.join(HERE, "install.sh")).read(), re.M)
         fh.write("install.sh pins: " + ", ".join(f"{k}={v}" for k, v in pins) + "\n")
     say(f"at most {most} runs (fewer once tools leave the ramp), {a.seconds} s each -> {os.path.relpath(out, ROOT)}")
 
