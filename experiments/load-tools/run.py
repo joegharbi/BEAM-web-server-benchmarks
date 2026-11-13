@@ -12,6 +12,8 @@ once, in a shuffled order, against GET / of the server in Docker. Per run it rec
   - energy from Scaphandre over the tool's run: the tool's (by its process ID), the server's (its container) and
     the whole laptop's. Scaphandre's raw log lists every process on the laptop, so it is deleted once the numbers
     are taken (--keep-raw keeps it, locally only).
+Every repeat runs all servers in a new random order. Once per server and repeat, among the first rate's runs, an
+"idle" run measures the server and the laptop with no load for the same length, and the Python client runs.
 A tool leaves the ramp (for this server and repeat) once it reaches less than 95 % of the target, more than 1 % of
 its requests fail, or its per-second rate swings more than 5 % (CV); the ramp ends when no tool is left. The Python client (the framework's own) has no rate setting:
 it runs once per server and repeat and sends --python-requests requests as fast as it can.
@@ -66,7 +68,9 @@ def say(text):
 # ---- tools: command for (rate, seconds, connections, raw file prefix) and a parser of what they wrote --------------
 
 def wrk2_cmd(rate, seconds, conns, raw):
-    return [os.path.join(BIN, "wrk2"), "-t2", f"-c{conns}", f"-d{seconds}s", f"-R{rate}", "--latency", URL], None, raw + ".txt"
+    # one thread per CPU the tool may use, as oha, k6 and vegeta do by default (they size themselves to the CPUs)
+    threads = min(len(os.sched_getaffinity(0)), conns)
+    return [os.path.join(BIN, "wrk2"), f"-t{threads}", f"-c{conns}", f"-d{seconds}s", f"-R{rate}", "--latency", URL], None, raw + ".txt"
 
 
 def _ms(value, unit):
@@ -147,7 +151,16 @@ def python_parse(raw):
     return {k: d[k] for k in ("ok", "failed", "seconds", "p50_ms", "p99_ms")}
 
 
-TOOLS = {"python": (python_cmd, python_parse), "wrk2": (wrk2_cmd, wrk2_parse), "oha": (oha_cmd, oha_parse),
+def idle_cmd(_, seconds, conns, raw):
+    return ["sleep", str(seconds)], None, None
+
+
+VERSIONS = {"wrk2": [os.path.join(BIN, "wrk2"), "-v"], "oha": [os.path.join(BIN, "oha"), "--version"],
+            "k6": [os.path.join(BIN, "k6"), "version"], "vegeta": [os.path.join(BIN, "vegeta"), "-version"],
+            "python": [PY, "-c", "import sys, requests; print('Python', sys.version.split()[0], 'requests', requests.__version__)"]}
+
+# "idle": the server running and no tool for the run's length, to know what the laptop and the server use at rest
+TOOLS = {"idle": (idle_cmd, None), "python": (python_cmd, python_parse), "wrk2": (wrk2_cmd, wrk2_parse), "oha": (oha_cmd, oha_parse),
          "k6": (k6_cmd, k6_parse), "k6-paced": (k6_paced_cmd, k6_parse), "vegeta": (vegeta_cmd, vegeta_parse)}
 
 
@@ -310,8 +323,10 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw):
     err.close()
     if out is not subprocess.DEVNULL:
         out.close()
-    row = {"tool": tool, "target_rate": target if tool != "python" else None, "target_seconds": seconds,
-           "connections": conns if tool != "python" else None, "exit": proc.returncode, "wall_s": round(wall, 3),
+    fixed_rate = tool not in ("python", "idle")
+    row = {"tool": tool, "target_rate": target if fixed_rate else None, "target_seconds": seconds,
+           "connections": conns if fixed_rate else None, "command": " ".join(cmd), "exit": proc.returncode,
+           "wall_s": round(wall, 3),
            "start_epoch": t0, "end_epoch": t1, "tool_cpu_s": round(usage.ru_utime + usage.ru_stime, 3),
            "server_cpu_s": round(server1 - server0, 3)}
     if meter:
@@ -321,9 +336,12 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw):
     if proc.returncode != 0:
         row["error"] = open(raw + ".err").read().strip()[-500:]
         return row
+    if parse is None:                                  # idle: no requests
+        os.remove(raw + ".err")
+        return row
     row.update(parse(raw))
     row["rate"] = row["ok"] / row["seconds"] if row["seconds"] else 0.0
-    if tool != "python":
+    if fixed_rate:
         row["rate_vs_target_pct"] = 100.0 * (row["rate"] - target) / target
     per_s, cv = steadiness(counter.samples, row["ok"], t0, t1)
     with open(raw + ".persecond.json", "w") as fh:
@@ -359,9 +377,13 @@ def held(row):
 
 def show(n, row):
     head = f"{n} {row['server']} #{row['repeat']} {row['tool']:8} " + \
-           (f"{row['target_rate']:>6}/s" if row["target_rate"] else "own pace")
+           (f"{row['target_rate']:>6}/s" if row["target_rate"] else "own pace" if row["tool"] == "python" else "")
     if row["exit"] != 0:
         return say(f"{head}: FAILED (exit {row['exit']}) {row.get('error', '')}")
+    if row["tool"] == "idle":
+        en = (f", energy server {row['server_energy_j']:.1f} J laptop {row['host_energy_j']:.0f} J "
+              f"({row['host_power_w']:.1f} W)") if "server_energy_j" in row else ""
+        return say(f"{head}: no load, CPU server {row['server_cpu_s']:.2f} s{en}")
     vs = f" ({row['rate_vs_target_pct']:+.1f} %)" if "rate_vs_target_pct" in row else ""
     cv = f", steady ±{row['rate_cv_pct']:.1f} %" if row.get("rate_cv_pct") is not None else ""
     en = (f", energy tool {row['tool_energy_j']:.1f} J server {row['server_energy_j']:.1f} J "
@@ -399,8 +421,16 @@ def main():
         fh.write("load tools experiment (experiments/load-tools/README.md), not a campaign\n"
                  f"{json.dumps(vars(a))}\nshuffle seed {seed}\n")
     rng = random.Random(seed)
-    rate_tools = [t for t in a.tools if t != "python"]
-    most = len(a.servers) * a.repeats * (len(a.rates) * len(rate_tools) + ("python" in a.tools))
+    once = [t for t in ("idle", "python") if t in a.tools]       # run once per server and repeat, not per rate
+    rate_tools = [t for t in a.tools if t not in once]
+    most = len(a.servers) * a.repeats * (len(a.rates) * len(rate_tools) + len(once))
+    with open(os.path.join(out, "tools.txt"), "w") as fh:          # exact versions; each run's command is in runs.jsonl
+        for tool, cmd in VERSIONS.items():
+            if tool in a.tools or (tool == "k6" and "k6-paced" in a.tools):
+                v = subprocess.run(cmd, capture_output=True, text=True)
+                fh.write(f"{tool}: {(v.stdout or v.stderr).strip().splitlines()[0]}\n")
+        pins = re.findall(r"^(\w+)=(\S+)", open(os.path.join(HERE, "install.sh")).read(), re.M)
+        fh.write("install.sh pins: " + ", ".join(f"{k}={v}" for k, v in pins) + "\n")
     say(f"at most {most} runs (fewer once tools leave the ramp), {a.seconds} s each -> {os.path.relpath(out, ROOT)}")
 
     machine = not a.no_machine
@@ -431,18 +461,19 @@ def main():
                                                 cfg["RESTING_MEASURE_SECONDS"]], cwd=ROOT, capture_output=True,
                                                text=True, check=True).stdout.split()[:2]
             say(f"resting state: {temp_ref} C, CPU {cpu_ref}%")
-        for server_name in rng.sample(a.servers, len(a.servers)):
-            for rep in range(1, a.repeats + 1):
+        for rep in range(1, a.repeats + 1):                   # every repeat has all servers, in a new random order,
+            for server_name in rng.sample(a.servers, len(a.servers)):   # so a slow drift of the laptop is not a server effect
                 say(f"{server_name} repeat {rep}: starting {SERVERS[server_name]}")
                 server = Server(SERVERS[server_name])
                 warm_up(a.rates[0], a.warmup_seconds, a.connections, out)
-                python_left = "python" in a.tools
+                first = True
                 left = list(rate_tools)
                 for rate in a.rates:
                     plan = [(t, rate) for t in rng.sample(left, len(left))]
-                    if python_left:                         # the Python client runs once, among the first rate's tools
-                        plan.insert(rng.randrange(len(plan) + 1), ("python", None))
-                        python_left = False
+                    if first:                               # idle and Python run once, among the first rate's tools
+                        for t in once:
+                            plan.insert(rng.randrange(len(plan) + 1), (t, None))
+                        first = False
                     if not plan:
                         break
                     for tool, target in plan:
@@ -455,7 +486,7 @@ def main():
                         with open(os.path.join(out, "runs.jsonl"), "a") as fh:
                             fh.write(json.dumps(row) + "\n")
                         show(n, row)
-                        if tool != "python" and not held(row):
+                        if tool not in once and not held(row):
                             left.remove(tool)
                             say(f"   {tool} leaves the ramp at {rate}/s")
                 Server.stop()
