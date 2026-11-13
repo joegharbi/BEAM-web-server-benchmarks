@@ -408,6 +408,12 @@ def main():
         subprocess.run(["sudo", "-v"], check=True)
         threading.Thread(target=keep_sudo, args=(stop_sudo,), daemon=True).start()
     n = 0
+    # Block sleep and lid-close suspend until the end, as run_benchmarks.sh (this laptop suspends after 2 h idle)
+    inhibit = subprocess.Popen(["systemd-inhibit", "--what=sleep:handle-lid-switch", "--mode=block",
+                                "--who=load tools experiment", "--why=measuring", "sleep", "infinity"],
+                               start_new_session=True) if shutil.which("systemd-inhibit") else None
+    if inhibit is None:
+        say("WARNING: systemd-inhibit not found; make sure the machine does not go to sleep")
     try:
         subprocess.run([PY, "tools/run_metadata.py", "start", out, "--set", "experiment=load tools",
                         "--set", f"shuffle_seed={seed}", "--set", f"machine={'minimal' if machine else 'untouched'}"],
@@ -460,6 +466,8 @@ def main():
             subprocess.run(["sudo", PY, "tools/prepare_environment.py", "restore", "--state", state], cwd=ROOT)
         subprocess.run([PY, "tools/run_metadata.py", "end", out], cwd=ROOT, check=False, capture_output=True)
         stop_sudo.set()
+        if inhibit is not None:
+            os.killpg(inhibit.pid, 15)
     say(f"results: {os.path.relpath(out, ROOT)}/runs.jsonl")
 
 
