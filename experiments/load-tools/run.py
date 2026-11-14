@@ -3,29 +3,36 @@
 where does each tool and each server break?
 
 For every server and repeat the rates rise step by step (a ramp); at each rate every tool still in the ramp runs
-once, in a shuffled order, against GET / of the server in Docker. Per run it records:
+once, in a shuffled order, against GET / of the server (in Docker, or natively without Docker: DEPLOY). Per run
+it records:
   - the rate reached (successful responses per second) against the target, and how steady it was second by second
-    (bytes arriving at the server container, counted every second: the same for every tool, no load on the tool)
+    (bytes arriving at the server, counted every second: the same for every tool, no load on the tool; in Docker
+    the container's network, natively the loopback interface)
   - failures, latency p50/p99 as the tool reports it
   - the tool's CPU time (kernel counters of the tool process and all its threads, read when it exits) and the
-    server's CPU time (its container cgroup)
+    server's CPU time (its container cgroup, or natively its systemd scope)
   - energy from Scaphandre over the tool's run: the tool's (by its process ID), the server's (its container) and
-    the whole laptop's. Scaphandre's raw log lists every process on the laptop, so it is deleted once the numbers
+    the whole laptop's; in Docker also docker-proxy's CPU time and energy (Docker's relay between localhost and the
+    container, which copies every request and answer; kept on the system CPUs). Scaphandre's raw log lists every process on the laptop, so it is deleted once the numbers
     are taken (--keep-raw keeps it, locally only).
 Every repeat runs all servers in a new random order. Once per server and repeat, among the first rate's runs, an
 "idle" run measures the server and the laptop with no load for the same length, and the Python client runs.
 A tool leaves the ramp (for this server and repeat) once it reaches less than 95 % of the target, more than 1 % of
-its requests fail, or its per-second rate swings more than 5 % (CV); the ramp ends when no tool is left. The Python client (the framework's own) has no rate setting:
-it runs once per server and repeat and sends --python-requests requests as fast as it can.
+its requests fail, or its per-second rate swings more than 5 % (CV); the ramp ends when no tool is left. The Python
+client (the framework's own) has no rate setting: it runs once per server and repeat and sends PYTHON_REQUESTS
+requests as fast as it can.
+
+All settings are in load-tools.config (servers, tools, rates, run length, connections, deploy, the CPU split, the
+machine); a command-line option overrides the file for one run. Everything printed is also saved to console.log.
 
     ./srv/bin/python3 experiments/load-tools/run.py --short       (asks for sudo once; 2 rates, 10 s, 1 repeat)
-    ./srv/bin/python3 experiments/load-tools/run.py               (full: 60 s per run, REPEATS of load-tools.config)
+    ./srv/bin/python3 experiments/load-tools/run.py               (as load-tools.config says)
     ./srv/bin/python3 experiments/load-tools/run.py --no-machine --no-energy --short   (no sudo: a code check only)
 
 Machine settings as the paper's HTTP campaigns (load-tools.config: minimal profile, CPU at 1800 MHz), applied and
 restored with tools/prepare_environment.py; the readiness gate (tools/readiness.py) before every run.
 Results: results/<time>_load-tools/ with runs.jsonl (one line per run), raw/ (the tools' own outputs and the
-per-second rates), metadata.json, EXPERIMENT.txt.
+per-second rates), console.log, tools.txt, bench.config, metadata.json, EXPERIMENT.txt.
 """
 import argparse
 import datetime
@@ -45,6 +52,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import bench_config  # noqa: E402
+import native_server  # noqa: E402
 import scaphandre_energy  # noqa: E402
 
 PY = sys.executable
@@ -57,11 +65,15 @@ URL = f"http://localhost:{PORT}/"
 CONTAINER = "lt-server"
 MIN_RATE_SHARE = 0.95      # below this share of the target, the tool leaves the ramp
 MAX_FAILED_SHARE = 0.01    # above this share of failed requests, too
-# CPU split on this laptop (i7-10610U: 4 cores, 2 hardware threads each; core n = CPUs n and n+4), so that the tool
-# and the server never share a core: core 0 for the system (Linux, Docker, Scaphandre, this script), core 1 for the
-# load tool, cores 2 and 3 for the server. Each is a run.py option; "none" switches it off.
-CPUS = {"system": "0,4", "tool": "1,5", "server": "2,3,6,7"}
 TOOL_CPUS = None           # set in main(): the CPUs the tool may use (None = all)
+SYSTEM_CPUS = None         # set in main(): the CPUs of this script, Scaphandre and docker-proxy (None = all)
+# The experiment's own settings in load-tools.config, with their defaults (the other keys there are the framework's
+# machine settings, read by tools/bench_config.py). The CPU split fits this laptop (i7-10610U: 4 cores, 2 hardware
+# threads each; core n = CPUs n and n+4): core 0 for the system, core 1 for the tool, cores 2 and 3 for the server.
+SETTINGS = {"SERVERS": "erlang-nobw erlang-bw java", "TOOLS": "idle python wrk2 oha k6 k6-paced vegeta",
+            "RATES": "1000 2000 5000 10000 20000 40000 80000", "SECONDS": "60", "CONNECTIONS": "100",
+            "WARMUP_SECONDS": "20", "PYTHON_REQUESTS": "60000", "DEPLOY": "docker",
+            "SYSTEM_CPUS": "0,4", "TOOL_CPUS": "1,5", "SERVER_CPUS": "2,3,6,7"}
 MAX_RATE_CV_PCT = 5.0      # and when the per-second rate swings more than this (an overloaded tool can still hold
                            # the average: vegeta at 40k/s on Java, ±19 % per second and 2 s median latency)
 
@@ -172,11 +184,25 @@ TOOLS = {"idle": (idle_cmd, None), "python": (python_cmd, python_parse), "wrk2":
 # ---- server ---------------------------------------------------------------------------------------------------------
 
 class Server:
-    def __init__(self, image, cpus=None):
-        subprocess.run(["docker", "rm", "-f", CONTAINER], capture_output=True)
-        pin = ["--cpuset-cpus", cpus] if cpus else []
-        subprocess.run(["docker", "run", "-d", "--rm", *pin, "--ulimit", "nofile=100000:100000", "--name", CONTAINER,
-                        "-e", f"PORT={PORT}", "-p", f"{PORT}:{PORT}", image], check=True, capture_output=True)
+    """The server, in Docker or natively (the image's own program in a systemd user scope, tools/native_server.py),
+    on its CPUs; it answers on localhost:PORT either way."""
+
+    def __init__(self, image, deploy, cpus=None):
+        self.image, self.deploy, self.cpus = image, deploy, cpus
+        if deploy == "docker":
+            subprocess.run(["docker", "rm", "-f", CONTAINER], capture_output=True)
+            pin = ["--cpuset-cpus", ",".join(map(str, sorted(cpus)))] if cpus else []
+            subprocess.run(["docker", "run", "-d", "--rm", *pin, "--ulimit", "nofile=100000:100000", "--name",
+                            CONTAINER, "-e", f"PORT={PORT}", "-p", f"{PORT}:{PORT}", image], check=True,
+                           capture_output=True)
+        else:
+            mine = os.sched_getaffinity(0)
+            if cpus:                       # the server's processes inherit this from the start command
+                os.sched_setaffinity(0, cpus)
+            try:
+                self.unit = native_server.start(image, CONTAINER, str(PORT))
+            finally:
+                os.sched_setaffinity(0, mine)
         for _ in range(60):
             try:
                 if urllib.request.urlopen(URL, timeout=2).status == 200:
@@ -185,12 +211,25 @@ class Server:
                 pass
             time.sleep(0.5)
         else:
-            raise SystemExit(f"{image}: no HTTP 200 within 30 s")
-        info = json.loads(subprocess.run(["docker", "inspect", CONTAINER], capture_output=True, text=True,
-                                         check=True).stdout)[0]
-        self.id = info["Id"]
-        self.cpu_stat = f"/sys/fs/cgroup/system.slice/docker-{self.id}.scope/cpu.stat"
-        self.net_dev = f"/proc/{info['State']['Pid']}/net/dev"
+            self.stop()
+            raise SystemExit(f"{image} ({deploy}): no HTTP 200 within 30 s")
+        if deploy == "docker":
+            info = json.loads(subprocess.run(["docker", "inspect", CONTAINER], capture_output=True, text=True,
+                                             check=True).stdout)[0]
+            self.id = info["Id"]
+            self.cpu_stat = f"/sys/fs/cgroup/system.slice/docker-{self.id}.scope/cpu.stat"
+            self.net_dev, self.iface = f"/proc/{info['State']['Pid']}/net/dev", "eth0"
+            self.proxies = [int(p) for p in subprocess.run(["pgrep", "-f", f"docker-proxy .*-host-port {PORT} "],
+                                                           capture_output=True, text=True).stdout.split()]
+            if SYSTEM_CPUS:                # docker-proxy runs as root: moving it needs sudo
+                cpus_txt = ",".join(map(str, sorted(SYSTEM_CPUS)))
+                for pid in self.proxies:
+                    subprocess.run(["sudo", "-n", "taskset", "-apc", cpus_txt, str(pid)], capture_output=True)
+        else:
+            self.id = self.unit            # Scaphandre's processes are matched by this name in their cgroup
+            self.cpu_stat = native_server.cgroup_dir(self.unit) + "/cpu.stat"
+            self.net_dev, self.iface = "/proc/net/dev", "lo"
+            self.proxies = []
 
     def cpu_s(self):
         for line in open(self.cpu_stat):
@@ -200,16 +239,28 @@ class Server:
     def rx_bytes(self):
         for line in open(self.net_dev):
             name, _, rest = line.partition(":")
-            if name.strip() == "eth0":
+            if name.strip() == self.iface:
                 return int(rest.split()[0])
 
-    @staticmethod
-    def stop():
-        subprocess.run(["docker", "stop", CONTAINER], capture_output=True)
+    def proxy_cpu_s(self):
+        total = 0.0
+        for pid in self.proxies:
+            try:
+                fields = open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()
+                total += (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+            except OSError:
+                pass
+        return total
+
+    def stop(self):
+        if self.deploy == "docker":
+            subprocess.run(["docker", "stop", CONTAINER], capture_output=True)
+        else:
+            native_server.stop(self.unit)
 
 
 class BytesPerSecond(threading.Thread):
-    """Bytes arriving at the server container, read every second while a tool runs."""
+    """Bytes arriving at the server, read every second while a tool runs."""
 
     def __init__(self, server):
         super().__init__(daemon=True)
@@ -298,8 +349,14 @@ def energies(log, server, tool_pid, t0, t1):
     s = scaphandre_energy.compute_window_energy(log, CONTAINER, t0, t1, container_id=server.id, zero_is_normal=True)
     t = scaphandre_energy.compute_window_energy(log, "load-tool", t0, t1, pids={tool_pid},
                                                 kinds={tool_pid: "process"}, zero_is_normal=True)
-    return {"server_energy_j": s["energy_j"], "tool_energy_j": t["energy_j"], "host_energy_j": s["host_energy_j"],
-            "host_power_w": s["host_avg_power_w"], "meter_samples": s["samples"], "meter_coverage": round(s["coverage"], 3)}
+    e = {"server_energy_j": s["energy_j"], "tool_energy_j": t["energy_j"], "host_energy_j": s["host_energy_j"],
+         "host_power_w": s["host_avg_power_w"], "meter_samples": s["samples"], "meter_coverage": round(s["coverage"], 3)}
+    if server.proxies:
+        p = scaphandre_energy.compute_window_energy(log, "docker-proxy", t0, t1, pids=set(server.proxies),
+                                                    kinds={pid: "process" for pid in server.proxies},
+                                                    zero_is_normal=True)
+        e["proxy_energy_j"] = p["energy_j"]
+    return e
 
 
 # ---- one run ----------------------------------------------------------------------------------------------------------
@@ -312,14 +369,14 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw):
     err = open(raw + ".err", "w")
     counter = BytesPerSecond(server)
     counter.start()
-    server0, t0, m0 = server.cpu_s(), time.time(), time.monotonic()
+    server0, proxy0, t0, m0 = server.cpu_s(), server.proxy_cpu_s(), time.time(), time.monotonic()
     proc = subprocess.Popen(cmd, env=env, stdin=subprocess.PIPE if tool == "vegeta" else subprocess.DEVNULL,
                             stdout=out, stderr=err, text=True, preexec_fn=pin_tool)
     if tool == "vegeta":
         proc.stdin.write(f"GET {URL}\n")
         proc.stdin.close()
     _, status, usage = os.wait4(proc.pid, 0)          # rusage of the tool process and all its threads
-    wall, t1, server1 = time.monotonic() - m0, time.time(), server.cpu_s()
+    wall, t1, server1, proxy1 = time.monotonic() - m0, time.time(), server.cpu_s(), server.proxy_cpu_s()
     counter.done.set()
     counter.join()
     proc.returncode = os.waitstatus_to_exitcode(status)
@@ -332,9 +389,12 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw):
     fixed_rate = tool not in ("python", "idle")
     row = {"tool": tool, "target_rate": target if fixed_rate else None, "target_seconds": seconds,
            "connections": conns if fixed_rate else None, "command": " ".join(cmd), "exit": proc.returncode,
-           "tool_cpus": sorted(TOOL_CPUS) if TOOL_CPUS else "all", "wall_s": round(wall, 3),
+           "deploy": server.deploy, "tool_cpus": sorted(TOOL_CPUS) if TOOL_CPUS else "all",
+           "server_cpus": sorted(server.cpus) if server.cpus else "all", "wall_s": round(wall, 3),
            "start_epoch": t0, "end_epoch": t1, "tool_cpu_s": round(usage.ru_utime + usage.ru_stime, 3),
            "server_cpu_s": round(server1 - server0, 3)}
+    if server.proxies:
+        row["proxy_cpu_s"] = round(proxy1 - proxy0, 3)
     if meter:
         row.update(energies(meter.log, server, proc.pid, t0, t1))
         if not keep_raw:
@@ -368,7 +428,36 @@ def pin_tool():
 
 
 def cpu_set(text):
-    return None if text == "none" else {int(c) for c in text.split(",")}
+    return None if text in ("none", "all", "") else {int(c) for c in text.split(",")}
+
+
+def load_config(path):
+    """load-tools.config: the experiment's own keys (SETTINGS) and the framework's machine settings (the rest)."""
+    exp, rest = dict(SETTINGS), []
+    for line in open(path, encoding="utf-8"):
+        key, sep, value = line.strip().partition("=")
+        if sep and key.strip() in SETTINGS:
+            exp[key.strip()] = value.split("#")[0].strip().strip('"')
+        else:
+            rest.append(line)
+    tmp = os.path.join(os.path.dirname(path), ".machine-settings.config")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.writelines(rest)
+    try:
+        cfg, _ = bench_config.load(tmp)
+    finally:
+        os.remove(tmp)
+    return exp, cfg
+
+
+def save_console(path):
+    """Everything this script and the programs it starts print also goes to `path` (as `tee`)."""
+    tee = subprocess.Popen(["tee", "-a", path], stdin=subprocess.PIPE)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.dup2(tee.stdin.fileno(), 1)
+    os.dup2(tee.stdin.fileno(), 2)
+    return tee
 
 
 def warm_up(rate, seconds, conns, out):
@@ -392,7 +481,8 @@ def held(row):
 
 
 def show(n, row):
-    head = f"{n} {row['server']} #{row['repeat']} {row['tool']:8} " + \
+    where = "" if row["deploy"] == "docker" else f" ({row['deploy']})"
+    head = f"{n} {row['server']}{where} #{row['repeat']} {row['tool']:8} " + \
            (f"{row['target_rate']:>6}/s" if row["target_rate"] else "own pace" if row["tool"] == "python" else "")
     if row["exit"] != 0:
         return say(f"{head}: FAILED (exit {row['exit']}) {row.get('error', '')}")
@@ -404,40 +494,59 @@ def show(n, row):
     cv = f", steady ±{row['rate_cv_pct']:.1f} %" if row.get("rate_cv_pct") is not None else ""
     en = (f", energy tool {row['tool_energy_j']:.1f} J server {row['server_energy_j']:.1f} J "
           f"laptop {row['host_energy_j']:.0f} J") if "tool_energy_j" in row else ""
+    if "proxy_cpu_s" in row:
+        en += f", docker-proxy CPU {row['proxy_cpu_s']:.2f} s" + \
+              (f" {row['proxy_energy_j']:.1f} J" if "proxy_energy_j" in row else "")
     say(f"{head}: {row['rate']:8.1f} req/s{vs}{cv}, {row['failed']} failed, p50 {row['p50_ms']:.2f} ms, "
         f"p99 {row['p99_ms']:.2f} ms, CPU tool {row['tool_cpu_s']:.2f} s server {row['server_cpu_s']:.2f} s{en}")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--servers", nargs="+", choices=list(SERVERS), default=list(SERVERS))
-    ap.add_argument("--tools", nargs="+", choices=list(TOOLS), default=list(TOOLS))
-    ap.add_argument("--rates", nargs="+", type=int, default=RATES, help="the ramp (sorted rising)")
-    ap.add_argument("--seconds", type=int, default=60)
-    ap.add_argument("--connections", type=int, default=100)
-    ap.add_argument("--repeats", type=int, default=None, help="default: REPEATS of load-tools.config")
-    ap.add_argument("--python-requests", type=int, default=60000)
-    ap.add_argument("--warmup-seconds", type=int, default=20, help="unmeasured k6 load after each server start")
+    ap.add_argument("--config", default=os.path.join(HERE, "load-tools.config"))
+    ap.add_argument("--servers", nargs="+", choices=list(SERVERS))
+    ap.add_argument("--tools", nargs="+", choices=list(TOOLS))
+    ap.add_argument("--rates", nargs="+", type=int, help="the ramp (sorted rising)")
+    ap.add_argument("--seconds", type=int)
+    ap.add_argument("--connections", type=int)
+    ap.add_argument("--repeats", type=int)
+    ap.add_argument("--python-requests", type=int)
+    ap.add_argument("--warmup-seconds", type=int, help="unmeasured k6 load after each server start")
+    ap.add_argument("--deploy", nargs="+", choices=["docker", "native"])
+    for side in ("system", "tool", "server"):
+        ap.add_argument(f"--{side}-cpus", help=f"CPUs for the {side}, e.g. 1,5, or all")
     ap.add_argument("--short", action="store_true", help="2 rates (1000 5000), 10 s, 1 repeat, 10000 Python requests")
     ap.add_argument("--no-machine", action="store_true", help="no machine settings and no readiness gate (no sudo)")
     ap.add_argument("--no-energy", action="store_true", help="no Scaphandre (no sudo)")
     ap.add_argument("--keep-raw", action="store_true", help="keep Scaphandre's raw logs (they list every process)")
-    for side, cpus in CPUS.items():
-        ap.add_argument(f"--{side}-cpus", default=cpus, help=f"CPUs for the {side} (default {cpus}), or none")
     a = ap.parse_args()
-    global TOOL_CPUS
-    TOOL_CPUS = cpu_set(a.tool_cpus)
-    if cpu_set(a.system_cpus):           # this script, and so Scaphandre, the readiness gate and the byte counter
-        os.sched_setaffinity(0, cpu_set(a.system_cpus))
-    cfg, _ = bench_config.load(os.path.join(HERE, "load-tools.config"))
+    os.chdir(ROOT)                       # native_server keeps its copies in .cache/native of the repository
+    exp, cfg = load_config(a.config)
+    pick = {"servers": exp["SERVERS"].split(), "tools": exp["TOOLS"].split(),
+            "rates": [int(x) for x in exp["RATES"].split()], "seconds": int(exp["SECONDS"]),
+            "connections": int(exp["CONNECTIONS"]), "repeats": int(cfg["REPEATS"]),
+            "python_requests": int(exp["PYTHON_REQUESTS"]), "warmup_seconds": int(exp["WARMUP_SECONDS"]),
+            "deploy": exp["DEPLOY"].split(), "system_cpus": exp["SYSTEM_CPUS"], "tool_cpus": exp["TOOL_CPUS"],
+            "server_cpus": exp["SERVER_CPUS"]}
+    for key, value in pick.items():      # the file's value unless the command line gives one
+        if getattr(a, key) is None:
+            setattr(a, key, value)
     if a.short:
         a.rates, a.seconds, a.repeats, a.python_requests = [1000, 5000], 10, 1, 10000
-    a.repeats = a.repeats or int(cfg["REPEATS"])
     a.rates = sorted(a.rates)
+    unknown = [x for x in a.servers if x not in SERVERS] + [x for x in a.tools if x not in TOOLS] + \
+              [x for x in a.deploy if x not in ("docker", "native")]
+    if unknown:
+        raise SystemExit(f"unknown in {a.config}: {', '.join(unknown)}")
+    global TOOL_CPUS, SYSTEM_CPUS
+    TOOL_CPUS, SYSTEM_CPUS, server_cpus = cpu_set(a.tool_cpus), cpu_set(a.system_cpus), cpu_set(a.server_cpus)
+    if SYSTEM_CPUS:                      # this script, and so Scaphandre, the readiness gate and the byte counter
+        os.sched_setaffinity(0, SYSTEM_CPUS)
 
     out = os.path.join(ROOT, "results", datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S") + "_load-tools")
     os.makedirs(os.path.join(out, "raw"))
-    shutil.copy(os.path.join(HERE, "load-tools.config"), os.path.join(out, "bench.config"))
+    tee = save_console(os.path.join(out, "console.log"))
+    shutil.copy(a.config, os.path.join(out, "bench.config"))
     seed = random.randrange(10 ** 9)
     with open(os.path.join(out, "EXPERIMENT.txt"), "w") as fh:
         fh.write("load tools experiment (experiments/load-tools/README.md), not a campaign\n"
@@ -445,7 +554,7 @@ def main():
     rng = random.Random(seed)
     once = [t for t in ("idle", "python") if t in a.tools]       # run once per server and repeat, not per rate
     rate_tools = [t for t in a.tools if t not in once]
-    most = len(a.servers) * a.repeats * (len(a.rates) * len(rate_tools) + len(once))
+    most = len(a.servers) * len(a.deploy) * a.repeats * (len(a.rates) * len(rate_tools) + len(once))
     with open(os.path.join(out, "tools.txt"), "w") as fh:          # exact versions; each run's command is in runs.jsonl
         for tool, cmd in VERSIONS.items():
             if tool in a.tools or (tool == "k6" and "k6-paced" in a.tools):
@@ -460,7 +569,7 @@ def main():
     if machine or not a.no_energy:
         subprocess.run(["sudo", "-v"], check=True)
         threading.Thread(target=keep_sudo, args=(stop_sudo,), daemon=True).start()
-    n = 0
+    n, server = 0, None
     # Block sleep and lid-close suspend until the end, as run_benchmarks.sh (this laptop suspends after 2 h idle)
     inhibit = subprocess.Popen(["systemd-inhibit", "--what=sleep:handle-lid-switch", "--mode=block",
                                 "--who=load tools experiment", "--why=measuring", "sleep", "infinity"],
@@ -483,10 +592,11 @@ def main():
                                                 cfg["RESTING_MEASURE_SECONDS"]], cwd=ROOT, capture_output=True,
                                                text=True, check=True).stdout.split()[:2]
             say(f"resting state: {temp_ref} C, CPU {cpu_ref}%")
+        boxes = [(name, deploy) for name in a.servers for deploy in a.deploy]
         for rep in range(1, a.repeats + 1):                   # every repeat has all servers, in a new random order,
-            for server_name in rng.sample(a.servers, len(a.servers)):   # so a slow drift of the laptop is not a server effect
-                say(f"{server_name} repeat {rep}: starting {SERVERS[server_name]}")
-                server = Server(SERVERS[server_name], None if a.server_cpus == "none" else a.server_cpus)
+            for server_name, deploy in rng.sample(boxes, len(boxes)):   # so a slow drift of the laptop is not a server effect
+                say(f"{server_name} ({deploy}) repeat {rep}: starting {SERVERS[server_name]}")
+                server = Server(SERVERS[server_name], deploy, server_cpus)
                 warm_up(a.rates[0], a.warmup_seconds, a.connections, out)
                 first = True
                 left = list(rate_tools)
@@ -501,7 +611,7 @@ def main():
                     for tool, target in plan:
                         n += 1
                         gate = ready(cfg, out, temp_ref, cpu_ref) if machine else {}
-                        raw = os.path.join(out, "raw", f"{server_name}_{rep}_{target or 'own'}_{tool}")
+                        raw = os.path.join(out, "raw", f"{server_name}_{deploy}_{rep}_{target or 'own'}_{tool}")
                         row = dict(server=server_name, image=SERVERS[server_name], repeat=rep, **gate,
                                    **one_run(tool, target or a.python_requests, a.seconds, a.connections, raw,
                                              server, not a.no_energy, a.keep_raw))
@@ -511,10 +621,12 @@ def main():
                         if tool not in once and not held(row):
                             left.remove(tool)
                             say(f"   {tool} leaves the ramp at {rate}/s")
-                Server.stop()
+                server.stop()
+                server = None
         say("all runs done")
     finally:
-        Server.stop()
+        if server is not None:
+            server.stop()
         if os.path.exists(state):
             say("restoring machine settings ...")
             subprocess.run(["sudo", PY, "tools/prepare_environment.py", "restore", "--state", state], cwd=ROOT)
@@ -522,7 +634,13 @@ def main():
         stop_sudo.set()
         if inhibit is not None:
             os.killpg(inhibit.pid, 15)
-    say(f"results: {os.path.relpath(out, ROOT)}/runs.jsonl")
+    say(f"results: {os.path.relpath(out, ROOT)}/runs.jsonl (terminal output: console.log)")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.close(1)                          # end of input for tee, so the log is complete before the prompt returns
+    os.close(2)
+    tee.stdin.close()
+    tee.wait()
 
 
 if __name__ == "__main__":

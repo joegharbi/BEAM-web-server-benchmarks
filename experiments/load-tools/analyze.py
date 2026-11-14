@@ -30,8 +30,9 @@ import stats  # noqa: E402
 from run import MAX_FAILED_SHARE, MAX_RATE_CV_PCT, MIN_RATE_SHARE  # noqa: E402
 
 TOOL_ORDER = ["wrk2", "oha", "vegeta", "k6", "k6-paced", "python"]
-SERVER_ORDER = ["erlang-nobw", "erlang-bw", "java"]
+SERVER_ORDER = ["erlang-nobw", "erlang-bw", "java", "erlang-nobw-native", "erlang-bw-native", "java-native"]
 LABEL = {"erlang-nobw": "Erlang, busy-waiting off", "erlang-bw": "Erlang, busy-waiting on", "java": "Java (Netty)"}
+LABEL.update({f"{k}-native": f"{v}, native" for k, v in list(LABEL.items())})
 
 
 def med(values):
@@ -49,7 +50,10 @@ FULL = 0.80    # CPUs at least this busy count as full (two hardware threads of 
 
 def busy(r, side):
     """Share of the CPUs a side may use that it kept busy over the run (from its CPU time and the CPU split)."""
-    cpus = {"server": 4, "tool": len(r["tool_cpus"]) if isinstance(r.get("tool_cpus"), list) else 8}[side]
+    def count(key, before):            # runs before the field existed had the server on 4 CPUs
+        value = r.get(key, before)
+        return len(value) if isinstance(value, list) else os.cpu_count()
+    cpus = count(f"{side}_cpus", [2, 3, 6, 7] if side == "server" else "all")
     return r[f"{side}_cpu_s"] / r["wall_s"] / cpus
 
 
@@ -68,7 +72,10 @@ def fmt(s, digits=1, scale=1.0):
 
 def main(folder):
     rows = [json.loads(line) for line in open(os.path.join(folder, "runs.jsonl"))]
-    idle_w = {(r["server"], r["repeat"]): r["host_power_w"] for r in rows if r["tool"] == "idle"}
+    for r in rows:                       # Docker and native are separate entries
+        if r.get("deploy", "docker") == "native":
+            r["server"] += "-native"
+    idle_w = {(r["server"], r["repeat"]): r["host_power_w"] for r in rows if r["tool"] == "idle" and "host_power_w" in r}
     for r in rows:
         if r["tool"] != "idle" and (r["server"], r["repeat"]) in idle_w:
             r["laptop_above_idle_j"] = r["host_energy_j"] - idle_w[(r["server"], r["repeat"])] * r["wall_s"]
@@ -83,8 +90,8 @@ def main(folder):
     print("== Idle (server running, no load)")
     for s in servers:
         idle = [r for r in rows if r["server"] == s and r["tool"] == "idle"]
-        result["idle"][s] = {"laptop_power_w": spread([r["host_power_w"] for r in idle]),
-                             "server_energy_j": spread([r["server_energy_j"] for r in idle]),
+        result["idle"][s] = {"laptop_power_w": spread([r.get("host_power_w") for r in idle]),
+                             "server_energy_j": spread([r.get("server_energy_j") for r in idle]),
                              "server_cpu_s": spread([r["server_cpu_s"] for r in idle])}
         print(f"  {LABEL[s]:26} laptop {fmt(result['idle'][s]['laptop_power_w'], 2)} W, "
               f"server {fmt(result['idle'][s]['server_energy_j'], 2)} J, CPU {fmt(result['idle'][s]['server_cpu_s'], 3)} s")
@@ -135,8 +142,12 @@ def main(folder):
                      "who": who, "server_limit": (f"about {reached:.0f} req/s" if who in ("the server", "both")
                                                   else f"not reached (above {last} req/s held)")}
             result["who_broke"][s][t] = entry
+            proxy = med([r.get("proxy_cpu_s") for r in rs])
+            if proxy is not None:
+                entry["proxy_cpu_s_per_s"] = proxy / med([r["wall_s"] for r in rs])
+            extra = f", docker-proxy {entry['proxy_cpu_s_per_s']:.2f} CPUs" if proxy is not None else ""
             print(f"    {t:9} asked {broke_at[0]:>6}, delivered {reached:7.0f}: server CPUs {srv * 100:3.0f} % busy, "
-                  f"tool CPUs {tool * 100:3.0f} % busy -> {who}; server limit {entry['server_limit']}")
+                  f"tool CPUs {tool * 100:3.0f} % busy{extra} -> {who}; server limit {entry['server_limit']}")
 
     print("\n== 2. Per rate (medians [min, max] over the repeats)")
     for s in servers:
@@ -154,8 +165,10 @@ def main(folder):
                        "p50_ms": spread([r["p50_ms"] for r in rs]), "p99_ms": spread([r["p99_ms"] for r in rs]),
                        "tool_energy_per_1000_req_j": spread([r.get("tool_energy_per_1000_req_j") for r in rs]),
                        "tool_cpu_per_1000_req_ms": spread([r.get("tool_cpu_per_1000_req_ms") for r in rs]),
-                       "server_energy_j": spread([r["server_energy_j"] for r in rs]),
+                       "server_energy_j": spread([r.get("server_energy_j") for r in rs]),
                        "server_cpu_s": spread([r["server_cpu_s"] for r in rs]),
+                       "proxy_cpu_s": spread([r.get("proxy_cpu_s") for r in rs]),
+                       "proxy_energy_j": spread([r.get("proxy_energy_j") for r in rs]),
                        "laptop_above_idle_j": spread([r.get("laptop_above_idle_j") for r in rs])}
                 result["per_rate"][s][f"{t}@{rate or 'own'}"] = row
                 held_txt = f"{row['held']}/{row['n']}" if rate else "-"
@@ -163,8 +176,13 @@ def main(folder):
                       f"{row['rate_cv_pct']['median']:5.1f} {row['p50_ms']['median']:8.2f} {row['p99_ms']['median']:9.2f} "
                       f"{fmt(row['tool_energy_per_1000_req_j'], 3):>22} {row['tool_cpu_per_1000_req_ms']['median']:8.0f} "
                       f"{fmt(row['server_energy_j'], 1):>23} {row['server_cpu_s']['median']:12.1f} "
-                      f"{row['laptop_above_idle_j']['median']:13.0f}")
+                      f"{(row['laptop_above_idle_j'] or {'median': float('nan')})['median']:13.0f}")
 
+    if not any("server_energy_j" in r for r in rows):
+        print("\n(no energy in this folder: sections 3 to 5 skipped)")
+        with open(os.path.join(folder, "load_tools.json"), "w") as fh:
+            json.dump(result, fh, indent=1)
+        return
     print("\n== 3. Decision rule: holds 2,000 req/s within 2 % with 0 failed requests in every repeat; "
           "cheapest tool energy per 1,000 requests at 2,000 req/s")
     for s in servers:
