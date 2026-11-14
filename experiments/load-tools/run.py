@@ -63,6 +63,7 @@ RATES = [1000, 2000, 5000, 10000, 20000, 40000, 80000]
 PORT = 8001
 URL = f"http://localhost:{PORT}/"
 CONTAINER = "lt-server"
+WARMUP_MAX_RATE = 5000     # k6 warms the server up; it holds 5,000 req/s on the tool CPUs (about 9,200 at most)
 MIN_RATE_SHARE = 0.95      # below this share of the target, the tool leaves the ramp
 MAX_FAILED_SHARE = 0.01    # above this share of failed requests, too
 TOOL_CPUS = None           # set in main(): the CPUs the tool may use (None = all)
@@ -597,7 +598,7 @@ def main():
             for server_name, deploy in rng.sample(boxes, len(boxes)):   # so a slow drift of the laptop is not a server effect
                 say(f"{server_name} ({deploy}) repeat {rep}: starting {SERVERS[server_name]}")
                 server = Server(SERVERS[server_name], deploy, server_cpus)
-                warm_up(a.rates[0], a.warmup_seconds, a.connections, out)
+                warm_up(min(a.rates[0], WARMUP_MAX_RATE), a.warmup_seconds, a.connections, out)
                 first = True
                 left = list(rate_tools)
                 for rate in a.rates:
