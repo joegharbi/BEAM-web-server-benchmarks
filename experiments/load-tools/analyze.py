@@ -44,6 +44,15 @@ def spread(values):
     return {"median": med(values), "min": min(values), "max": max(values), "n": len(values)} if values else None
 
 
+FULL = 0.80    # CPUs at least this busy count as full (two hardware threads of one core rarely reach 100 % together)
+
+
+def busy(r, side):
+    """Share of the CPUs a side may use that it kept busy over the run (from its CPU time and the CPU split)."""
+    cpus = {"server": 4, "tool": len(r["tool_cpus"]) if isinstance(r.get("tool_cpus"), list) else 8}[side]
+    return r[f"{side}_cpu_s"] / r["wall_s"] / cpus
+
+
 def held(r):
     total = r["ok"] + r["failed"]
     return (r["exit"] == 0 and r["ok"] > 0 and r["rate"] >= MIN_RATE_SHARE * r["target_rate"]
@@ -104,6 +113,30 @@ def main(folder):
                 print(f"    {t:9} held {sorted(set(highest))} req/s in the repeats {highest}; at {broke_at} it "
                       f"reached {fmt(bp['reached_when_broken'], 0)} req/s")
             result["breaking_point"][s][t] = bp
+
+    print("\n== 1b. Who broke: at each tool's breaking step, how busy the server's and the tool's CPUs were "
+          f"(full = {int(FULL * 100)} % or more of the CPUs each may use)")
+    result["who_broke"] = {}
+    for s in servers:
+        print(f"  {LABEL[s]}")
+        result["who_broke"][s] = {}
+        for t in [t for t in tools if t != "python"]:
+            broke_at = result["breaking_point"][s][t]["broke_at"]
+            if not broke_at:
+                continue
+            rs = by[(s, t, broke_at[0])]
+            srv = med([busy(r, "server") for r in rs])
+            tool = med([busy(r, "tool") for r in rs])
+            who = ("the server" if srv >= FULL > tool else "the tool" if tool >= FULL > srv
+                   else "both" if srv >= FULL and tool >= FULL else "neither: something in between")
+            last = max(result["breaking_point"][s][t]["highest_held_per_repeat"])
+            reached = result["breaking_point"][s][t]["reached_when_broken"]["median"]
+            entry = {"asked": broke_at[0], "delivered": reached, "server_cpus_busy": srv, "tool_cpus_busy": tool,
+                     "who": who, "server_limit": (f"about {reached:.0f} req/s" if who in ("the server", "both")
+                                                  else f"not reached (above {last} req/s held)")}
+            result["who_broke"][s][t] = entry
+            print(f"    {t:9} asked {broke_at[0]:>6}, delivered {reached:7.0f}: server CPUs {srv * 100:3.0f} % busy, "
+                  f"tool CPUs {tool * 100:3.0f} % busy -> {who}; server limit {entry['server_limit']}")
 
     print("\n== 2. Per rate (medians [min, max] over the repeats)")
     for s in servers:
