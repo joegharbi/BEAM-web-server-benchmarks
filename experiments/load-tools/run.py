@@ -18,7 +18,12 @@ it records:
 Every repeat runs all servers in a new random order. Once per server and repeat, among the first rate's runs, an
 "idle" run measures the server and the laptop with no load for the same length, and the Python client runs.
 A tool leaves the ramp (for this server and repeat) once it reaches less than 95 % of the target, more than 1 % of
-its requests fail, or its per-second rate swings more than 5 % (CV); the ramp ends when no tool is left. The Python
+its requests fail, or its per-second rate swings more than 5 % (CV); the ramp ends when no tool is left. With
+RATE_GROWTH the ramp has no ceiling: after the listed rates every step multiplies the last one, until the tool breaks.
+With LIMIT_PRECISION_PCT the tool then searches between the last rate it held and the first it missed (always the
+middle) until the two are that close: its limit. Every missed step gets a verdict from the CPU time of both sides:
+the server broke (its CPUs were full), the client broke (the tool's CPUs were full), both, or neither (something in
+between, e.g. docker-proxy). The Python
 client (the framework's own) has no rate setting: it runs once per server and repeat and sends PYTHON_REQUESTS
 requests as fast as it can.
 
@@ -73,6 +78,7 @@ SYSTEM_CPUS = None         # set in main(): the CPUs of this script, Scaphandre 
 # threads each; core n = CPUs n and n+4): core 0 for the system, core 1 for the tool, cores 2 and 3 for the server.
 SETTINGS = {"SERVERS": "erlang-nobw erlang-bw java", "TOOLS": "idle python wrk2 oha k6 k6-paced vegeta",
             "RATES": "1000 2000 5000 10000 20000 40000 80000", "SECONDS": "60", "CONNECTIONS": "100",
+            "RATE_GROWTH": "0", "MAX_RATE": "1000000", "LIMIT_PRECISION_PCT": "0",
             "WARMUP_SECONDS": "20", "PYTHON_REQUESTS": "60000", "DEPLOY": "docker",
             "SYSTEM_CPUS": "0,4", "TOOL_CPUS": "1,5", "SERVER_CPUS": "2,3,6,7"}
 MAX_RATE_CV_PCT = 5.0      # and when the per-second rate swings more than this (an overloaded tool can still hold
@@ -481,6 +487,65 @@ def held(row):
     return row["rate"] >= MIN_RATE_SHARE * row["target_rate"] and row["failed"] <= MAX_FAILED_SHARE * total and steady
 
 
+FULL = 0.80    # CPUs at least this busy count as full (two hardware threads of one core rarely reach 100 % together)
+
+
+def busy(row, side):
+    """Share of the CPUs a side may use that it kept busy over the run (from its CPU time and the CPU split)."""
+    def count(key, before):            # runs before the field existed had the server on 4 CPUs
+        value = row.get(key, before)
+        return len(value) if isinstance(value, list) else os.cpu_count()
+    cpus = count(f"{side}_cpus", [2, 3, 6, 7] if side == "server" else "all")
+    return row[f"{side}_cpu_s"] / row["wall_s"] / cpus
+
+
+def who_broke(server_busy, tool_busy):
+    return ("the server" if server_busy >= FULL > tool_busy else "the client" if tool_busy >= FULL > server_busy
+            else "both" if server_busy >= FULL and tool_busy >= FULL else "neither: something in between")
+
+
+class Ramp:
+    """One tool's rates on one server: the listed rates, then (growth) each step = the last one x growth up to
+    max_rate, until a step is missed; then (precision_pct) the middle between the highest rate held and the lowest
+    missed, until they are within precision_pct of each other."""
+
+    def __init__(self, rates, growth, max_rate, precision_pct):
+        self.rates, self.growth, self.max_rate, self.precision = rates, growth, max_rate, precision_pct
+        self.held, self.missed, self.step = None, None, 0
+        self.server_busy, self.tool_busy = 0.0, 0.0     # the fullest each side's CPUs were at any missed step
+
+    def next(self):
+        if self.missed is None:
+            if self.step < len(self.rates):
+                return self.rates[self.step]
+            rate = int(self.held * self.growth) if self.growth > 1 and self.held else None
+            return rate if rate and rate <= self.max_rate else None
+        if not self.precision or self.held is None or self.missed - self.held <= self.precision / 100 * self.held:
+            return None
+        middle = int(round((self.held + self.missed) / 2, -2))
+        return middle if self.held < middle < self.missed else None
+
+    def record(self, rate, ok, server_busy=0.0, tool_busy=0.0):
+        if ok:
+            self.held = max(self.held or 0, rate)
+            self.step += 1
+        else:
+            self.missed = min(self.missed or rate, rate)
+            self.server_busy, self.tool_busy = max(self.server_busy, server_busy), max(self.tool_busy, tool_busy)
+
+    @property
+    def who(self):
+        """Over all missed steps: right next to the limit a side is not yet full, further above it is."""
+        return who_broke(self.server_busy, self.tool_busy)
+
+    def summary(self):
+        if self.missed is None:
+            return f"held every step up to {self.held}/s (no break found)"
+        if self.held is None:
+            return f"missed its first step, {self.missed}/s ({self.who} broke)"
+        return f"limit between {self.held}/s (held) and {self.missed}/s (missed): {self.who} broke"
+
+
 def show(n, row):
     where = "" if row["deploy"] == "docker" else f" ({row['deploy']})"
     head = f"{n} {row['server']}{where} #{row['repeat']} {row['tool']:8} " + \
@@ -508,6 +573,10 @@ def main():
     ap.add_argument("--servers", nargs="+", choices=list(SERVERS))
     ap.add_argument("--tools", nargs="+", choices=list(TOOLS))
     ap.add_argument("--rates", nargs="+", type=int, help="the ramp (sorted rising)")
+    ap.add_argument("--rate-growth", type=float, help="after the listed rates: next = last x this (0 = stop there)")
+    ap.add_argument("--max-rate", type=int, help="ceiling of the growing ramp")
+    ap.add_argument("--limit-precision-pct", type=float,
+                    help="search between the last rate held and the first missed until this close (0 = no search)")
     ap.add_argument("--seconds", type=int)
     ap.add_argument("--connections", type=int)
     ap.add_argument("--repeats", type=int)
@@ -525,6 +594,8 @@ def main():
     exp, cfg = load_config(a.config)
     pick = {"servers": exp["SERVERS"].split(), "tools": exp["TOOLS"].split(),
             "rates": [int(x) for x in exp["RATES"].split()], "seconds": int(exp["SECONDS"]),
+            "rate_growth": float(exp["RATE_GROWTH"]), "max_rate": int(exp["MAX_RATE"]),
+            "limit_precision_pct": float(exp["LIMIT_PRECISION_PCT"]),
             "connections": int(exp["CONNECTIONS"]), "repeats": int(cfg["REPEATS"]),
             "python_requests": int(exp["PYTHON_REQUESTS"]), "warmup_seconds": int(exp["WARMUP_SECONDS"]),
             "deploy": exp["DEPLOY"].split(), "system_cpus": exp["SYSTEM_CPUS"], "tool_cpus": exp["TOOL_CPUS"],
@@ -563,7 +634,9 @@ def main():
                 fh.write(f"{tool}: {(v.stdout or v.stderr).strip().splitlines()[0]}\n")
         pins = re.findall(r"^(OHA|K6|VEGETA|WRK2|LUAJIT)=(\S+)", open(os.path.join(HERE, "install.sh")).read(), re.M)
         fh.write("install.sh pins: " + ", ".join(f"{k}={v}" for k, v in pins) + "\n")
-    say(f"at most {most} runs (fewer once tools leave the ramp), {a.seconds} s each -> {os.path.relpath(out, ROOT)}")
+    count = (f"open ramp (x{a.rate_growth:g} after {a.rates[-1]}/s, up to {a.max_rate}/s): the number of runs depends "
+             "on where the tools break" if a.rate_growth > 1 else f"at most {most} runs (fewer once tools leave the ramp)")
+    say(f"{count}, {a.seconds} s each -> {os.path.relpath(out, ROOT)}")
 
     machine = not a.no_machine
     stop_sudo, state = threading.Event(), os.path.join(out, ".environment_state.json")
@@ -600,10 +673,11 @@ def main():
                 server = Server(SERVERS[server_name], deploy, server_cpus)
                 warm_up(min(a.rates[0], WARMUP_MAX_RATE), a.warmup_seconds, a.connections, out)
                 first = True
-                left = list(rate_tools)
-                for rate in a.rates:
-                    plan = [(t, rate) for t in rng.sample(left, len(left))]
-                    if first:                               # idle and Python run once, among the first rate's tools
+                ramps = {t: Ramp(a.rates, a.rate_growth, a.max_rate, a.limit_precision_pct) for t in rate_tools}
+                while True:                                 # one round = every tool's next rate, in a shuffled order
+                    plan = [(t, ramps[t].next()) for t in rng.sample(rate_tools, len(rate_tools))]
+                    plan = [(t, rate) for t, rate in plan if rate]
+                    if first:                               # idle and Python run once, among the first round's tools
                         for t in once:
                             plan.insert(rng.randrange(len(plan) + 1), (t, None))
                         first = False
@@ -616,12 +690,24 @@ def main():
                         row = dict(server=server_name, image=SERVERS[server_name], repeat=rep, **gate,
                                    **one_run(tool, target or a.python_requests, a.seconds, a.connections, raw,
                                              server, not a.no_energy, a.keep_raw))
+                        if tool not in once:
+                            row["held"] = held(row)
+                            if not row["held"]:
+                                row["server_cpus_busy"] = round(busy(row, "server"), 3)
+                                row["tool_cpus_busy"] = round(busy(row, "tool"), 3)
+                                row["who_broke"] = who_broke(row["server_cpus_busy"], row["tool_cpus_busy"])
+                            ramps[tool].record(target, row["held"], row.get("server_cpus_busy", 0.0),
+                                               row.get("tool_cpus_busy", 0.0))
                         with open(os.path.join(out, "runs.jsonl"), "a") as fh:
                             fh.write(json.dumps(row) + "\n")
                         show(n, row)
-                        if tool not in once and not held(row):
-                            left.remove(tool)
-                            say(f"   {tool} leaves the ramp at {rate}/s")
+                        if tool not in once and not row["held"]:
+                            proxy = (f", docker-proxy {row['proxy_cpu_s'] / row['wall_s']:.2f} CPUs"
+                                     if "proxy_cpu_s" in row else "")
+                            say(f"   {tool} missed {target}/s: server CPUs {row['server_cpus_busy'] * 100:.0f} % busy, "
+                                f"tool CPUs {row['tool_cpus_busy'] * 100:.0f} % busy{proxy} -> at this step: {row['who_broke']}")
+                for tool in rate_tools:
+                    say(f"   {server_name} ({deploy}) #{rep} {tool}: {ramps[tool].summary()}")
                 server.stop()
                 server = None
         say("all runs done")

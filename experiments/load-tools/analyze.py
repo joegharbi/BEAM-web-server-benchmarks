@@ -27,7 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "analysis"))
 sys.path.insert(0, HERE)
 import stats  # noqa: E402
-from run import MAX_FAILED_SHARE, MAX_RATE_CV_PCT, MIN_RATE_SHARE  # noqa: E402
+from run import FULL, MAX_FAILED_SHARE, MAX_RATE_CV_PCT, MIN_RATE_SHARE, busy, who_broke  # noqa: E402
 
 TOOL_ORDER = ["wrk2", "oha", "vegeta", "k6", "k6-paced", "python"]
 SERVER_ORDER = ["erlang-nobw", "erlang-bw", "java", "erlang-nobw-native", "erlang-bw-native", "java-native"]
@@ -43,18 +43,6 @@ def med(values):
 def spread(values):
     values = [v for v in values if v is not None]
     return {"median": med(values), "min": min(values), "max": max(values), "n": len(values)} if values else None
-
-
-FULL = 0.80    # CPUs at least this busy count as full (two hardware threads of one core rarely reach 100 % together)
-
-
-def busy(r, side):
-    """Share of the CPUs a side may use that it kept busy over the run (from its CPU time and the CPU split)."""
-    def count(key, before):            # runs before the field existed had the server on 4 CPUs
-        value = r.get(key, before)
-        return len(value) if isinstance(value, list) else os.cpu_count()
-    cpus = count(f"{side}_cpus", [2, 3, 6, 7] if side == "server" else "all")
-    return r[f"{side}_cpu_s"] / r["wall_s"] / cpus
 
 
 def held(r):
@@ -87,6 +75,7 @@ def main(folder):
     result = {"folder": os.path.basename(folder), "idle": {}, "breaking_point": {}, "per_rate": {},
               "decision_at_2000": {}, "server_energy_by_tool": {}, "busy_wait": {}}
 
+    missed_rows = {}
     print("== Idle (server running, no load)")
     for s in servers:
         idle = [r for r in rows if r["server"] == s and r["tool"] == "idle"]
@@ -107,16 +96,19 @@ def main(folder):
                 print(f"    {t:9} own pace {fmt(bp['own_pace_rate'], 0)} req/s")
             else:
                 reps = sorted({r["repeat"] for r in rows if r["server"] == s and r["tool"] == t})
-                highest, reached = [], []
+                highest, reached, lowest_missed = [], [], []
                 for rep in reps:
                     mine = sorted((r for r in rows if r["server"] == s and r["tool"] == t and r["repeat"] == rep),
                                   key=lambda r: r["target_rate"])
                     ok = [r["target_rate"] for r in mine if held(r)]
                     highest.append(max(ok) if ok else 0)
-                    broke = [r for r in mine if not held(r)]
-                    reached.append(broke[0]["rate"] if broke else None)
+                    broke = [r for r in mine if not held(r)]      # the lowest rate missed: with the limit search
+                    reached.append(broke[0]["rate"] if broke else None)       # that is the step next to the limit
+                    lowest_missed.append(broke[0] if broke else None)
                 broke_at = sorted({r["target_rate"] for r in rows if r["server"] == s and r["tool"] == t and not held(r)})
-                bp = {"highest_held_per_repeat": highest, "broke_at": broke_at, "reached_when_broken": spread(reached)}
+                bp = {"highest_held_per_repeat": highest, "broke_at": broke_at, "reached_when_broken": spread(reached),
+                      "lowest_missed_per_repeat": [r["target_rate"] if r else None for r in lowest_missed]}
+                missed_rows[(s, t)] = [r for r in lowest_missed if r]
                 print(f"    {t:9} held {sorted(set(highest))} req/s in the repeats {highest}; at {broke_at} it "
                       f"reached {fmt(bp['reached_when_broken'], 0)} req/s")
             result["breaking_point"][s][t] = bp
@@ -131,14 +123,19 @@ def main(folder):
             broke_at = result["breaking_point"][s][t]["broke_at"]
             if not broke_at:
                 continue
-            rs = by[(s, t, broke_at[0])]
-            srv = med([busy(r, "server") for r in rs])
-            tool = med([busy(r, "tool") for r in rs])
-            who = ("the server" if srv >= FULL > tool else "the tool" if tool >= FULL > srv
-                   else "both" if srv >= FULL and tool >= FULL else "neither: something in between")
+            rs = missed_rows[(s, t)]             # each repeat's lowest missed step
+            def fullest(side):                   # per repeat, over all its missed steps: right next to the limit a
+                per_rep = collections.defaultdict(float)     # side is not yet full, further above it is
+                for r in rows:
+                    if r["server"] == s and r["tool"] == t and r["target_rate"] and not held(r):
+                        per_rep[r["repeat"]] = max(per_rep[r["repeat"]], busy(r, side))
+                return med(list(per_rep.values()))
+            srv, tool = fullest("server"), fullest("tool")
+            who = who_broke(srv, tool)
             last = max(result["breaking_point"][s][t]["highest_held_per_repeat"])
             reached = result["breaking_point"][s][t]["reached_when_broken"]["median"]
-            entry = {"asked": broke_at[0], "delivered": reached, "server_cpus_busy": srv, "tool_cpus_busy": tool,
+            asked = med([r["target_rate"] for r in rs])
+            entry = {"asked": asked, "delivered": reached, "server_cpus_busy": srv, "tool_cpus_busy": tool,
                      "who": who, "server_limit": (f"about {reached:.0f} req/s" if who in ("the server", "both")
                                                   else f"not reached (above {last} req/s held)")}
             result["who_broke"][s][t] = entry
@@ -146,7 +143,7 @@ def main(folder):
             if proxy is not None:
                 entry["proxy_cpu_s_per_s"] = proxy / med([r["wall_s"] for r in rs])
             extra = f", docker-proxy {entry['proxy_cpu_s_per_s']:.2f} CPUs" if proxy is not None else ""
-            print(f"    {t:9} asked {broke_at[0]:>6}, delivered {reached:7.0f}: server CPUs {srv * 100:3.0f} % busy, "
+            print(f"    {t:9} asked {asked:>6.0f}, delivered {reached:7.0f}: server CPUs {srv * 100:3.0f} % busy, "
                   f"tool CPUs {tool * 100:3.0f} % busy{extra} -> {who}; server limit {entry['server_limit']}")
 
     print("\n== 2. Per rate (medians [min, max] over the repeats)")
