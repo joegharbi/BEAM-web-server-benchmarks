@@ -12,6 +12,10 @@
      smallest possible p is 0.008); and the server's CPU time, to tell real extra work from a different attribution
   5. busy-waiting on vs off: the Erlang server's energy on/off per tool and rate
 
+  6. the energy against load curve (runs with LOAD_PERCENTS): per percent of the highest rate each tool held, the
+     server's and the laptop's (above idle) energy per 1,000 requests and power
+For the shapes clients and burst (SHAPE): one table per server of every level instead of 1 to 6.
+
 Medians over the repeats, with [min, max]. The laptop's energy above idle = laptop energy - idle laptop power (the
 idle run of the same server and repeat) x run time.
 
@@ -46,6 +50,8 @@ def spread(values):
 
 
 def held(r):
+    if "held" in r:                    # run.py's own verdict (it also knows the latency rule, MAX_P99_MS)
+        return r["held"]
     total = r["ok"] + r["failed"]
     return (r["exit"] == 0 and r["ok"] > 0 and r["rate"] >= MIN_RATE_SHARE * r["target_rate"]
             and r["failed"] <= MAX_FAILED_SHARE * total
@@ -58,6 +64,50 @@ def fmt(s, digits=1, scale=1.0):
     return f"{s['median'] * scale:.{digits}f} [{s['min'] * scale:.{digits}f}, {s['max'] * scale:.{digits}f}]"
 
 
+def level_table(rows, servers, key, unit):
+    """Per server, tool and level (rows[key]): what was delivered and what it cost, medians over the repeats."""
+    out = {}
+    for s in servers:
+        print(f"  {LABEL[s]}")
+        out[s] = {}
+        for t in [t for t in TOOL_ORDER if any(r["server"] == s and r["tool"] == t for r in rows)]:
+            for level in sorted({r[key] for r in rows if r["server"] == s and r["tool"] == t}):
+                rs = [r for r in rows if r["server"] == s and r["tool"] == t and r[key] == level and r.get("ok")]
+                if not rs:
+                    continue
+                def per_1000(field):
+                    return med([1000 * r[field] / r["ok"] for r in rs if field in r])
+                e = {"n": len(rs), "held": sum(1 for r in rs if r.get("held")), "rate": med([r["rate"] for r in rs]),
+                     "p50_ms": med([r["p50_ms"] for r in rs]), "p99_ms": med([r["p99_ms"] for r in rs]),
+                     "server_cpus_busy": med([busy(r, "server") for r in rs]),
+                     "tool_cpus_busy": med([busy(r, "tool") for r in rs]),
+                     "server_j_per_1000": per_1000("server_energy_j"),
+                     "laptop_above_idle_j_per_1000": per_1000("laptop_above_idle_j"),
+                     "server_power_w": med([r["server_energy_j"] / r["wall_s"] for r in rs if "server_energy_j" in r]),
+                     "laptop_power_w": med([r.get("host_power_w") for r in rs])}
+                if "expected_requests" in rs[0]:
+                    e["answered_share"] = med([r["ok"] / r["expected_requests"] for r in rs])
+                out[s][f"{t}@{level:g}"] = e
+                energy = (f", server {e['server_j_per_1000']:.3f} J/1000 req ({e['server_power_w']:.2f} W), laptop above "
+                          f"idle {e['laptop_above_idle_j_per_1000']:.3f} J/1000 req, laptop {e['laptop_power_w']:.2f} W"
+                          if e["server_j_per_1000"] is not None and e["laptop_above_idle_j_per_1000"] is not None else "")
+                done = f", answered {e['answered_share'] * 100:.0f} %" if "answered_share" in e else ""
+                print(f"    {t:5} {level:>7g}{unit}: {e['rate']:8.0f} req/s{done}, held {e['held']}/{e['n']}, p50 "
+                      f"{e['p50_ms']:.2f} ms, p99 {e['p99_ms']:.1f} ms, CPUs busy server {e['server_cpus_busy'] * 100:.0f} % "
+                      f"tool {e['tool_cpus_busy'] * 100:.0f} %{energy}")
+    return out
+
+
+def other_shape(folder, rows, servers, shape):
+    unit = {"clients": " clients", "burst": " per burst"}[shape]
+    print(f"== Shape {shape}: every level, medians over the repeats")
+    result = {"folder": os.path.basename(folder), "shape": shape,
+              "levels": level_table([r for r in rows if r.get("level")], servers, "level", unit)}
+    with open(os.path.join(folder, "load_tools.json"), "w") as fh:
+        json.dump(result, fh, indent=1)
+    print(f"\nwritten: {os.path.join(folder, 'load_tools.json')}")
+
+
 def main(folder):
     rows = [json.loads(line) for line in open(os.path.join(folder, "runs.jsonl"))]
     for r in rows:                       # Docker and native are separate entries
@@ -68,6 +118,11 @@ def main(folder):
         if r["tool"] != "idle" and (r["server"], r["repeat"]) in idle_w:
             r["laptop_above_idle_j"] = r["host_energy_j"] - idle_w[(r["server"], r["repeat"])] * r["wall_s"]
     servers = [s for s in SERVER_ORDER if any(r["server"] == s for r in rows)]
+    shape = next((r["shape"] for r in rows if r.get("shape")), "rate")
+    if shape != "rate":
+        return other_shape(folder, rows, servers, shape)
+    curve = [r for r in rows if r.get("phase") == "curve"]
+    rows = [r for r in rows if r.get("phase") != "curve"]
     tools = [t for t in TOOL_ORDER if any(r["tool"] == t for r in rows)]
     by = collections.defaultdict(list)
     for r in rows:
@@ -174,6 +229,10 @@ def main(folder):
                       f"{fmt(row['tool_energy_per_1000_req_j'], 3):>22} {row['tool_cpu_per_1000_req_ms']['median']:8.0f} "
                       f"{fmt(row['server_energy_j'], 1):>23} {row['server_cpu_s']['median']:12.1f} "
                       f"{(row['laptop_above_idle_j'] or {'median': float('nan')})['median']:13.0f}")
+
+    if curve:
+        print("\n== 6. Energy against load: percent of the highest rate the tool held on this server (its limit)")
+        result["load_curve"] = level_table(curve, servers, "load_pct", "%")
 
     if not any("server_energy_j" in r for r in rows):
         print("\n(no energy in this folder: sections 3 to 5 skipped)")

@@ -23,7 +23,13 @@ RATE_GROWTH the ramp has no ceiling: after the listed rates every step multiplie
 With LIMIT_PRECISION_PCT the tool then searches between the last rate it held and the first it missed (always the
 middle) until the two are that close: its limit. Every missed step gets a verdict from the CPU time of both sides:
 the server broke (its CPUs were full), the client broke (the tool's CPUs were full), both, or neither (something in
-between, e.g. docker-proxy). The Python
+between, e.g. docker-proxy). With MAX_P99_MS a step is also missed when 1 % of the answers took longer than that
+(each tool's own latency; wrk2 and oha correct it for requests sent late, k6 does not).
+SHAPE chooses what a "level" is: rate (requests per second on a timetable, RATES), clients (that many clients, each
+sends its next request as soon as the last is answered, CLIENTS; oha and k6) or burst (that many requests at once
+every BURST_EVERY_SECONDS, BURSTS; oha sends them as fast as its connections allow, k6 within one second).
+With LOAD_PERCENTS (shape rate) every tool, after its ramp, also runs at those percents of the highest rate it held
+on this server in this repeat: the energy against load curve. The Python
 client (the framework's own) has no rate setting: it runs once per server and repeat and sends PYTHON_REQUESTS
 requests as fast as it can.
 
@@ -71,6 +77,7 @@ CONTAINER = "lt-server"
 WARMUP_MAX_RATE = 5000     # k6 warms the server up; it holds 5,000 req/s on the tool CPUs (about 9,200 at most)
 MIN_RATE_SHARE = 0.95      # below this share of the target, the tool leaves the ramp
 MAX_FAILED_SHARE = 0.01    # above this share of failed requests, too
+BURST_EVERY = 5            # set in main(): seconds from one burst to the next
 TOOL_CPUS = None           # set in main(): the CPUs the tool may use (None = all)
 SYSTEM_CPUS = None         # set in main(): the CPUs of this script, Scaphandre and docker-proxy (None = all)
 # The experiment's own settings in load-tools.config, with their defaults (the other keys there are the framework's
@@ -78,7 +85,9 @@ SYSTEM_CPUS = None         # set in main(): the CPUs of this script, Scaphandre 
 # threads each; core n = CPUs n and n+4): core 0 for the system, core 1 for the tool, cores 2 and 3 for the server.
 SETTINGS = {"SERVERS": "erlang-nobw erlang-bw java", "TOOLS": "idle python wrk2 oha k6 k6-paced vegeta",
             "RATES": "1000 2000 5000 10000 20000 40000 80000", "SECONDS": "60", "CONNECTIONS": "100",
-            "RATE_GROWTH": "0", "MAX_RATE": "1000000", "LIMIT_PRECISION_PCT": "0",
+            "RATE_GROWTH": "0", "MAX_RATE": "1000000", "LIMIT_PRECISION_PCT": "0", "MAX_P99_MS": "0",
+            "SHAPE": "rate", "CLIENTS": "1 10 50 100 200 500 1000", "BURSTS": "1000 2000 5000 10000",
+            "BURST_EVERY_SECONDS": "5", "LOAD_PERCENTS": "",
             "WARMUP_SECONDS": "20", "PYTHON_REQUESTS": "60000", "DEPLOY": "docker",
             "SYSTEM_CPUS": "0,4", "TOOL_CPUS": "1,5", "SERVER_CPUS": "2,3,6,7"}
 MAX_RATE_CV_PCT = 5.0      # and when the per-second rate swings more than this (an overloaded tool can still hold
@@ -150,6 +159,27 @@ def k6_parse(raw):
             "dropped": int(m.get("dropped_iterations", {}).get("values", {}).get("count", 0))}
 
 
+def oha_clients_cmd(clients, seconds, conns, raw):
+    return [os.path.join(BIN, "oha"), "-z", f"{seconds}s", "-c", str(clients), "--no-tui", "--output-format", "json",
+            "-o", raw + ".json", URL], None, None
+
+
+def oha_burst_cmd(burst, seconds, conns, raw):
+    # oha waits BURST_EVERY before its first burst; one more second lets the last burst (at `seconds`) finish
+    return [os.path.join(BIN, "oha"), "-z", f"{seconds + 1}s", "-c", str(conns), "--burst-delay", f"{BURST_EVERY}s",
+            "--burst-rate", str(burst), "--no-tui", "--output-format", "json", "-o", raw + ".json", URL], None, None
+
+
+def k6_clients_cmd(clients, seconds, conns, raw):
+    cmd, env, out = k6_cmd(0, seconds, conns, raw, "k6_clients.js")
+    return cmd, dict(env, CLIENTS=str(clients)), out
+
+
+def k6_burst_cmd(burst, seconds, conns, raw):
+    cmd, env, out = k6_cmd(0, seconds, conns, raw, "k6_burst.js")
+    return cmd, dict(env, BURST=str(burst), EVERY=str(BURST_EVERY), SECONDS=str(seconds)), out
+
+
 def vegeta_cmd(rate, seconds, conns, raw):
     return [os.path.join(BIN, "vegeta"), "attack", f"-rate={rate}/s", f"-duration={seconds}s",
             f"-max-connections={conns}", "-output", raw + ".bin"], None, None
@@ -186,6 +216,10 @@ VERSIONS = {"wrk2": [os.path.join(BIN, "wrk2"), "-v"], "oha": [os.path.join(BIN,
 # "idle": the server running and no tool for the run's length, to know what the laptop and the server use at rest
 TOOLS = {"idle": (idle_cmd, None), "python": (python_cmd, python_parse), "wrk2": (wrk2_cmd, wrk2_parse), "oha": (oha_cmd, oha_parse),
          "k6": (k6_cmd, k6_parse), "k6-paced": (k6_paced_cmd, k6_parse), "vegeta": (vegeta_cmd, vegeta_parse)}
+# The other shapes (SHAPE): the level is a number of clients, or the requests of one burst
+SHAPES = {"clients": {"oha": (oha_clients_cmd, oha_parse), "k6": (k6_clients_cmd, k6_parse)},
+          "burst": {"oha": (oha_burst_cmd, oha_parse), "k6": (k6_burst_cmd, k6_parse)}}
+UNIT = {"rate": "/s", "clients": " clients", "burst": " per burst"}
 
 
 # ---- server ---------------------------------------------------------------------------------------------------------
@@ -292,7 +326,7 @@ def steadiness(samples, ok, t0, t1):
     per_req = total / ok
     rates = [(b1 - b0) / (s1 - s0) / per_req for (s0, b0), (s1, b1) in zip(samples, samples[1:])
              if s0 >= t0 + 1 and s1 <= t1 - 1]
-    if len(rates) < 2:
+    if len(rates) < 2 or statistics.mean(rates) <= 0:
         return rates, None
     return rates, 100 * statistics.pstdev(rates) / statistics.mean(rates)
 
@@ -368,8 +402,9 @@ def energies(log, server, tool_pid, t0, t1):
 
 # ---- one run ----------------------------------------------------------------------------------------------------------
 
-def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw):
-    make_cmd, parse = TOOLS[tool]
+def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw, shape="rate"):
+    fixed_rate = tool not in ("python", "idle")
+    make_cmd, parse = SHAPES[shape][tool] if fixed_rate and shape != "rate" else TOOLS[tool]
     cmd, env, stdout_file = make_cmd(target, seconds, conns, raw)
     meter = Meter(raw + ".scaphandre.json") if energy else None
     out = open(stdout_file, "w") if stdout_file else subprocess.DEVNULL
@@ -393,9 +428,9 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw):
     err.close()
     if out is not subprocess.DEVNULL:
         out.close()
-    fixed_rate = tool not in ("python", "idle")
-    row = {"tool": tool, "target_rate": target if fixed_rate else None, "target_seconds": seconds,
-           "connections": conns if fixed_rate else None, "command": " ".join(cmd), "exit": proc.returncode,
+    row = {"tool": tool, "shape": shape if fixed_rate else None, "level": target if fixed_rate else None,
+           "target_rate": target if fixed_rate and shape == "rate" else None, "target_seconds": seconds,
+           "connections": (target if shape == "clients" else conns) if fixed_rate else None, "command": " ".join(cmd), "exit": proc.returncode,
            "deploy": server.deploy, "tool_cpus": sorted(TOOL_CPUS) if TOOL_CPUS else "all",
            "server_cpus": sorted(server.cpus) if server.cpus else "all", "wall_s": round(wall, 3),
            "start_epoch": t0, "end_epoch": t1, "tool_cpu_s": round(usage.ru_utime + usage.ru_stime, 3),
@@ -414,7 +449,10 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw):
         return row
     row.update(parse(raw))
     row["rate"] = row["ok"] / row["seconds"] if row["seconds"] else 0.0
-    if fixed_rate:
+    if fixed_rate and shape == "burst":
+        row["bursts"] = seconds // BURST_EVERY
+        row["expected_requests"] = row["bursts"] * target
+    if row["target_rate"]:
         row["rate_vs_target_pct"] = 100.0 * (row["rate"] - target) / target
     per_s, cv = steadiness(counter.samples, row["ok"], t0, t1)
     with open(raw + ".persecond.json", "w") as fh:
@@ -479,12 +517,19 @@ def warm_up(rate, seconds, conns, out):
         os.remove(os.path.join(out, ".warmup.json"))
 
 
-def held(row):
+def held(row, max_p99_ms=0):
+    """Did the tool hold this level? Few failures and, if asked, p99 within max_p99_ms; at a fixed rate also the
+    rate reached and its steadiness (clients and bursts have no rate to hold, and bursts are unsteady on purpose)."""
     if row["exit"] != 0 or not row.get("ok"):
         return False
-    total = row["ok"] + row["failed"]
+    if row["failed"] > MAX_FAILED_SHARE * (row["ok"] + row["failed"]) or (max_p99_ms and row["p99_ms"] > max_p99_ms):
+        return False
+    if row.get("expected_requests") and row["ok"] < MIN_RATE_SHARE * row["expected_requests"]:
+        return False                                   # bursts not answered in full
+    if not row.get("target_rate"):
+        return True
     steady = row.get("rate_cv_pct") is None or row["rate_cv_pct"] <= MAX_RATE_CV_PCT
-    return row["rate"] >= MIN_RATE_SHARE * row["target_rate"] and row["failed"] <= MAX_FAILED_SHARE * total and steady
+    return row["rate"] >= MIN_RATE_SHARE * row["target_rate"] and steady
 
 
 FULL = 0.80    # CPUs at least this busy count as full (two hardware threads of one core rarely reach 100 % together)
@@ -549,7 +594,8 @@ class Ramp:
 def show(n, row):
     where = "" if row["deploy"] == "docker" else f" ({row['deploy']})"
     head = f"{n} {row['server']}{where} #{row['repeat']} {row['tool']:8} " + \
-           (f"{row['target_rate']:>6}/s" if row["target_rate"] else "own pace" if row["tool"] == "python" else "")
+           (f"{row['level']:>6}{UNIT[row['shape']]}" if row.get("level") else "own pace" if row["tool"] == "python" else "") + \
+           (f" ({row['load_pct']:g} % of {row['limit_rate']}/s)" if "load_pct" in row else "")
     if row["exit"] != 0:
         return say(f"{head}: FAILED (exit {row['exit']}) {row.get('error', '')}")
     if row["tool"] == "idle":
@@ -563,6 +609,8 @@ def show(n, row):
     if "proxy_cpu_s" in row:
         en += f", docker-proxy CPU {row['proxy_cpu_s']:.2f} s" + \
               (f" {row['proxy_energy_j']:.1f} J" if "proxy_energy_j" in row else "")
+    if "expected_requests" in row:
+        vs, cv = f" ({row['ok']} of {row['expected_requests']} requests in {row['bursts']} bursts)", ""
     say(f"{head}: {row['rate']:8.1f} req/s{vs}{cv}, {row['failed']} failed, p50 {row['p50_ms']:.2f} ms, "
         f"p99 {row['p99_ms']:.2f} ms, CPU tool {row['tool_cpu_s']:.2f} s server {row['server_cpu_s']:.2f} s{en}")
 
@@ -573,6 +621,13 @@ def main():
     ap.add_argument("--servers", nargs="+", choices=list(SERVERS))
     ap.add_argument("--tools", nargs="+", choices=list(TOOLS))
     ap.add_argument("--rates", nargs="+", type=int, help="the ramp (sorted rising)")
+    ap.add_argument("--shape", choices=["rate", "clients", "burst"])
+    ap.add_argument("--clients", nargs="+", type=int, help="shape clients: the numbers of clients")
+    ap.add_argument("--bursts", nargs="+", type=int, help="shape burst: the requests per burst")
+    ap.add_argument("--burst-every-seconds", type=int)
+    ap.add_argument("--max-p99-ms", type=float, help="a step is missed when p99 is above this (0 = no latency rule)")
+    ap.add_argument("--load-percents", nargs="*", type=float,
+                    help="shape rate: after the ramp, also run at these percents of the highest rate held")
     ap.add_argument("--rate-growth", type=float, help="after the listed rates: next = last x this (0 = stop there)")
     ap.add_argument("--max-rate", type=int, help="ceiling of the growing ramp")
     ap.add_argument("--limit-precision-pct", type=float,
@@ -595,7 +650,10 @@ def main():
     pick = {"servers": exp["SERVERS"].split(), "tools": exp["TOOLS"].split(),
             "rates": [int(x) for x in exp["RATES"].split()], "seconds": int(exp["SECONDS"]),
             "rate_growth": float(exp["RATE_GROWTH"]), "max_rate": int(exp["MAX_RATE"]),
-            "limit_precision_pct": float(exp["LIMIT_PRECISION_PCT"]),
+            "limit_precision_pct": float(exp["LIMIT_PRECISION_PCT"]), "max_p99_ms": float(exp["MAX_P99_MS"]),
+            "shape": exp["SHAPE"], "clients": [int(x) for x in exp["CLIENTS"].split()],
+            "bursts": [int(x) for x in exp["BURSTS"].split()], "burst_every_seconds": int(exp["BURST_EVERY_SECONDS"]),
+            "load_percents": [float(x) for x in exp["LOAD_PERCENTS"].split()],
             "connections": int(exp["CONNECTIONS"]), "repeats": int(cfg["REPEATS"]),
             "python_requests": int(exp["PYTHON_REQUESTS"]), "warmup_seconds": int(exp["WARMUP_SECONDS"]),
             "deploy": exp["DEPLOY"].split(), "system_cpus": exp["SYSTEM_CPUS"], "tool_cpus": exp["TOOL_CPUS"],
@@ -605,12 +663,20 @@ def main():
             setattr(a, key, value)
     if a.short:
         a.rates, a.seconds, a.repeats, a.python_requests = [1000, 5000], 10, 1, 10000
+    if a.shape not in ("rate", "clients", "burst"):
+        raise SystemExit(f"unknown SHAPE in {a.config}: {a.shape}")
+    levels = sorted({"rate": a.rates, "clients": a.clients, "burst": a.bursts}[a.shape])
     a.rates = sorted(a.rates)
+    if a.shape != "rate":                # these shapes exist for oha and k6; Python has its own pace
+        skipped = [t for t in a.tools if t not in SHAPES[a.shape] and t != "idle"]
+        a.tools = [t for t in a.tools if t not in skipped]
+        a.load_percents = []
     unknown = [x for x in a.servers if x not in SERVERS] + [x for x in a.tools if x not in TOOLS] + \
               [x for x in a.deploy if x not in ("docker", "native")]
     if unknown:
         raise SystemExit(f"unknown in {a.config}: {', '.join(unknown)}")
-    global TOOL_CPUS, SYSTEM_CPUS
+    global TOOL_CPUS, SYSTEM_CPUS, BURST_EVERY
+    BURST_EVERY = a.burst_every_seconds
     TOOL_CPUS, SYSTEM_CPUS, server_cpus = cpu_set(a.tool_cpus), cpu_set(a.system_cpus), cpu_set(a.server_cpus)
     if SYSTEM_CPUS:                      # this script, and so Scaphandre, the readiness gate and the byte counter
         os.sched_setaffinity(0, SYSTEM_CPUS)
@@ -626,7 +692,7 @@ def main():
     rng = random.Random(seed)
     once = [t for t in ("idle", "python") if t in a.tools]       # run once per server and repeat, not per rate
     rate_tools = [t for t in a.tools if t not in once]
-    most = len(a.servers) * len(a.deploy) * a.repeats * (len(a.rates) * len(rate_tools) + len(once))
+    most = len(a.servers) * len(a.deploy) * a.repeats * ((len(levels) + len(a.load_percents)) * len(rate_tools) + len(once))
     with open(os.path.join(out, "tools.txt"), "w") as fh:          # exact versions; each run's command is in runs.jsonl
         for tool, cmd in VERSIONS.items():
             if tool in a.tools or (tool == "k6" and "k6-paced" in a.tools):
@@ -634,8 +700,10 @@ def main():
                 fh.write(f"{tool}: {(v.stdout or v.stderr).strip().splitlines()[0]}\n")
         pins = re.findall(r"^(OHA|K6|VEGETA|WRK2|LUAJIT)=(\S+)", open(os.path.join(HERE, "install.sh")).read(), re.M)
         fh.write("install.sh pins: " + ", ".join(f"{k}={v}" for k, v in pins) + "\n")
-    count = (f"open ramp (x{a.rate_growth:g} after {a.rates[-1]}/s, up to {a.max_rate}/s): the number of runs depends "
-             "on where the tools break" if a.rate_growth > 1 else f"at most {most} runs (fewer once tools leave the ramp)")
+    if a.shape != "rate" and skipped:
+        say(f"shape {a.shape}: no {', '.join(skipped)} (only {', '.join(SHAPES[a.shape])} have this shape)")
+    count = (f"shape {a.shape}, open ramp (x{a.rate_growth:g} after {levels[-1]}{UNIT[a.shape]}, up to {a.max_rate}): the number of runs depends "
+             "on where the tools break" if a.rate_growth > 1 else f"shape {a.shape}, at most {most} runs (fewer once tools leave the ramp)")
     say(f"{count}, {a.seconds} s each -> {os.path.relpath(out, ROOT)}")
 
     machine = not a.no_machine
@@ -672,11 +740,38 @@ def main():
                 say(f"{server_name} ({deploy}) repeat {rep}: starting {SERVERS[server_name]}")
                 server = Server(SERVERS[server_name], deploy, server_cpus)
                 warm_up(min(a.rates[0], WARMUP_MAX_RATE), a.warmup_seconds, a.connections, out)
+                def measure(tool, target, label="", **extra):
+                    nonlocal n
+                    n += 1
+                    gate = ready(cfg, out, temp_ref, cpu_ref) if machine else {}
+                    raw = os.path.join(out, "raw", f"{server_name}_{deploy}_{rep}_{target or 'own'}_{tool}{label}")
+                    row = dict(server=server_name, image=SERVERS[server_name], repeat=rep, **gate, **extra,
+                               **one_run(tool, target or a.python_requests, a.seconds, a.connections, raw,
+                                         server, not a.no_energy, a.keep_raw, a.shape))
+                    if tool not in once:
+                        row["held"] = held(row, a.max_p99_ms)
+                        if not row["held"]:
+                            row["server_cpus_busy"] = round(busy(row, "server"), 3)
+                            row["tool_cpus_busy"] = round(busy(row, "tool"), 3)
+                            row["who_broke"] = who_broke(row["server_cpus_busy"], row["tool_cpus_busy"])
+                    with open(os.path.join(out, "runs.jsonl"), "a") as fh:
+                        fh.write(json.dumps(row) + "\n")
+                    show(n, row)
+                    if tool not in once and not row["held"]:
+                        proxy = (f", docker-proxy {row['proxy_cpu_s'] / row['wall_s']:.2f} CPUs"
+                                 if "proxy_cpu_s" in row else "")
+                        slow = (f" (p99 {row['p99_ms']:.0f} ms, above {a.max_p99_ms:g} ms)"
+                                if a.max_p99_ms and row.get("p99_ms", 0) > a.max_p99_ms else "")
+                        say(f"   {tool} missed {target}{UNIT[a.shape]}{slow}: server CPUs "
+                            f"{row['server_cpus_busy'] * 100:.0f} % busy, tool CPUs {row['tool_cpus_busy'] * 100:.0f} % "
+                            f"busy{proxy} -> at this step: {row['who_broke']}")
+                    return row
+
                 first = True
-                ramps = {t: Ramp(a.rates, a.rate_growth, a.max_rate, a.limit_precision_pct) for t in rate_tools}
-                while True:                                 # one round = every tool's next rate, in a shuffled order
+                ramps = {t: Ramp(levels, a.rate_growth, a.max_rate, a.limit_precision_pct) for t in rate_tools}
+                while True:                                 # one round = every tool's next level, in a shuffled order
                     plan = [(t, ramps[t].next()) for t in rng.sample(rate_tools, len(rate_tools))]
-                    plan = [(t, rate) for t, rate in plan if rate]
+                    plan = [(t, level) for t, level in plan if level]
                     if first:                               # idle and Python run once, among the first round's tools
                         for t in once:
                             plan.insert(rng.randrange(len(plan) + 1), (t, None))
@@ -684,30 +779,18 @@ def main():
                     if not plan:
                         break
                     for tool, target in plan:
-                        n += 1
-                        gate = ready(cfg, out, temp_ref, cpu_ref) if machine else {}
-                        raw = os.path.join(out, "raw", f"{server_name}_{deploy}_{rep}_{target or 'own'}_{tool}")
-                        row = dict(server=server_name, image=SERVERS[server_name], repeat=rep, **gate,
-                                   **one_run(tool, target or a.python_requests, a.seconds, a.connections, raw,
-                                             server, not a.no_energy, a.keep_raw))
+                        row = measure(tool, target, phase="ramp")
                         if tool not in once:
-                            row["held"] = held(row)
-                            if not row["held"]:
-                                row["server_cpus_busy"] = round(busy(row, "server"), 3)
-                                row["tool_cpus_busy"] = round(busy(row, "tool"), 3)
-                                row["who_broke"] = who_broke(row["server_cpus_busy"], row["tool_cpus_busy"])
                             ramps[tool].record(target, row["held"], row.get("server_cpus_busy", 0.0),
                                                row.get("tool_cpus_busy", 0.0))
-                        with open(os.path.join(out, "runs.jsonl"), "a") as fh:
-                            fh.write(json.dumps(row) + "\n")
-                        show(n, row)
-                        if tool not in once and not row["held"]:
-                            proxy = (f", docker-proxy {row['proxy_cpu_s'] / row['wall_s']:.2f} CPUs"
-                                     if "proxy_cpu_s" in row else "")
-                            say(f"   {tool} missed {target}/s: server CPUs {row['server_cpus_busy'] * 100:.0f} % busy, "
-                                f"tool CPUs {row['tool_cpus_busy'] * 100:.0f} % busy{proxy} -> at this step: {row['who_broke']}")
                 for tool in rate_tools:
-                    say(f"   {server_name} ({deploy}) #{rep} {tool}: {ramps[tool].summary()}")
+                    say(f"   {server_name} ({deploy}) #{rep} {tool}: {ramps[tool].summary()}".replace("/s", UNIT[a.shape]))
+                # The energy against load curve: each tool at percents of the highest rate it held here, shuffled
+                curve = [(t, pct) for t in rate_tools if ramps[t].held for pct in a.load_percents]
+                for tool, pct in rng.sample(curve, len(curve)):
+                    limit = ramps[tool].held
+                    measure(tool, max(1, int(round(limit * pct / 100))), f"_curve{pct:g}", phase="curve",
+                            load_pct=pct, limit_rate=limit)
                 server.stop()
                 server = None
         say("all runs done")
