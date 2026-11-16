@@ -719,15 +719,17 @@ def main():
     if inhibit is None:
         say("WARNING: systemd-inhibit not found; make sure the machine does not go to sleep")
     try:
+        if machine:
+            subprocess.run(["sudo", PY, "tools/prepare_environment.py", "apply", *env_args(cfg), "--state", state],
+                           cwd=ROOT, check=True)
+            subprocess.run([PY, "tools/prepare_environment.py", "verify", *env_args(cfg)], cwd=ROOT, check=True)
+        # the machine's state is recorded as measured: after the settings are applied, before they are restored
         subprocess.run([PY, "tools/run_metadata.py", "start", out, "--set", "experiment=load tools",
                         "--set", f"shuffle_seed={seed}", "--set", f"machine={'minimal' if machine else 'untouched'}"],
                        cwd=ROOT, check=False, capture_output=True)
         subprocess.run([PY, "tools/run_metadata.py", "images", out, *[SERVERS[s] for s in a.servers]], cwd=ROOT,
                        check=False, capture_output=True)
         if machine:
-            subprocess.run(["sudo", PY, "tools/prepare_environment.py", "apply", *env_args(cfg), "--state", state],
-                           cwd=ROOT, check=True)
-            subprocess.run([PY, "tools/prepare_environment.py", "verify", *env_args(cfg)], cwd=ROOT, check=True)
             say(f"letting the machine settle for {cfg['SETTLE_SECONDS']} s ...")
             time.sleep(int(cfg["SETTLE_SECONDS"]))
             temp_ref, cpu_ref = subprocess.run([PY, "tools/readiness.py", "baseline", "--seconds",
@@ -797,10 +799,10 @@ def main():
     finally:
         if server is not None:
             server.stop()
+        subprocess.run([PY, "tools/run_metadata.py", "end", out], cwd=ROOT, check=False, capture_output=True)
         if os.path.exists(state):
             say("restoring machine settings ...")
             subprocess.run(["sudo", PY, "tools/prepare_environment.py", "restore", "--state", state], cwd=ROOT)
-        subprocess.run([PY, "tools/run_metadata.py", "end", out], cwd=ROOT, check=False, capture_output=True)
         stop_sudo.set()
         if inhibit is not None:
             os.killpg(inhibit.pid, 15)
