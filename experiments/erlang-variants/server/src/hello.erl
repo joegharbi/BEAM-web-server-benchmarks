@@ -5,7 +5,7 @@
 %%   b  a with lean request code: compiled search patterns instead of lowercasing (the usual spellings of the three
 %%      headers only), and a ready-made response
 %%   c  b, but the socket delivers its data as messages ({active, once}); still a process per connection
-%%   d  b as an event loop: one worker process per scheduler, each owns many connections ({active, 100}) and
+%%   d  b as an event loop: one worker process per CPU of the server (WORKERS, see workers/0), each owns many connections ({active, 100}) and
 %%      answers every request waiting in its mailbox when it wakes up (no 60 s idle timeout)
 %%   e  d on the newer socket backend ({inet_backend, socket})
 %%   f  a as an event loop: the workers of d with the framework's request code of a (only the way connections are
@@ -33,9 +33,23 @@ main(_Args) ->
         _ ->
             Answer = case Variant of "f" -> fun answer_a/2; _ -> fun answer/2 end,
             Workers = list_to_tuple([spawn_link(fun() -> worker(#{}, Answer) end)
-                                     || _ <- lists:seq(1, erlang:system_info(schedulers_online))]),
+                                     || _ <- lists:seq(1, workers())]),
+            io:format("event loop, ~b workers~n", [tuple_size(Workers)]),
             accept_workers(Sock, Workers, 0)
     end.
+
+%% Event loop: the number of workers, from WORKERS: "cpus" (the default: the CPUs the server may use, which is the
+%% number of schedulers), "cpus+N", "cpus-N", "cpus*N" or a plain number; at least 1.
+workers() ->
+    Cpus = erlang:system_info(schedulers_online),
+    N = case os:getenv("WORKERS", "cpus") of
+        "cpus" -> Cpus;
+        "cpus+" ++ K -> Cpus + list_to_integer(K);
+        "cpus-" ++ K -> Cpus - list_to_integer(K);
+        "cpus*" ++ K -> Cpus * list_to_integer(K);
+        K -> list_to_integer(K)
+    end,
+    max(1, N).
 
 %% Server contract (framework README): listen on PORT, 8001 when it is unset
 port() ->

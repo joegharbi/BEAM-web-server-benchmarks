@@ -1,0 +1,30 @@
+# The variant images of experiments/erlang-variants: image, the image it is made from, and the settings (ENV) it adds.
+# build.sh makes each one as "FROM base + ENV", so a variant differs from its base only in these settings and the
+# native mode runs it from the base's files. Add a line and run build.sh to get a new variant.
+#
+# NOBW = the framework's three flags that switch busy-waiting off (ERL_FLAGS="+sbwt none +sbwtdcpu none +sbwtdio none")
+#
+# image                     base                  settings
+lt-erlang-a                 lt-erlang-variants    HELLO_VARIANT=a
+lt-erlang-a-nobw            lt-erlang-variants    HELLO_VARIANT=a NOBW
+lt-erlang-b                 lt-erlang-variants    HELLO_VARIANT=b
+lt-erlang-b-nobw            lt-erlang-variants    HELLO_VARIANT=b NOBW
+lt-erlang-c                 lt-erlang-variants    HELLO_VARIANT=c
+lt-erlang-c-nobw            lt-erlang-variants    HELLO_VARIANT=c NOBW
+lt-erlang-d                 lt-erlang-variants    HELLO_VARIANT=d
+lt-erlang-d-nobw            lt-erlang-variants    HELLO_VARIANT=d NOBW
+lt-erlang-e                 lt-erlang-variants    HELLO_VARIANT=e
+lt-erlang-e-nobw            lt-erlang-variants    HELLO_VARIANT=e NOBW
+lt-erlang-f                 lt-erlang-variants    HELLO_VARIANT=f
+lt-erlang-f-nobw            lt-erlang-variants    HELLO_VARIANT=f NOBW
+# Event loops with another number of workers than the server's CPUs (WORKERS: cpus, cpus+N, cpus-N, cpus*N, a number)
+lt-erlang-f-nobw-w2x        lt-erlang-variants    HELLO_VARIANT=f NOBW WORKERS=cpus*2
+lt-java-loop-w2x            lt-java-loop          WORKERS=cpus*2
+# Netty with as many workers as the server has CPUs (as it comes: 2 x CPUs)
+lt-netty-wcpus              lt-netty              WORKERS=cpus
+# Cowboy without its two limits on a connection, as the other five servers (which have none)
+lt-cowboy-open              lt-cowboy             COWBOY_REQUEST_TIMEOUT=infinity COWBOY_MAX_KEEPALIVE=infinity
+lt-cowboy-open-nobw         lt-cowboy             COWBOY_REQUEST_TIMEOUT=infinity COWBOY_MAX_KEEPALIVE=infinity NOBW
+# One limit at a time, to see which one matters
+lt-cowboy-noidle-nobw       lt-cowboy             COWBOY_REQUEST_TIMEOUT=infinity NOBW
+lt-cowboy-nomax-nobw        lt-cowboy             COWBOY_MAX_KEEPALIVE=infinity NOBW

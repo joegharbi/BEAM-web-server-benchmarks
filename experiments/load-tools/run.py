@@ -30,7 +30,10 @@ sends its next request as soon as the last is answered, CLIENTS; oha and k6) or 
 every BURST_EVERY_SECONDS, BURSTS; oha sends them as fast as its connections allow, k6 within one second) or
 connections (that many open connections, CONNECTION_LEVELS, all at the same total rate, the first of RATES; wrk2 and
 oha; every level runs, also after a missed one, and the steadiness rule starts after OPEN_SECONDS, while the tool
-is still opening its connections). Every run also records the server's memory (its cgroup's, read every second: highest and median).
+is still opening its connections). Every run also records, once a second, the server (CPU, memory, threads), the
+tool (CPU, memory) and the machine (how busy and how fast each CPU is, temperature, fan, throttle events, TCP
+sockets, context switches, and Scaphandre's power of the server and the laptop): the series in
+raw/<run>.series.json, their mean and highest as columns of runs.jsonl (class Recorder).
 With LOAD_PERCENTS (shape rate) every tool, after its ramp, also runs at those percents of the highest rate it held
 on this server in this repeat: the energy against load curve. The Python
 client (the framework's own) has no rate setting: it runs once per server and repeat and sends PYTHON_REQUESTS
@@ -61,6 +64,7 @@ import sys
 import threading
 import time
 import urllib.request
+import glob
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -320,21 +324,139 @@ class Server:
             native_server.stop(self.unit)
 
 
-class BytesPerSecond(threading.Thread):
-    """Bytes arriving at the server and the server's memory, read every second while a tool runs."""
+def _number(path, scale=1.0):
+    try:
+        return int(open(path).read().split()[0]) / scale
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _hwmon(name, entry):
+    """The file `entry` of the hardware sensor called `name` (/sys/class/hwmon), or None when this machine has none."""
+    for folder in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+        try:
+            if open(folder + "/name").read().strip() == name and os.path.exists(f"{folder}/{entry}"):
+                return f"{folder}/{entry}"
+        except OSError:
+            pass
+    return None
+
+
+class Recorder(threading.Thread):
+    """Everything that can be read about the server, the tool and the machine, once a second while a tool runs.
+    The series go to raw/<run>.series.json; summary() gives the columns of runs.jsonl. `samples` (time, bytes that
+    arrived at the server) is what steadiness() reads. A sensor this machine does not have gives None."""
+    TEMP = _hwmon("coretemp", "temp1_input")           # CPU package, millidegrees
+    FAN = _hwmon("thinkpad", "fan1_input")             # rpm
+    THROTTLE = "/sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count"
+    TICK = os.sysconf("SC_CLK_TCK")
+    PAGE_MB = os.sysconf("SC_PAGE_SIZE") / 1e6
 
     def __init__(self, server):
         super().__init__(daemon=True)
-        self.server, self.samples, self.memory, self.done = server, [], [], threading.Event()
+        self.server, self.samples, self.rows, self.done, self.tool_pid = server, [], [], threading.Event(), None
+        self.cpus = sorted(int(c[3:]) for c in os.listdir("/sys/devices/system/cpu") if re.fullmatch(r"cpu\d+", c))
+        self.cgroup = os.path.dirname(server.cpu_stat)
+
+    def machine(self):
+        """Per CPU the jiffies (busy, total) so far, and the context switches so far."""
+        per_cpu, switches = {}, None
+        for line in open("/proc/stat"):
+            f = line.split()
+            if re.fullmatch(r"cpu\d+", f[0]):
+                v = [int(x) for x in f[1:9]]
+                per_cpu[int(f[0][3:])] = (sum(v) - v[3] - v[4], sum(v))    # all but idle and iowait
+            elif f[0] == "ctxt":
+                switches = int(f[1])
+        return per_cpu, switches
+
+    def tool(self):
+        """CPU seconds (all its threads) and memory (MB) of the tool process, once it has started."""
+        try:
+            f = open(f"/proc/{self.tool_pid}/stat").read().rsplit(")", 1)[1].split()
+            return (int(f[11]) + int(f[12])) / self.TICK, int(f[21]) * self.PAGE_MB
+        except (OSError, IndexError, ValueError):
+            return None, None
+
+    def sockets(self):
+        try:
+            for line in open("/proc/net/sockstat"):
+                if line.startswith("TCP:"):
+                    return int(line.split()[2])              # TCP sockets in use on the whole machine
+        except (OSError, ValueError, IndexError):
+            pass
+        return None
+
+    def read(self):
+        tool_cpu, tool_mem = self.tool()
+        per_cpu, switches = self.machine()
+        return {"t": time.time(), "rx_bytes": self.server.rx_bytes(), "server_cpu_s": self.server.cpu_s(),
+                "server_memory_mb": self.server.memory_mb(), "server_threads": _number(self.cgroup + "/pids.current"),
+                "tool_cpu_s": tool_cpu, "tool_memory_mb": tool_mem, "cpu_jiffies": per_cpu, "context_switches": switches,
+                "cpu_mhz": [_number(f"/sys/devices/system/cpu/cpu{c}/cpufreq/scaling_cur_freq", 1000) for c in self.cpus],
+                "temp_c": _number(self.TEMP, 1000) if self.TEMP else None,
+                "fan_rpm": _number(self.FAN) if self.FAN else None, "throttle_events": _number(self.THROTTLE),
+                "tcp_sockets": self.sockets()}
 
     def run(self):
         nxt = time.monotonic()
-        while not self.done.is_set():
-            self.samples.append((time.time(), self.server.rx_bytes()))
-            self.memory.append(self.server.memory_mb())
+        while True:
+            row = self.read()
+            self.rows.append(row)
+            self.samples.append((row["t"], row["rx_bytes"]))
+            if self.done.is_set():
+                break
             nxt += 1.0
             self.done.wait(max(0.0, nxt - time.monotonic()))
-        self.samples.append((time.time(), self.server.rx_bytes()))
+
+    def series(self, power=None):
+        """One entry per second (the change since the reading before it where a counter is read)."""
+        out = []
+        for a, b in zip(self.rows, self.rows[1:]):
+            dt = b["t"] - a["t"]
+            def rate(key):
+                return round((b[key] - a[key]) / dt, 3) if a[key] is not None and b[key] is not None and dt > 0 else None
+            busy = [round(100 * (b["cpu_jiffies"][c][0] - a["cpu_jiffies"][c][0]) /
+                          max(1, b["cpu_jiffies"][c][1] - a["cpu_jiffies"][c][1]), 1) for c in self.cpus]
+            e = {"t": round(b["t"], 3), "requests_bytes_per_s": rate("rx_bytes"), "server_cpus_used": rate("server_cpu_s"),
+                 "server_memory_mb": b["server_memory_mb"] and round(b["server_memory_mb"], 1),
+                 "server_threads": b["server_threads"], "tool_cpus_used": rate("tool_cpu_s"),
+                 "tool_memory_mb": b["tool_memory_mb"] and round(b["tool_memory_mb"], 1), "cpu_busy_pct": busy,
+                 "cpu_mhz": b["cpu_mhz"], "temp_c": b["temp_c"], "fan_rpm": b["fan_rpm"],
+                 "throttle_events": b["throttle_events"], "tcp_sockets": b["tcp_sockets"],
+                 "context_switches_per_s": rate("context_switches")}
+            if power:                              # Scaphandre's power over this second: the server's and the laptop's
+                sj, hj, _, cover = scaphandre_energy.integrate_window(power, a["t"], b["t"])
+                if cover > 0.5 and dt > 0:
+                    e["server_w"], e["laptop_w"] = round(sj / dt / cover, 3), round(hj / dt / cover, 3)
+            out.append(e)
+        return out
+
+    def summary(self, series, groups):
+        """Columns for runs.jsonl: the mean and the highest of each series; per group of CPUs (system, tool,
+        server) how busy the kernel saw them (all work on those CPUs, also the kernel's own) and their speed."""
+        def col(key):
+            return [e[key] for e in series if e.get(key) is not None]
+        out = {}
+        for key, name in [("server_memory_mb", "server_memory"), ("tool_memory_mb", "tool_memory"), ("temp_c", "temp"),
+                          ("fan_rpm", "fan"), ("server_threads", "server_threads"), ("tcp_sockets", "tcp_sockets"),
+                          ("context_switches_per_s", "context_switches_per_s")]:
+            v, unit = col(key), {"server_memory_mb": "_mb", "tool_memory_mb": "_mb", "temp_c": "_c", "fan_rpm": "_rpm"}.get(key, "")
+            if v:
+                out[f"{name}_mean{unit}"], out[f"{name}_max{unit}"] = round(statistics.mean(v), 1), round(max(v), 1)
+        if "server_memory_max_mb" in out:
+            out["server_memory_median_mb"] = round(statistics.median(col("server_memory_mb")), 1)
+        throttle = col("throttle_events")
+        if throttle:
+            out["throttle_events_in_run"] = throttle[-1] - throttle[0]
+        for name, cpus in groups.items():
+            index = [self.cpus.index(c) for c in sorted(cpus or []) if c in self.cpus]
+            if index and series:
+                out[f"{name}_cpus_busy_seen_pct"] = round(statistics.mean(e["cpu_busy_pct"][i] for e in series for i in index), 1)
+                mhz = [e["cpu_mhz"][i] for e in series for i in index if e["cpu_mhz"][i] is not None]
+                if mhz:
+                    out[f"{name}_cpus_mhz_mean"], out[f"{name}_cpus_mhz_max"] = round(statistics.mean(mhz)), round(max(mhz))
+        return out
 
 
 def steadiness(samples, ok, t0, t1):
@@ -430,7 +552,7 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw, shape="
     meter = Meter(raw + ".scaphandre.json") if energy else None
     out = open(stdout_file, "w") if stdout_file else subprocess.DEVNULL
     err = open(raw + ".err", "w")
-    counter = BytesPerSecond(server)
+    counter = Recorder(server)
     counter.start()
     server0, proxy0, t0, m0 = server.cpu_s(), server.proxy_cpu_s(), time.time(), time.monotonic()
     proc = subprocess.Popen(cmd, env=env, stdin=subprocess.PIPE if tool == "vegeta" else subprocess.DEVNULL,
@@ -438,6 +560,7 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw, shape="
     if tool == "vegeta":
         proc.stdin.write(f"GET {URL}\n")
         proc.stdin.close()
+    counter.tool_pid = proc.pid
     _, status, usage = os.wait4(proc.pid, 0)          # rusage of the tool process and all its threads
     wall, t1, server1, proxy1 = time.monotonic() - m0, time.time(), server.cpu_s(), server.proxy_cpu_s()
     counter.done.set()
@@ -459,14 +582,22 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw, shape="
            "server_cpu_s": round(server1 - server0, 3)}
     if server.proxies:
         row["proxy_cpu_s"] = round(proxy1 - proxy0, 3)
-    memory = [m for m in counter.memory if m is not None]
-    if memory:                                         # the highest and the middle reading during the run
-        row["server_memory_max_mb"] = round(max(memory), 1)
-        row["server_memory_median_mb"] = round(statistics.median(memory), 1)
+    power = None
     if meter:
         row.update(energies(meter.log, server, proc.pid, t0, t1))
+        try:
+            power = scaphandre_energy.load_power_series(meter.log, CONTAINER, server.id)
+        except Exception as err:                       # the series are an extra: never lose a run over them
+            say(f"   no power series for this run: {err}")
         if not keep_raw:
             os.remove(meter.log)
+    try:
+        series = counter.series(power)
+        with open(raw + ".series.json", "w") as fh:      # every second of the run; describes the machine: local only
+            json.dump(series, fh)
+        row.update(counter.summary(series, {"system": SYSTEM_CPUS, "tool": TOOL_CPUS, "server": server.cpus}))
+    except Exception as err:
+        say(f"   no per-second series for this run: {err}")
     if proc.returncode != 0:
         row["error"] = open(raw + ".err").read().strip()[-500:]
         return row

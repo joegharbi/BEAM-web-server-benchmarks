@@ -22,10 +22,22 @@ public final class Server {
     private static final byte[] PAGE = ("<!DOCTYPE html><html><head><title>Energy Test</title></head>"
             + "<body><h1>Hello, Energy Test!</h1></body></html>").getBytes(StandardCharsets.UTF_8);
 
+    /** The number of workers, from WORKERS: "cpus" (the default: the CPUs the server may use), "cpus+N", "cpus-N",
+     *  "cpus*N" or a plain number; at least 1. */
+    static int workerCount() {
+        int cpus = Runtime.getRuntime().availableProcessors();
+        String w = System.getenv().getOrDefault("WORKERS", "cpus").trim();
+        int n = !w.startsWith("cpus") ? Integer.parseInt(w) : w.length() == 4 ? cpus
+                : w.charAt(4) == '+' ? cpus + Integer.parseInt(w.substring(5))
+                : w.charAt(4) == '-' ? cpus - Integer.parseInt(w.substring(5))
+                : cpus * Integer.parseInt(w.substring(5));
+        return Math.max(1, n);
+    }
+
     public static void main(String[] args) throws IOException {
         // Server contract (framework README): listen on PORT, 8001 when it is unset
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8001"));
-        Worker[] workers = new Worker[Runtime.getRuntime().availableProcessors()];
+        Worker[] workers = new Worker[workerCount()];
         for (int i = 0; i < workers.length; i++) {
             workers[i] = new Worker();
             new Thread(workers[i], "worker-" + i).start();
