@@ -118,6 +118,10 @@ def main(folder):
         if r["tool"] != "idle" and (r["server"], r["repeat"]) in idle_w:
             r["laptop_above_idle_j"] = r["host_energy_j"] - idle_w[(r["server"], r["repeat"])] * r["wall_s"]
     servers = [s for s in SERVER_ORDER if any(r["server"] == s for r in rows)]
+    for r in rows:                       # servers from SERVER_IMAGES: in the order they first ran, named as they are
+        if r["server"] not in servers:
+            servers.append(r["server"])
+            LABEL.setdefault(r["server"], r["server"].replace("-native", ", native"))
     shape = next((r["shape"] for r in rows if r.get("shape")), "rate")
     if shape != "rate":
         return other_shape(folder, rows, servers, shape)

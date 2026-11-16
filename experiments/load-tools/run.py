@@ -88,6 +88,7 @@ SETTINGS = {"SERVERS": "erlang-nobw erlang-bw java", "TOOLS": "idle python wrk2 
             "RATE_GROWTH": "0", "MAX_RATE": "1000000", "LIMIT_PRECISION_PCT": "0", "MAX_P99_MS": "0",
             "SHAPE": "rate", "CLIENTS": "1 10 50 100 200 500 1000", "BURSTS": "1000 2000 5000 10000",
             "BURST_EVERY_SECONDS": "5", "LOAD_PERCENTS": "",
+            "SERVER_IMAGES": "",
             "WARMUP_SECONDS": "20", "PYTHON_REQUESTS": "60000", "DEPLOY": "docker",
             "SYSTEM_CPUS": "0,4", "TOOL_CPUS": "1,5", "SERVER_CPUS": "2,3,6,7"}
 MAX_RATE_CV_PCT = 5.0      # and when the per-second rate swings more than this (an overloaded tool can still hold
@@ -618,7 +619,7 @@ def show(n, row):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=os.path.join(HERE, "load-tools.config"))
-    ap.add_argument("--servers", nargs="+", choices=list(SERVERS))
+    ap.add_argument("--servers", nargs="+", help="names from SERVERS in this file or SERVER_IMAGES in the config")
     ap.add_argument("--tools", nargs="+", choices=list(TOOLS))
     ap.add_argument("--rates", nargs="+", type=int, help="the ramp (sorted rising)")
     ap.add_argument("--shape", choices=["rate", "clients", "burst"])
@@ -647,6 +648,9 @@ def main():
     a = ap.parse_args()
     os.chdir(ROOT)                       # native_server keeps its copies in .cache/native of the repository
     exp, cfg = load_config(a.config)
+    for pair in exp["SERVER_IMAGES"].split():      # more servers than the built-in three: name=image
+        name, _, image = pair.partition("=")
+        SERVERS[name] = image
     pick = {"servers": exp["SERVERS"].split(), "tools": exp["TOOLS"].split(),
             "rates": [int(x) for x in exp["RATES"].split()], "seconds": int(exp["SECONDS"]),
             "rate_growth": float(exp["RATE_GROWTH"]), "max_rate": int(exp["MAX_RATE"]),
