@@ -27,7 +27,10 @@ between, e.g. docker-proxy). With MAX_P99_MS a step is also missed when 1 % of t
 (each tool's own latency; wrk2 and oha correct it for requests sent late, k6 does not).
 SHAPE chooses what a "level" is: rate (requests per second on a timetable, RATES), clients (that many clients, each
 sends its next request as soon as the last is answered, CLIENTS; oha and k6) or burst (that many requests at once
-every BURST_EVERY_SECONDS, BURSTS; oha sends them as fast as its connections allow, k6 within one second).
+every BURST_EVERY_SECONDS, BURSTS; oha sends them as fast as its connections allow, k6 within one second) or
+connections (that many open connections, CONNECTION_LEVELS, all at the same total rate, the first of RATES; wrk2 and
+oha; every level runs, also after a missed one, and the steadiness rule starts after OPEN_SECONDS, while the tool
+is still opening its connections). Every run also records the server's memory (its cgroup's, read every second: highest and median).
 With LOAD_PERCENTS (shape rate) every tool, after its ramp, also runs at those percents of the highest rate it held
 on this server in this repeat: the energy against load curve. The Python
 client (the framework's own) has no rate setting: it runs once per server and repeat and sends PYTHON_REQUESTS
@@ -78,6 +81,9 @@ WARMUP_MAX_RATE = 5000     # k6 warms the server up; it holds 5,000 req/s on the
 MIN_RATE_SHARE = 0.95      # below this share of the target, the tool leaves the ramp
 MAX_FAILED_SHARE = 0.01    # above this share of failed requests, too
 BURST_EVERY = 5            # set in main(): seconds from one burst to the next
+CONN_RATE = 0              # set in main(): shape connections, the total rate at every number of connections
+OPEN_SECONDS = 0           # set in main(): shape connections, the first seconds left out of the steadiness rule
+                           # (the tool is still opening its connections: oha needs about 20 s for 25,000)
 TOOL_CPUS = None           # set in main(): the CPUs the tool may use (None = all)
 SYSTEM_CPUS = None         # set in main(): the CPUs of this script, Scaphandre and docker-proxy (None = all)
 # The experiment's own settings in load-tools.config, with their defaults (the other keys there are the framework's
@@ -88,6 +94,7 @@ SETTINGS = {"SERVERS": "erlang-nobw erlang-bw java", "TOOLS": "idle python wrk2 
             "RATE_GROWTH": "0", "MAX_RATE": "1000000", "LIMIT_PRECISION_PCT": "0", "MAX_P99_MS": "0",
             "SHAPE": "rate", "CLIENTS": "1 10 50 100 200 500 1000", "BURSTS": "1000 2000 5000 10000",
             "BURST_EVERY_SECONDS": "5", "LOAD_PERCENTS": "",
+            "CONNECTION_LEVELS": "100 1000 5000 10000 20000 25000", "OPEN_SECONDS": "0",
             "SERVER_IMAGES": "",
             "WARMUP_SECONDS": "20", "PYTHON_REQUESTS": "60000", "DEPLOY": "docker",
             "SYSTEM_CPUS": "0,4", "TOOL_CPUS": "1,5", "SERVER_CPUS": "2,3,6,7"}
@@ -219,8 +226,11 @@ TOOLS = {"idle": (idle_cmd, None), "python": (python_cmd, python_parse), "wrk2":
          "k6": (k6_cmd, k6_parse), "k6-paced": (k6_paced_cmd, k6_parse), "vegeta": (vegeta_cmd, vegeta_parse)}
 # The other shapes (SHAPE): the level is a number of clients, or the requests of one burst
 SHAPES = {"clients": {"oha": (oha_clients_cmd, oha_parse), "k6": (k6_clients_cmd, k6_parse)},
-          "burst": {"oha": (oha_burst_cmd, oha_parse), "k6": (k6_burst_cmd, k6_parse)}}
-UNIT = {"rate": "/s", "clients": " clients", "burst": " per burst"}
+          "burst": {"oha": (oha_burst_cmd, oha_parse), "k6": (k6_burst_cmd, k6_parse)},
+          # connections: the level is the number of open connections, the total rate stays CONN_RATE
+          "connections": {"wrk2": (lambda level, seconds, conns, raw: wrk2_cmd(CONN_RATE, seconds, level, raw), wrk2_parse),
+                          "oha": (lambda level, seconds, conns, raw: oha_cmd(CONN_RATE, seconds, level, raw), oha_parse)}}
+UNIT = {"rate": "/s", "clients": " clients", "burst": " per burst", "connections": " connections"}
 
 
 # ---- server ---------------------------------------------------------------------------------------------------------
@@ -260,6 +270,7 @@ class Server:
                                              check=True).stdout)[0]
             self.id = info["Id"]
             self.cpu_stat = f"/sys/fs/cgroup/system.slice/docker-{self.id}.scope/cpu.stat"
+            self.memory_file = f"/sys/fs/cgroup/system.slice/docker-{self.id}.scope/memory.current"
             self.net_dev, self.iface = f"/proc/{info['State']['Pid']}/net/dev", "eth0"
             self.proxies = [int(p) for p in subprocess.run(["pgrep", "-f", f"docker-proxy .*-host-port {PORT} "],
                                                            capture_output=True, text=True).stdout.split()]
@@ -270,6 +281,7 @@ class Server:
         else:
             self.id = self.unit            # Scaphandre's processes are matched by this name in their cgroup
             self.cpu_stat = native_server.cgroup_dir(self.unit) + "/cpu.stat"
+            self.memory_file = native_server.cgroup_dir(self.unit) + "/memory.current"
             self.net_dev, self.iface = "/proc/net/dev", "lo"
             self.proxies = []
 
@@ -277,6 +289,13 @@ class Server:
         for line in open(self.cpu_stat):
             if line.startswith("usage_usec"):
                 return int(line.split()[1]) / 1e6
+
+    def memory_mb(self):
+        """Memory of the server's cgroup now (all its processes), or None where the kernel does not count it."""
+        try:
+            return int(open(self.memory_file).read()) / 1e6
+        except (OSError, ValueError):
+            return None
 
     def rx_bytes(self):
         for line in open(self.net_dev):
@@ -302,16 +321,17 @@ class Server:
 
 
 class BytesPerSecond(threading.Thread):
-    """Bytes arriving at the server, read every second while a tool runs."""
+    """Bytes arriving at the server and the server's memory, read every second while a tool runs."""
 
     def __init__(self, server):
         super().__init__(daemon=True)
-        self.server, self.samples, self.done = server, [], threading.Event()
+        self.server, self.samples, self.memory, self.done = server, [], [], threading.Event()
 
     def run(self):
         nxt = time.monotonic()
         while not self.done.is_set():
             self.samples.append((time.time(), self.server.rx_bytes()))
+            self.memory.append(self.server.memory_mb())
             nxt += 1.0
             self.done.wait(max(0.0, nxt - time.monotonic()))
         self.samples.append((time.time(), self.server.rx_bytes()))
@@ -430,14 +450,19 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw, shape="
     if out is not subprocess.DEVNULL:
         out.close()
     row = {"tool": tool, "shape": shape if fixed_rate else None, "level": target if fixed_rate else None,
-           "target_rate": target if fixed_rate and shape == "rate" else None, "target_seconds": seconds,
-           "connections": (target if shape == "clients" else conns) if fixed_rate else None, "command": " ".join(cmd), "exit": proc.returncode,
+           "target_rate": (target if shape == "rate" else CONN_RATE if shape == "connections" else None) if fixed_rate else None,
+           "target_seconds": seconds,
+           "connections": (target if shape in ("clients", "connections") else conns) if fixed_rate else None, "command": " ".join(cmd), "exit": proc.returncode,
            "deploy": server.deploy, "tool_cpus": sorted(TOOL_CPUS) if TOOL_CPUS else "all",
            "server_cpus": sorted(server.cpus) if server.cpus else "all", "wall_s": round(wall, 3),
            "start_epoch": t0, "end_epoch": t1, "tool_cpu_s": round(usage.ru_utime + usage.ru_stime, 3),
            "server_cpu_s": round(server1 - server0, 3)}
     if server.proxies:
         row["proxy_cpu_s"] = round(proxy1 - proxy0, 3)
+    memory = [m for m in counter.memory if m is not None]
+    if memory:                                         # the highest and the middle reading during the run
+        row["server_memory_max_mb"] = round(max(memory), 1)
+        row["server_memory_median_mb"] = round(statistics.median(memory), 1)
     if meter:
         row.update(energies(meter.log, server, proc.pid, t0, t1))
         if not keep_raw:
@@ -454,8 +479,11 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw, shape="
         row["bursts"] = seconds // BURST_EVERY
         row["expected_requests"] = row["bursts"] * target
     if row["target_rate"]:
-        row["rate_vs_target_pct"] = 100.0 * (row["rate"] - target) / target
-    per_s, cv = steadiness(counter.samples, row["ok"], t0, t1)
+        row["rate_vs_target_pct"] = 100.0 * (row["rate"] - row["target_rate"]) / row["target_rate"]
+    opening = OPEN_SECONDS if shape == "connections" else 0
+    if opening:
+        row["open_seconds"] = opening
+    per_s, cv = steadiness(counter.samples, row["ok"], t0 + opening, t1)
     with open(raw + ".persecond.json", "w") as fh:
         json.dump([round(r, 1) for r in per_s], fh)
     row["rate_cv_pct"] = cv
@@ -555,12 +583,15 @@ class Ramp:
     max_rate, until a step is missed; then (precision_pct) the middle between the highest rate held and the lowest
     missed, until they are within precision_pct of each other."""
 
-    def __init__(self, rates, growth, max_rate, precision_pct):
+    def __init__(self, rates, growth, max_rate, precision_pct, every_level=False):
         self.rates, self.growth, self.max_rate, self.precision = rates, growth, max_rate, precision_pct
+        self.every_level = every_level                  # run all listed levels, also after a missed one
         self.held, self.missed, self.step = None, None, 0
         self.server_busy, self.tool_busy = 0.0, 0.0     # the fullest each side's CPUs were at any missed step
 
     def next(self):
+        if self.every_level:
+            return self.rates[self.step] if self.step < len(self.rates) else None
         if self.missed is None:
             if self.step < len(self.rates):
                 return self.rates[self.step]
@@ -577,6 +608,7 @@ class Ramp:
             self.step += 1
         else:
             self.missed = min(self.missed or rate, rate)
+            self.step += self.every_level
             self.server_busy, self.tool_busy = max(self.server_busy, server_busy), max(self.tool_busy, tool_busy)
 
     @property
@@ -610,10 +642,11 @@ def show(n, row):
     if "proxy_cpu_s" in row:
         en += f", docker-proxy CPU {row['proxy_cpu_s']:.2f} s" + \
               (f" {row['proxy_energy_j']:.1f} J" if "proxy_energy_j" in row else "")
+    mem = f", server memory {row['server_memory_max_mb']:.0f} MB" if "server_memory_max_mb" in row else ""
     if "expected_requests" in row:
         vs, cv = f" ({row['ok']} of {row['expected_requests']} requests in {row['bursts']} bursts)", ""
     say(f"{head}: {row['rate']:8.1f} req/s{vs}{cv}, {row['failed']} failed, p50 {row['p50_ms']:.2f} ms, "
-        f"p99 {row['p99_ms']:.2f} ms, CPU tool {row['tool_cpu_s']:.2f} s server {row['server_cpu_s']:.2f} s{en}")
+        f"p99 {row['p99_ms']:.2f} ms, CPU tool {row['tool_cpu_s']:.2f} s server {row['server_cpu_s']:.2f} s{mem}{en}")
 
 
 def main():
@@ -622,7 +655,9 @@ def main():
     ap.add_argument("--servers", nargs="+", help="names from SERVERS in this file or SERVER_IMAGES in the config")
     ap.add_argument("--tools", nargs="+", choices=list(TOOLS))
     ap.add_argument("--rates", nargs="+", type=int, help="the ramp (sorted rising)")
-    ap.add_argument("--shape", choices=["rate", "clients", "burst"])
+    ap.add_argument("--shape", choices=["rate", "clients", "burst", "connections"])
+    ap.add_argument("--connection-levels", nargs="+", type=int,
+                    help="shape connections: the numbers of open connections, all at the first rate of RATES")
     ap.add_argument("--clients", nargs="+", type=int, help="shape clients: the numbers of clients")
     ap.add_argument("--bursts", nargs="+", type=int, help="shape burst: the requests per burst")
     ap.add_argument("--burst-every-seconds", type=int)
@@ -658,6 +693,7 @@ def main():
             "shape": exp["SHAPE"], "clients": [int(x) for x in exp["CLIENTS"].split()],
             "bursts": [int(x) for x in exp["BURSTS"].split()], "burst_every_seconds": int(exp["BURST_EVERY_SECONDS"]),
             "load_percents": [float(x) for x in exp["LOAD_PERCENTS"].split()],
+            "connection_levels": [int(x) for x in exp["CONNECTION_LEVELS"].split()],
             "connections": int(exp["CONNECTIONS"]), "repeats": int(cfg["REPEATS"]),
             "python_requests": int(exp["PYTHON_REQUESTS"]), "warmup_seconds": int(exp["WARMUP_SECONDS"]),
             "deploy": exp["DEPLOY"].split(), "system_cpus": exp["SYSTEM_CPUS"], "tool_cpus": exp["TOOL_CPUS"],
@@ -667,9 +703,9 @@ def main():
             setattr(a, key, value)
     if a.short:
         a.rates, a.seconds, a.repeats, a.python_requests = [1000, 5000], 10, 1, 10000
-    if a.shape not in ("rate", "clients", "burst"):
+    if a.shape not in ("rate", "clients", "burst", "connections"):
         raise SystemExit(f"unknown SHAPE in {a.config}: {a.shape}")
-    levels = sorted({"rate": a.rates, "clients": a.clients, "burst": a.bursts}[a.shape])
+    levels = sorted({"rate": a.rates, "clients": a.clients, "burst": a.bursts, "connections": a.connection_levels}[a.shape])
     a.rates = sorted(a.rates)
     if a.shape != "rate":                # these shapes exist for oha and k6; Python has its own pace
         skipped = [t for t in a.tools if t not in SHAPES[a.shape] and t != "idle"]
@@ -679,8 +715,8 @@ def main():
               [x for x in a.deploy if x not in ("docker", "native")]
     if unknown:
         raise SystemExit(f"unknown in {a.config}: {', '.join(unknown)}")
-    global TOOL_CPUS, SYSTEM_CPUS, BURST_EVERY
-    BURST_EVERY = a.burst_every_seconds
+    global TOOL_CPUS, SYSTEM_CPUS, BURST_EVERY, CONN_RATE, OPEN_SECONDS
+    BURST_EVERY, CONN_RATE, OPEN_SECONDS = a.burst_every_seconds, a.rates[0], int(exp["OPEN_SECONDS"])
     TOOL_CPUS, SYSTEM_CPUS, server_cpus = cpu_set(a.tool_cpus), cpu_set(a.system_cpus), cpu_set(a.server_cpus)
     if SYSTEM_CPUS:                      # this script, and so Scaphandre, the readiness gate and the byte counter
         os.sched_setaffinity(0, SYSTEM_CPUS)
@@ -774,7 +810,8 @@ def main():
                     return row
 
                 first = True
-                ramps = {t: Ramp(levels, a.rate_growth, a.max_rate, a.limit_precision_pct) for t in rate_tools}
+                ramps = {t: Ramp(levels, a.rate_growth, a.max_rate, a.limit_precision_pct, a.shape == "connections")
+                         for t in rate_tools}
                 while True:                                 # one round = every tool's next level, in a shuffled order
                     plan = [(t, ramps[t].next()) for t in rng.sample(rate_tools, len(rate_tools))]
                     plan = [(t, level) for t, level in plan if level]

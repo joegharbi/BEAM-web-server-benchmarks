@@ -14,7 +14,7 @@
 
   6. the energy against load curve (runs with LOAD_PERCENTS): per percent of the highest rate each tool held, the
      server's and the laptop's (above idle) energy per 1,000 requests and power
-For the shapes clients and burst (SHAPE): one table per server of every level instead of 1 to 6.
+For the shapes clients, burst and connections (SHAPE): one table per server of every level instead of 1 to 6.
 
 Medians over the repeats, with [min, max]. The laptop's energy above idle = laptop energy - idle laptop power (the
 idle run of the same server and repeat) x run time.
@@ -84,7 +84,8 @@ def level_table(rows, servers, key, unit):
                      "server_j_per_1000": per_1000("server_energy_j"),
                      "laptop_above_idle_j_per_1000": per_1000("laptop_above_idle_j"),
                      "server_power_w": med([r["server_energy_j"] / r["wall_s"] for r in rs if "server_energy_j" in r]),
-                     "laptop_power_w": med([r.get("host_power_w") for r in rs])}
+                     "laptop_power_w": med([r.get("host_power_w") for r in rs]),
+                     "server_memory_mb": med([r.get("server_memory_max_mb") for r in rs])}
                 if "expected_requests" in rs[0]:
                     e["answered_share"] = med([r["ok"] / r["expected_requests"] for r in rs])
                 out[s][f"{t}@{level:g}"] = e
@@ -92,6 +93,8 @@ def level_table(rows, servers, key, unit):
                           f"idle {e['laptop_above_idle_j_per_1000']:.3f} J/1000 req, laptop {e['laptop_power_w']:.2f} W"
                           if e["server_j_per_1000"] is not None and e["laptop_above_idle_j_per_1000"] is not None else "")
                 done = f", answered {e['answered_share'] * 100:.0f} %" if "answered_share" in e else ""
+                if e["server_memory_mb"] is not None:
+                    energy += f", server memory {e['server_memory_mb']:.0f} MB"
                 print(f"    {t:5} {level:>7g}{unit}: {e['rate']:8.0f} req/s{done}, held {e['held']}/{e['n']}, p50 "
                       f"{e['p50_ms']:.2f} ms, p99 {e['p99_ms']:.1f} ms, CPUs busy server {e['server_cpus_busy'] * 100:.0f} % "
                       f"tool {e['tool_cpus_busy'] * 100:.0f} %{energy}")
@@ -99,7 +102,7 @@ def level_table(rows, servers, key, unit):
 
 
 def other_shape(folder, rows, servers, shape):
-    unit = {"clients": " clients", "burst": " per burst"}[shape]
+    unit = {"clients": " clients", "burst": " per burst", "connections": " connections"}[shape]
     print(f"== Shape {shape}: every level, medians over the repeats")
     result = {"folder": os.path.basename(folder), "shape": shape,
               "levels": level_table([r for r in rows if r.get("level")], servers, "level", unit)}
