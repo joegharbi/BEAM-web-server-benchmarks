@@ -11,7 +11,7 @@ import sys
 import time
 
 PORT, NAME = 8001, "lt-check"
-IMAGES = ["st-erlang-pure-29-1-1"] + [f"lt-erlang-{v}{bw}" for v in "abcde" for bw in ("", "-nobw")]
+IMAGES = ["st-erlang-pure-29-1-1"] + [f"lt-erlang-{v}{bw}" for v in "abcdef" for bw in ("", "-nobw")]
 GET = b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
 CASES = {"keep-alive": [GET], "two requests": [GET, GET], "pipelined": [GET + GET],
          "split in two packets": [GET[:10], GET[10:]],
@@ -51,13 +51,20 @@ def answers(image):
             except OSError:
                 time.sleep(0.25)
         time.sleep(0.5)
-        log = subprocess.run(["docker", "logs", NAME], capture_output=True, text=True).stdout.strip().splitlines()[-1]
-        return {name: talk(parts) for name, parts in CASES.items()}, log
+        log = subprocess.run(["docker", "logs", NAME], capture_output=True, text=True).stdout.strip().splitlines()[-1:]
+        return {name: talk(parts) for name, parts in CASES.items()}, (log or [""])[0]
     finally:
         subprocess.run(["docker", "stop", "-t", "1", NAME], capture_output=True)
 
 
 reference, _ = answers(IMAGES[0])
+for image in ("st-java-pure-27", "lt-java-loop"):          # the Java pair: the loop against the framework's server
+    if image == "st-java-pure-27":
+        java, _ = answers(image)
+    else:
+        got, log = answers(image)
+        wrong = [k for k in CASES if got[k] != java[k]]
+        print(f"{image:20} {log:28} {'same answers as st-java-pure-27' if not wrong else 'DIFFERENT: ' + ', '.join(wrong)}")
 print(IMAGES[0], {k: (v.count(b"200 OK"), v.endswith(b"<closed>")) for k, v in reference.items()})
 bad = 0
 for image in IMAGES[1:]:

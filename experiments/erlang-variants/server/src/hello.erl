@@ -8,6 +8,8 @@
 %%   d  b as an event loop: one worker process per scheduler, each owns many connections ({active, 100}) and
 %%      answers every request waiting in its mailbox when it wakes up (no 60 s idle timeout)
 %%   e  d on the newer socket backend ({inet_backend, socket})
+%%   f  a as an event loop: the workers of d with the framework's request code of a (only the way connections are
+%%      served differs from a)
 -module(hello).
 -export([main/1]).
 
@@ -29,7 +31,8 @@ main(_Args) ->
         "b" -> accept_loop(Sock, fun(Conn) -> serve_b(Conn, <<>>) end);
         "c" -> accept_loop(Sock, fun(Conn) -> serve_c(Conn, <<>>) end);
         _ ->
-            Workers = list_to_tuple([spawn_link(fun() -> worker(#{}) end)
+            Answer = case Variant of "f" -> fun answer_a/2; _ -> fun answer/2 end,
+            Workers = list_to_tuple([spawn_link(fun() -> worker(#{}, Answer) end)
                                      || _ <- lists:seq(1, erlang:system_info(schedulers_online))]),
             accept_workers(Sock, Workers, 0)
     end.
@@ -153,27 +156,40 @@ accept_workers(Sock, Workers, N) ->
     end.
 
 %% Bufs: the unfinished request bytes of the connections that have some
-worker(Bufs) ->
+worker(Bufs, Answer) ->
     receive
         {tcp, Conn, Data} ->
             Buf = case Bufs of
                       #{Conn := Old} -> <<Old/binary, Data/binary>>;
                       _ -> Data
                   end,
-            case answer(Conn, Buf) of
-                {more, <<>>} -> worker(maps:remove(Conn, Bufs));
-                {more, Rest} -> worker(Bufs#{Conn => Rest});
-                closed -> worker(maps:remove(Conn, Bufs))
+            case Answer(Conn, Buf) of
+                {more, <<>>} -> worker(maps:remove(Conn, Bufs), Answer);
+                {more, Rest} -> worker(Bufs#{Conn => Rest}, Answer);
+                closed -> worker(maps:remove(Conn, Bufs), Answer)
             end;
         {tcp_passive, Conn} ->
             inet:setopts(Conn, [{active, 100}]),
-            worker(Bufs);
+            worker(Bufs, Answer);
         {add, Conn} ->
             inet:setopts(Conn, [{active, 100}]),
-            worker(Bufs);
-        {tcp_closed, Conn} -> worker(maps:remove(Conn, Bufs));
+            worker(Bufs, Answer);
+        {tcp_closed, Conn} -> worker(maps:remove(Conn, Bufs), Answer);
         {tcp_error, Conn, _} ->
             gen_tcp:close(Conn),
-            worker(maps:remove(Conn, Bufs));
-        _ -> worker(Bufs)
+            worker(maps:remove(Conn, Bufs), Answer);
+        _ -> worker(Bufs, Answer)
+    end.
+
+%% f: every complete request in the buffer, with the framework's request code (keep_alive/1, respond/2)
+answer_a(Conn, Buf) ->
+    case binary:split(Buf, <<"\r\n\r\n">>) of
+        [Head, Rest] ->
+            Keep = keep_alive(Head),
+            respond(Conn, Keep),
+            case Keep of
+                true -> answer_a(Conn, Rest);
+                false -> gen_tcp:close(Conn), closed
+            end;
+        [_] -> {more, Buf}
     end.
