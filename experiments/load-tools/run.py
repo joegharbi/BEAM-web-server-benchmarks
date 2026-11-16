@@ -1038,4 +1038,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:              # stopped by the user; main() has already cleaned up
+        say("stopped before the end (the machine settings are restored)")
+        sys.exit(130)
