@@ -60,6 +60,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -110,7 +111,10 @@ MAX_RATE_CV_PCT = 5.0      # and when the per-second rate swings more than this 
 
 
 def say(text):
-    print(f"[{datetime.datetime.now():%H:%M:%S}] {text}", flush=True)
+    try:
+        print(f"[{datetime.datetime.now():%H:%M:%S}] {text}", flush=True)
+    except OSError:            # the terminal or the log is gone (the run was stopped): never fail over a message
+        pass
 
 
 # ---- tools: command for (rate, seconds, connections, raw file prefix) and a parser of what they wrote --------------
@@ -688,7 +692,8 @@ def load_config(path):
 
 def save_console(path):
     """Everything this script and the programs it starts print also goes to `path` (as `tee`)."""
-    tee = subprocess.Popen(["tee", "-a", path], stdin=subprocess.PIPE)
+    # in its own session: Ctrl+C in the terminal must not end the log before the clean-up has written to it
+    tee = subprocess.Popen(["tee", "-a", path], stdin=subprocess.PIPE, start_new_session=True)
     sys.stdout.flush()
     sys.stderr.flush()
     os.dup2(tee.stdin.fileno(), 1)
@@ -918,6 +923,10 @@ def main():
         subprocess.run(["sudo", "-v"], check=True)
         threading.Thread(target=keep_sudo, args=(stop_sudo,), daemon=True).start()
     n, server = 0, None
+
+    def stopped(signum, frame):          # a kill ends the run like Ctrl+C does: through the clean-up below
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stopped)
     # Block sleep and lid-close suspend until the end, as run_benchmarks.sh (this laptop suspends after 2 h idle)
     inhibit = subprocess.Popen(["systemd-inhibit", "--what=sleep:handle-lid-switch", "--mode=block",
                                 "--who=load tools experiment", "--why=measuring", "sleep", "infinity"],
@@ -1004,6 +1013,12 @@ def main():
                 server = None
         say("all runs done")
     finally:
+        # Stopping (Ctrl+C, also pressed again, or a kill) must not interrupt the clean-up: the machine settings
+        # are restored before this script ends.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        say("ending: stopping the server and the meter, then restoring the machine settings")
+        subprocess.run(["sudo", "-n", "pkill", "-9", "scaphandre"], capture_output=True)
         if server is not None:
             server.stop()
         subprocess.run([PY, "tools/run_metadata.py", "end", out], cwd=ROOT, check=False, capture_output=True)
