@@ -41,26 +41,33 @@ for r in rows:
     s = series_of(r)
     check("server_energy_j" in r and "host_energy_j" in r and r.get("host_energy_j", 0) > 0, f"{what}: energy of server and laptop")
     check(r.get("meter_coverage", 0) >= 0.99, f"{what}: the meter covers the run ({r.get('meter_coverage')})")
-    check(bool(s) and len(s) >= 0.9 * r["wall_s"], f"{what}: one reading a second ({len(s or [])} in {r['wall_s']:.0f} s)")
+    every, recorded = r.get("record_every_s", 1), set(r.get("recorded", []))
+    check(bool(s) and len(s) >= 0.9 * r["wall_s"] / every,
+          f"{what}: a reading every {every} s ({len(s or [])} in {r['wall_s']:.0f} s)")
     if not s:
         continue
-    for key in ("server_cpus_used", "server_memory_mb", "server_threads", "cpu_busy_pct", "cpu_mhz", "temp_c", "fan_rpm",
-                "throttle_events", "tcp_sockets", "context_switches_per_s"):
+    keys = {"server": ("server_cpus_used", "server_memory_mb", "server_threads"), "cpu": ("cpu_busy_pct",),
+            "frequency": ("cpu_mhz",), "temperature": ("temp_c",), "fan": ("fan_rpm",), "throttle": ("throttle_events",),
+            "sockets": ("tcp_sockets",), "switches": ("context_switches_per_s",)}
+    for key in [k for group in keys if group in recorded for k in keys[group]]:      # only what RECORD asked for
         check(all(e.get(key) is not None for e in s), f"{what}: {key} in every reading")
     ts = [r["start_epoch"]] + [e["t"] for e in s]
-    cpu = sum(e["server_cpus_used"] * (b - a) for e, a, b in zip(s, ts, ts[1:]) if e["server_cpus_used"] is not None)
-    if r["server_cpu_s"] > 1:
+    cpu = sum(e["server_cpus_used"] * (b - a) for e, a, b in zip(s, ts, ts[1:]) if e.get("server_cpus_used") is not None)
+    if r["server_cpu_s"] > 1 and "server" in recorded:
         check(abs(cpu - r["server_cpu_s"]) <= 0.03 * r["server_cpu_s"],
               f"{what}: server CPU time, readings {cpu:.1f} s against the run's total {r['server_cpu_s']:.1f} s")
     power = [(e, a, b) for e, a, b in zip(s, ts, ts[1:]) if "laptop_w" in e]
-    check(len(power) >= 0.9 * len(s), f"{what}: power of server and laptop in the readings ({len(power)} of {len(s)})")
+    if "power" in recorded:
+        check(len(power) >= 0.9 * len(s), f"{what}: power of server and laptop in the readings ({len(power)} of {len(s)})")
     if power and "host_energy_j" in r:
         inside = [(e, max(a, r["start_epoch"]), min(b, r["end_epoch"])) for e, a, b in power]
         joules = sum(e["laptop_w"] * (b - a) for e, a, b in inside if b > a)
         check(abs(joules - r["host_energy_j"]) <= 0.05 * r["host_energy_j"],
               f"{what}: laptop energy, readings {joules:.0f} J against the run's total {r['host_energy_j']:.0f} J")
     mhz = r.get("server_cpus_mhz_max")
-    check(mhz is not None and mhz <= speed * 1.03, f"{what}: server CPUs never above {speed} MHz (highest {mhz})")
-    check(r.get("throttle_events_in_run") == 0, f"{what}: no thermal throttling during the run")
+    if "frequency" in recorded:
+        check(mhz is not None and mhz <= speed * 1.03, f"{what}: server CPUs never above {speed} MHz (highest {mhz})")
+    if "throttle" in recorded:
+        check(r.get("throttle_events_in_run") == 0, f"{what}: no thermal throttling during the run")
 print("all checks passed" if not failed else f"{failed} checks FAILED")
 sys.exit(1 if failed else 0)

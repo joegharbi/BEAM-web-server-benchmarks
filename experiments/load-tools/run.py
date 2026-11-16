@@ -33,7 +33,9 @@ oha; every level runs, also after a missed one, and the steadiness rule starts a
 is still opening its connections). Every run also records, once a second, the server (CPU, memory, threads), the
 tool (CPU, memory) and the machine (how busy and how fast each CPU is, temperature, fan, throttle events, TCP
 sockets, context switches, and Scaphandre's power of the server and the laptop): the series in
-raw/<run>.series.json, their mean and highest as columns of runs.jsonl (class Recorder).
+raw/<run>.series.json, their mean and highest as columns of runs.jsonl (class Recorder). RECORD_EVERY_SECONDS sets
+the step (1) and RECORD what is read (all, none, or some of: server tool cpu frequency temperature fan throttle
+sockets switches power).
 With LOAD_PERCENTS (shape rate) every tool, after its ramp, also runs at those percents of the highest rate it held
 on this server in this repeat: the energy against load curve. The Python
 client (the framework's own) has no rate setting: it runs once per server and repeat and sends PYTHON_REQUESTS
@@ -99,6 +101,7 @@ SETTINGS = {"SERVERS": "erlang-nobw erlang-bw java", "TOOLS": "idle python wrk2 
             "SHAPE": "rate", "CLIENTS": "1 10 50 100 200 500 1000", "BURSTS": "1000 2000 5000 10000",
             "BURST_EVERY_SECONDS": "5", "LOAD_PERCENTS": "",
             "CONNECTION_LEVELS": "100 1000 5000 10000 20000 25000", "OPEN_SECONDS": "0",
+            "RECORD_EVERY_SECONDS": "1", "RECORD": "all",
             "SERVER_IMAGES": "",
             "WARMUP_SECONDS": "20", "PYTHON_REQUESTS": "60000", "DEPLOY": "docker",
             "SYSTEM_CPUS": "0,4", "TOOL_CPUS": "1,5", "SERVER_CPUS": "2,3,6,7"}
@@ -351,6 +354,10 @@ class Recorder(threading.Thread):
     THROTTLE = "/sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count"
     TICK = os.sysconf("SC_CLK_TCK")
     PAGE_MB = os.sysconf("SC_PAGE_SIZE") / 1e6
+    ALL = ("server", "tool", "cpu", "frequency", "temperature", "fan", "throttle", "sockets", "switches", "power")
+    EVERY = 1                  # set in main() from RECORD_EVERY_SECONDS: seconds from one reading to the next
+    WHAT = set(ALL)            # set in main() from RECORD: what is read (the bytes for the steadiness rule always are,
+                               # every second)
 
     def __init__(self, server):
         super().__init__(daemon=True)
@@ -388,44 +395,67 @@ class Recorder(threading.Thread):
         return None
 
     def read(self):
-        tool_cpu, tool_mem = self.tool()
-        per_cpu, switches = self.machine()
-        return {"t": time.time(), "rx_bytes": self.server.rx_bytes(), "server_cpu_s": self.server.cpu_s(),
-                "server_memory_mb": self.server.memory_mb(), "server_threads": _number(self.cgroup + "/pids.current"),
-                "tool_cpu_s": tool_cpu, "tool_memory_mb": tool_mem, "cpu_jiffies": per_cpu, "context_switches": switches,
-                "cpu_mhz": [_number(f"/sys/devices/system/cpu/cpu{c}/cpufreq/scaling_cur_freq", 1000) for c in self.cpus],
-                "temp_c": _number(self.TEMP, 1000) if self.TEMP else None,
-                "fan_rpm": _number(self.FAN) if self.FAN else None, "throttle_events": _number(self.THROTTLE),
-                "tcp_sockets": self.sockets()}
+        w, row = self.WHAT, {"t": time.time(), "rx_bytes": self.server.rx_bytes()}
+        if "server" in w:
+            row.update(server_cpu_s=self.server.cpu_s(), server_memory_mb=self.server.memory_mb(),
+                       server_threads=_number(self.cgroup + "/pids.current"))
+        if "tool" in w:
+            row["tool_cpu_s"], row["tool_memory_mb"] = self.tool()
+        if "cpu" in w or "switches" in w:
+            row["cpu_jiffies"], row["context_switches"] = self.machine()
+        if "frequency" in w:
+            row["cpu_mhz"] = [_number(f"/sys/devices/system/cpu/cpu{c}/cpufreq/scaling_cur_freq", 1000) for c in self.cpus]
+        if "temperature" in w:
+            row["temp_c"] = _number(self.TEMP, 1000) if self.TEMP else None
+        if "fan" in w:
+            row["fan_rpm"] = _number(self.FAN) if self.FAN else None
+        if "throttle" in w:
+            row["throttle_events"] = _number(self.THROTTLE)
+        if "sockets" in w:
+            row["tcp_sockets"] = self.sockets()
+        return row
 
     def run(self):
-        nxt = time.monotonic()
+        nxt, tick = time.monotonic(), 0
         while True:
-            row = self.read()
-            self.rows.append(row)
-            self.samples.append((row["t"], row["rx_bytes"]))
-            if self.done.is_set():
+            last = self.done.is_set()
+            if tick % self.EVERY == 0 or last:         # a full reading, also at the very end
+                row = self.read()
+                self.rows.append(row)
+                self.samples.append((row["t"], row["rx_bytes"]))
+            else:                                      # in between only the bytes, for the steadiness rule
+                self.samples.append((time.time(), self.server.rx_bytes()))
+            if last:
                 break
+            tick += 1
             nxt += 1.0
             self.done.wait(max(0.0, nxt - time.monotonic()))
 
     def series(self, power=None):
-        """One entry per second (the change since the reading before it where a counter is read)."""
-        out = []
+        """One entry per reading (the change since the reading before it where a counter is read)."""
+        out, w = [], self.WHAT
         for a, b in zip(self.rows, self.rows[1:]):
             dt = b["t"] - a["t"]
             def rate(key):
-                return round((b[key] - a[key]) / dt, 3) if a[key] is not None and b[key] is not None and dt > 0 else None
-            busy = [round(100 * (b["cpu_jiffies"][c][0] - a["cpu_jiffies"][c][0]) /
-                          max(1, b["cpu_jiffies"][c][1] - a["cpu_jiffies"][c][1]), 1) for c in self.cpus]
-            e = {"t": round(b["t"], 3), "requests_bytes_per_s": rate("rx_bytes"), "server_cpus_used": rate("server_cpu_s"),
-                 "server_memory_mb": b["server_memory_mb"] and round(b["server_memory_mb"], 1),
-                 "server_threads": b["server_threads"], "tool_cpus_used": rate("tool_cpu_s"),
-                 "tool_memory_mb": b["tool_memory_mb"] and round(b["tool_memory_mb"], 1), "cpu_busy_pct": busy,
-                 "cpu_mhz": b["cpu_mhz"], "temp_c": b["temp_c"], "fan_rpm": b["fan_rpm"],
-                 "throttle_events": b["throttle_events"], "tcp_sockets": b["tcp_sockets"],
-                 "context_switches_per_s": rate("context_switches")}
-            if power:                              # Scaphandre's power over this second: the server's and the laptop's
+                return round((b[key] - a[key]) / dt, 3) if a.get(key) is not None and b.get(key) is not None and dt > 0 else None
+            def mb(key):
+                return b[key] and round(b[key], 1)
+            e = {"t": round(b["t"], 3), "requests_bytes_per_s": rate("rx_bytes")}
+            if "server" in w:
+                e.update(server_cpus_used=rate("server_cpu_s"), server_memory_mb=mb("server_memory_mb"),
+                         server_threads=b["server_threads"])
+            if "tool" in w:
+                e.update(tool_cpus_used=rate("tool_cpu_s"), tool_memory_mb=mb("tool_memory_mb"))
+            if "cpu" in w:
+                e["cpu_busy_pct"] = [round(100 * (b["cpu_jiffies"][c][0] - a["cpu_jiffies"][c][0]) /
+                                           max(1, b["cpu_jiffies"][c][1] - a["cpu_jiffies"][c][1]), 1) for c in self.cpus]
+            if "switches" in w:
+                e["context_switches_per_s"] = rate("context_switches")
+            for group, key in (("frequency", "cpu_mhz"), ("temperature", "temp_c"), ("fan", "fan_rpm"),
+                               ("throttle", "throttle_events"), ("sockets", "tcp_sockets")):
+                if group in w:
+                    e[key] = b[key]
+            if power and "power" in w:             # Scaphandre's power over this step: the server's and the laptop's
                 sj, hj, _, cover = scaphandre_energy.integrate_window(power, a["t"], b["t"])
                 if cover > 0.5 and dt > 0:
                     e["server_w"], e["laptop_w"] = round(sj / dt / cover, 3), round(hj / dt / cover, 3)
@@ -437,7 +467,7 @@ class Recorder(threading.Thread):
         server) how busy the kernel saw them (all work on those CPUs, also the kernel's own) and their speed."""
         def col(key):
             return [e[key] for e in series if e.get(key) is not None]
-        out = {}
+        out = {"record_every_s": self.EVERY, "recorded": sorted(self.WHAT)}
         for key, name in [("server_memory_mb", "server_memory"), ("tool_memory_mb", "tool_memory"), ("temp_c", "temp"),
                           ("fan_rpm", "fan"), ("server_threads", "server_threads"), ("tcp_sockets", "tcp_sockets"),
                           ("context_switches_per_s", "context_switches_per_s")]:
@@ -451,8 +481,9 @@ class Recorder(threading.Thread):
             out["throttle_events_in_run"] = throttle[-1] - throttle[0]
         for name, cpus in groups.items():
             index = [self.cpus.index(c) for c in sorted(cpus or []) if c in self.cpus]
-            if index and series:
+            if index and series and "cpu_busy_pct" in series[0]:
                 out[f"{name}_cpus_busy_seen_pct"] = round(statistics.mean(e["cpu_busy_pct"][i] for e in series for i in index), 1)
+            if index and series and "cpu_mhz" in series[0]:
                 mhz = [e["cpu_mhz"][i] for e in series for i in index if e["cpu_mhz"][i] is not None]
                 if mhz:
                     out[f"{name}_cpus_mhz_mean"], out[f"{name}_cpus_mhz_max"] = round(statistics.mean(mhz)), round(max(mhz))
@@ -849,6 +880,10 @@ def main():
     global TOOL_CPUS, SYSTEM_CPUS, BURST_EVERY, CONN_RATE, OPEN_SECONDS
     BURST_EVERY, CONN_RATE, OPEN_SECONDS = a.burst_every_seconds, a.rates[0], int(exp["OPEN_SECONDS"])
     TOOL_CPUS, SYSTEM_CPUS, server_cpus = cpu_set(a.tool_cpus), cpu_set(a.system_cpus), cpu_set(a.server_cpus)
+    Recorder.EVERY = max(1, int(exp["RECORD_EVERY_SECONDS"]))
+    Recorder.WHAT = set(Recorder.ALL) if exp["RECORD"].strip() in ("all", "") else set(exp["RECORD"].replace(",", " ").split())
+    if Recorder.WHAT - set(Recorder.ALL) - {"none"}:
+        raise SystemExit(f"unknown in RECORD: {', '.join(sorted(Recorder.WHAT - set(Recorder.ALL)))} (known: {', '.join(Recorder.ALL)}, all, none)")
     if SYSTEM_CPUS:                      # this script, and so Scaphandre, the readiness gate and the byte counter
         os.sched_setaffinity(0, SYSTEM_CPUS)
 
