@@ -41,6 +41,10 @@ for r in rows:
     s = series_of(r)
     check("server_energy_j" in r and "host_energy_j" in r and r.get("host_energy_j", 0) > 0, f"{what}: energy of server and laptop")
     check(r.get("meter_coverage", 0) >= 0.99, f"{what}: the meter covers the run ({r.get('meter_coverage')})")
+    if r.get("shape") == "connections":            # every connection really open (both ends count on localhost)
+        check(r.get("tcp_sockets_max", 0) >= r["level"], f"{what}: {r['level']} connections open "
+              f"({r.get('tcp_sockets_max')} TCP sockets at most)")
+        check(r.get("failed", 1) == 0, f"{what}: no failed requests or connections ({r.get('failed')})")
     every, recorded = r.get("record_every_s", 1), set(r.get("recorded", []))
     check(bool(s) and len(s) >= 0.9 * r["wall_s"] / every,
           f"{what}: a reading every {every} s ({len(s or [])} in {r['wall_s']:.0f} s)")

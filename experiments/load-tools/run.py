@@ -59,6 +59,7 @@ import json
 import os
 import random
 import re
+import resource
 import shutil
 import signal
 import statistics
@@ -153,7 +154,7 @@ def oha_parse(raw):
     other = sum(int(v) for k, v in d["statusCodeDistribution"].items() if k != "200")
     # oha stops at the deadline and counts the requests still open then as "aborted due to deadline": not failures
     errors = sum(int(v) for k, v in d["errorDistribution"].items() if "deadline" not in k)
-    return {"ok": ok, "failed": other + errors, "seconds": d["summary"]["total"],
+    return {"ok": ok, "failed": other + errors, "seconds": d["summary"]["total"], "errors": d["errorDistribution"],
             "p50_ms": d["latencyPercentiles"]["p50"] * 1e3, "p99_ms": d["latencyPercentiles"]["p99"] * 1e3,
             "aborted_at_end": sum(int(v) for k, v in d["errorDistribution"].items() if "deadline" in k)}
 
@@ -390,13 +391,16 @@ class Recorder(threading.Thread):
             return None, None
 
     def sockets(self):
-        try:
-            for line in open("/proc/net/sockstat"):
-                if line.startswith("TCP:"):
-                    return int(line.split()[2])              # TCP sockets in use on the whole machine
-        except (OSError, ValueError, IndexError):
-            pass
-        return None
+        """TCP sockets in use on the whole machine, IPv4 and IPv6 (Java's server sockets are IPv6)."""
+        total = None
+        for path, tag in (("/proc/net/sockstat", "TCP:"), ("/proc/net/sockstat6", "TCP6:")):
+            try:
+                for line in open(path):
+                    if line.startswith(tag):
+                        total = (total or 0) + int(line.split()[2])
+            except (OSError, ValueError, IndexError):
+                pass
+        return total
 
     def read(self):
         w, row = self.WHAT, {"t": time.time(), "rx_bytes": self.server.rx_bytes()}
@@ -720,6 +724,8 @@ def held(row, max_p99_ms=0):
         return False
     if row["failed"] > MAX_FAILED_SHARE * (row["ok"] + row["failed"]) or (max_p99_ms and row["p99_ms"] > max_p99_ms):
         return False
+    if row.get("shape") == "connections" and row["failed"] > MAX_FAILED_SHARE * row["level"]:
+        return False                                   # connections that never opened (each is a single failure)
     if row.get("expected_requests") and row["ok"] < MIN_RATE_SHARE * row["expected_requests"]:
         return False                                   # bursts not answered in full
     if not row.get("target_rate"):
@@ -885,6 +891,13 @@ def main():
     global TOOL_CPUS, SYSTEM_CPUS, BURST_EVERY, CONN_RATE, OPEN_SECONDS
     BURST_EVERY, CONN_RATE, OPEN_SECONDS = a.burst_every_seconds, a.rates[0], int(exp["OPEN_SECONDS"])
     TOOL_CPUS, SYSTEM_CPUS, server_cpus = cpu_set(a.tool_cpus), cpu_set(a.system_cpus), cpu_set(a.server_cpus)
+    # Every open connection is an open file. A terminal gives a program 1,024 (the soft limit) though it may raise it
+    # up to the hard limit: raise it here, so that the tool and the servers (they inherit it) can hold every level,
+    # whatever terminal started this script.
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+    if a.shape == "connections" and hard < max(levels) + 1000:
+        raise SystemExit(f"open files: at most {hard} per program, too few for {max(levels)} connections")
     Recorder.EVERY = max(1, int(exp["RECORD_EVERY_SECONDS"]))
     Recorder.WHAT = set(Recorder.ALL) if exp["RECORD"].strip() in ("all", "") else set(exp["RECORD"].replace(",", " ").split())
     if Recorder.WHAT - set(Recorder.ALL) - {"none"}:
@@ -899,7 +912,8 @@ def main():
     seed = random.randrange(10 ** 9)
     with open(os.path.join(out, "EXPERIMENT.txt"), "w") as fh:
         fh.write("load tools experiment (experiments/load-tools/README.md), not a campaign\n"
-                 f"{json.dumps(vars(a))}\nshuffle seed {seed}\n")
+                 f"{json.dumps(vars(a))}\nshuffle seed {seed}\n"
+                 f"open files per program: {hard} (the terminal gave {soft})\n")
     rng = random.Random(seed)
     once = [t for t in ("idle", "python") if t in a.tools]       # run once per server and repeat, not per rate
     rate_tools = [t for t in a.tools if t not in once]
