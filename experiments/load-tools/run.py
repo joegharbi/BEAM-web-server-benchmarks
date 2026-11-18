@@ -628,13 +628,33 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw, shape="
             power = scaphandre_energy.load_power_series(meter.log, CONTAINER, server.id)
         except Exception as err:                       # the series are an extra: never lose a run over them
             say(f"   no power series for this run: {err}")
-        if not keep_raw:
-            os.remove(meter.log)
+    opening = OPEN_SECONDS if shape == "connections" and fixed_rate else 0
+    if opening and t1 - t0 > opening + 10:
+        # The steady part only: after the tool has opened its connections and sent what it could not send meanwhile.
+        # Energy, CPU and requests of [t0 + opening, t1]; the whole run's figures stay as they are.
+        ts = t0 + opening
+        if meter:
+            e = energies(meter.log, server, proc.pid, ts, t1) if os.path.exists(meter.log) else None
+            if e:
+                row.update({f"steady_{k}": v for k, v in e.items()
+                            if k in ("server_energy_j", "tool_energy_j", "host_energy_j", "host_power_w", "meter_coverage")})
+        inside = [(t, b) for t, b in counter.samples if t >= ts]
+        total = counter.samples[-1][1] - counter.samples[0][1]
+        if len(inside) >= 2 and total > 0:
+            row["steady_seconds"] = round(inside[-1][0] - inside[0][0], 3)
+            row["steady_bytes"] = inside[-1][1] - inside[0][1]
+            row["bytes_total"] = total
+    if meter and not keep_raw and os.path.exists(meter.log):
+        os.remove(meter.log)
     try:
         series = counter.series(power)
         with open(raw + ".series.json", "w") as fh:      # every second of the run; describes the machine: local only
             json.dump(series, fh)
         row.update(counter.summary(series, {"system": SYSTEM_CPUS, "tool": TOOL_CPUS, "server": server.cpus}))
+        if opening and series and series[0].get("server_cpus_used") is not None:
+            steps = list(zip([t0] + [e["t"] for e in series], series))
+            row["steady_server_cpu_s"] = round(sum(e["server_cpus_used"] * (e["t"] - a) for a, e in steps
+                                                   if a >= t0 + opening and e["server_cpus_used"] is not None), 3)
     except Exception as err:
         say(f"   no per-second series for this run: {err}")
     if proc.returncode != 0:
@@ -650,6 +670,14 @@ def one_run(tool, target, seconds, conns, raw, server, energy, keep_raw, shape="
         row["expected_requests"] = row["bursts"] * target
     if row["target_rate"]:
         row["rate_vs_target_pct"] = 100.0 * (row["rate"] - row["target_rate"]) / row["target_rate"]
+    if "steady_bytes" in row and row.get("ok"):
+        # Requests answered in the steady part. The tool sends on a timetable (CONN_RATE a second, as the total of the
+        # run shows), so after it has caught up that is the rate times the seconds. From the bytes it would be about
+        # 2 % low: opening 25,000 connections adds bytes that are not requests. Kept as a cross-check.
+        row["steady_requests"] = round(CONN_RATE * row["steady_seconds"])
+        row["steady_requests_from_bytes"] = round(row["steady_bytes"] * row["ok"] / row["bytes_total"])
+        if "steady_server_energy_j" in row and row["steady_requests"]:
+            row["steady_server_j_per_1000"] = 1000 * row["steady_server_energy_j"] / row["steady_requests"]
     opening = OPEN_SECONDS if shape == "connections" else 0
     if opening:
         row["open_seconds"] = opening

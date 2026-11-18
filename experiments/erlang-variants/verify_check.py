@@ -45,6 +45,8 @@ for r in rows:
         check(r.get("tcp_sockets_max", 0) >= r["level"], f"{what}: {r['level']} connections open "
               f"({r.get('tcp_sockets_max')} TCP sockets at most)")
         check(r.get("failed", 1) == 0, f"{what}: no failed requests or connections ({r.get('failed')})")
+        check(r.get("steady_requests", 0) > 0 and "steady_server_energy_j" in r and r.get("steady_meter_coverage", 0) >= 0.99,
+              f"{what}: energy and requests of the steady part ({r.get('steady_seconds')} s, {r.get('steady_requests')} requests)")
     every, recorded = r.get("record_every_s", 1), set(r.get("recorded", []))
     check(bool(s) and len(s) >= 0.9 * r["wall_s"] / every,
           f"{what}: a reading every {every} s ({len(s or [])} in {r['wall_s']:.0f} s)")

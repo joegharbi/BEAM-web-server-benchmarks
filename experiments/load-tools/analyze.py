@@ -75,8 +75,9 @@ def level_table(rows, servers, key, unit):
                 rs = [r for r in rows if r["server"] == s and r["tool"] == t and r[key] == level and r.get("ok")]
                 if not rs:
                     continue
-                def per_1000(field):
-                    return med([1000 * r[field] / r["ok"] for r in rs if field in r])
+                def per_1000(field):          # shape connections: the steady part only, without opening the connections
+                    return med([1000 * r["steady_" + field] / r["steady_requests"] if r.get("steady_requests") and "steady_" + field in r
+                                else 1000 * r[field] / r["ok"] for r in rs if field in r])
                 e = {"n": len(rs), "held": sum(1 for r in rs if r.get("held")), "rate": med([r["rate"] for r in rs]),
                      "p50_ms": med([r["p50_ms"] for r in rs]), "p99_ms": med([r["p99_ms"] for r in rs]),
                      "server_cpus_busy": med([busy(r, "server") for r in rs]),
@@ -120,6 +121,8 @@ def main(folder):
     for r in rows:
         if r["tool"] != "idle" and (r["server"], r["repeat"]) in idle_w:
             r["laptop_above_idle_j"] = r["host_energy_j"] - idle_w[(r["server"], r["repeat"])] * r["wall_s"]
+            if "steady_host_energy_j" in r:
+                r["steady_laptop_above_idle_j"] = r["steady_host_energy_j"] - idle_w[(r["server"], r["repeat"])] * r["steady_seconds"]
     servers = [s for s in SERVER_ORDER if any(r["server"] == s for r in rows)]
     for r in rows:                       # servers from SERVER_IMAGES: in the order they first ran, named as they are
         if r["server"] not in servers:
